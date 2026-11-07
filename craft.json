@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "name": "CrealityPrint-V7.3.0.6149-x86_64-Release",
+  "request": "Same App just simpler",
+  "target": {
+    "kind": "local",
+    "path": "/home/thawkins/bin/CrealityPrint-V7.3.0.6149-x86_64-Release.AppImage"
+  },
+  "stack": "Rust + egui (eframe)",
+  "status": "needs_you",
+  "note": "Codex stopped with exit code 1: Not inside a trusted directory and --skip-git-repo-check was not specified. What Codex printed last:\nReading additional input from stdin...\nNot inside a trusted directory and --skip-git-repo-check was not specified.\n\nTo try it yourself, run:\ncodex exec --json --sandbox workspace-write -c 'mcp_servers.craft-anything.command=\"/usr/bin/craft-anything-cli\"' -c 'mcp_servers.craft-anything.args=[\"mcp\", \"--project\", \"/home/thawkins/Projects/PrintCraft/investigation.cany\", \"--inbox\", \"/home/thawkins/Projects/PrintCraft/inbox\", \"--clean-room\"]' '[your message, 4830 characters]'",
+  "created_ms": 1793544551510,
+  "updated_ms": 1793544623288,
+  "checks": [],
+  "agent_session": null,
+  "allowed_actions": [],
+  "last_reply": "",
+  "asset_budget_usd": 5.0,
+  "generate_assets": false
+}
