@@ -338,13 +338,58 @@ Steps:
 | Step | Work | Done when |
 |---|---|---|
 | 3a | **Written, not yet run on the printer** (`src/x3g/`, `src/printer/sailfish.rs`). Read-only connection: version (0, 27), temperatures (10), motherboard status (23), build statistics (24), position (21), the whole EEPROM (12), saved as `sailfish-eeprom.bin` and summarised in the log. Badge "MakerBot protocol · Sailfish x.y". Never sends 3 or 7 (Sailfish restarts the board on both). | The test printer's versions, temperatures and EEPROM values are in the log, and the machine values are written into this file. |
-| 3b | **Written, not yet printed** (`src/x3g/command.rs`, `machine.rs`, `translate.rs`). S3G action commands; the Creator Pro machine definition (GPX `r1d` values, replaced by the printer's EEPROM copy when one has been saved); the G-code → S3G translator for single-nozzle prints. X/Y/Z are absolute steps from the bed's centre. The extruder is relative and negative (as GPX writes it), with rounding carried over. Speeds are capped at each axis's limit. G29/G32 are dropped with a note, and fan speeds become on/off. An unknown command is an error naming its line. The GPX comparison test isn't written: GPX isn't installed here. | Unit tests, and the GPX oracle where GPX supports the machine. |
+| 3b | **Written, not yet printed** (`src/x3g/command.rs`, `machine.rs`, `translate.rs`). S3G action commands; the Creator Pro machine definition (GPX `r1d` values, replaced by the printer's EEPROM copy when one has been saved); the G-code → S3G translator for single-nozzle prints. X/Y/Z are absolute steps from the bed's centre. The extruder is relative and negative (as GPX writes it), with rounding carried over. Speeds are capped at each axis's limit. G29/G32 are dropped with a note, and fan speeds become on/off. An unknown command is an error naming its line. **Compared with GPX 2.6.8** (`gpx -r -m fcp`, see below). | Unit tests, and the GPX oracle where GPX supports the machine. |
 | 3c | **Written, not yet printed.** The "FlashForge Creator Pro (Sailfish)" preset (227 × 148 × 150) and a "MakerBot / Sailfish" printer setting. Export saves `.x3g` for such a printer, and `printcraft --slice … --output OUT.x3g --printer 11` does the same. An exported test model decodes cleanly with an independent decoder. Its extrusion total matches the slicer's filament estimate (2501.6 mm vs 2.50 m). The purge line sits at X −112 mm, 1.5 mm inside the edge GPX gives: to check on the printer. | A cube exported as X3G prints from the SD card on the test printer. |
 | 3d | Streaming over USB: print, progress, pause, stop, jog, home, heaters. | The cube prints over USB. Stop leaves both heaters off. |
 | 3e | Upload to the SD card (14 capture, the job, 15 end; then 16 to print it) and the SD file list (18). | A job uploaded from PrintCraft prints from the card. |
 | 3f | Two nozzles (after track 1): tool changes (134), the nozzle offset from EEPROM, and Ditto printing (the plate limit and preview copy). | A two-colour or PLA + PVA print succeeds with the colours lined up, and a Ditto print gives two matching parts. |
 
 ---
+
+### Comparison with GPX 2.6.8 (2026-11-18)
+
+The XYZ test model was sliced with preset 11, and the same G-code (shifted to the bed's
+centre) was converted with `gpx -I -r -m fcp`. Both X3G files were decoded and compared
+command by command. GPX's framed output (`-F`) and its USB conversation with a pretend
+Sailfish (`gpx -s` on a pseudo serial port) were checked as well.
+
+* **Same:**
+  * framing and CRC: all 55,660 of GPX's packets pass PrintCraft's CRC-8, and none is
+    over 32 bytes;
+  * the layout of every command both write;
+  * 55,532 moves have the same X/Y/Z/A steps (within one step);
+  * extrusion direction and retraction;
+  * move distances and feed rates;
+  * the temperature questions sent over USB (tool 0 and 1 temperature and target, then
+    the bed through tool 0) and the build-statistics query.
+
+  Unit tests now hold GPX's exact packets as reference bytes
+  (`matches_packets_written_by_gpx`).
+* **Fixed after the comparison:**
+  * The part fan (M106/M107) used tool subcommand 12. That is the nozzle's *heatsink*
+    fan, so every print switched it off at the start. It now uses 13, the board's
+    "extra" output that drives the part fan, as GPX does.
+  * Heat waits gave up after 600 s, after which the printer would carry on cold. They now
+    have no time limit (65535), as GPX writes them.
+  * Homing X and Y together now runs at GPX's speed (361 µs per step, 1/√2 of the homing
+    feed rate on each axis) instead of 255 µs.
+  * A move much shorter than one step that still crosses a step boundary could ask for a
+    step rate above the axis's limit. The step rate is now capped at the moving axis's
+    maximum.
+* **Different on purpose:**
+  * Speed: PrintCraft works out the step rate from the steps actually taken (the
+    difference of the rounded positions). GPX rounds the move's length instead, so its
+    rate is up to a few percent off on short moves (38 vs 37 steps over 0.4 mm). This
+    affects 8,620 short moves.
+  * Moves shorter than a step: GPX drops some that PrintCraft keeps (243 vs 108), each
+    under 0.02 mm, because the two round in different places. Neither loses track of the
+    position.
+  * After homing, PrintCraft recalls the printer's stored home position (144,
+    ReplicatorG's `M132`). Converting RepRap-style G-code, GPX instead sets the
+    position to 0, 0, 0 at the first `G92`, which would make the home point the bed's
+    centre.
+  * PrintCraft writes the stream version, build start and screen message at the start
+    (optional in the specification). GPX leaves them out when converting this way.
 
 ## Order of work
 

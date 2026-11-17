@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- X3G files, after a command-by-command comparison with GPX 2.6.8:
+  * The part fan (`M106`/`M107`) now switches the board's "extra" output. Before, it
+    switched the nozzle's heatsink fan, and turned it off at the start of every print.
+  * Heat waits no longer give up after 10 minutes and print cold.
+  * Homing X and Y runs at the same speed as GPX.
+  * A move far shorter than one step can no longer ask for a step rate above the axis's
+    limit. (uncommitted)
+
 ### Added
 - X3G export for MakerBot / Sailfish printers. The new "FlashForge Creator Pro
   (Sailfish)" preset, or the "MakerBot / Sailfish" printer setting, makes Export save an

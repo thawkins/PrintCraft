@@ -40,7 +40,9 @@ pub enum Action {
     SetNozzleTemp { tool: u8, celsius: i16 },
     /// 136, subcommand 31 (sent through tool 0).
     SetBedTemp { celsius: i16 },
-    /// 136, subcommand 12: the part-cooling fan on that tool, on or off.
+    /// 136, subcommand 13: the board's "extra" output, which drives the part-cooling fan
+    /// on this family, on or off. (Subcommand 12 is the nozzle's *heatsink* fan, which
+    /// must stay on; GPX also sends 13 for RepRap-style M106/M107.)
     Fan { tool: u8, on: bool },
     /// 137: bit 7 set enables the axes in the low bits, clear disables them.
     EnableAxes { axes: u8, enable: bool },
@@ -113,7 +115,7 @@ impl Action {
                 b.extend([136, 0, 31, 2]);
                 b.extend(celsius.to_le_bytes());
             }
-            Action::Fan { tool, on } => b.extend([136, *tool, 12, 1, u8::from(*on)]),
+            Action::Fan { tool, on } => b.extend([136, *tool, 13, 1, u8::from(*on)]),
             Action::EnableAxes { axes, enable } => {
                 b.extend([137, (axes & ALL_AXES) | if *enable { 0x80 } else { 0 }])
             }

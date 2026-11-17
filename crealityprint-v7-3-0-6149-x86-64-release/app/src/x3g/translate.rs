@@ -24,8 +24,10 @@
 use super::command::{Action, A, B, XYZ};
 use super::machine::Machine;
 
-/// Heating may take a while on a cold machine; the printer gives up after this.
-const HEAT_TIMEOUT_S: u16 = 600;
+/// How long the printer waits for the nozzle or bed to heat. The largest value, as GPX
+/// writes it: a shorter limit makes the printer carry on printing with a cold bed or
+/// nozzle once it runs out (a big bed can take over ten minutes).
+const HEAT_TIMEOUT_S: u16 = u16::MAX;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -330,16 +332,21 @@ fn home(st: &mut State, words: &[(char, &str)]) {
         if group.is_empty() {
             continue;
         }
-        // The slowest axis in the group sets the pace: time between its steps.
-        let steps_per_s = group
+        // As GPX works it out: the slowest homing speed of the group is the speed of the
+        // combined move (so two axes each go 1/√2 as fast), timed on the axis with the most
+        // steps per mm.
+        let feed = group
             .iter()
-            .map(|&i| m.home_feedrate[i] / 60.0 * m.steps_per_mm[i])
+            .map(|&i| m.home_feedrate[i])
             .fold(f64::INFINITY, f64::min);
+        let most_steps_per_mm = group.iter().map(|&i| m.steps_per_mm[i]).fold(0.0, f64::max);
+        let length = (group.len() as f64).sqrt();
+        let step_us = (length / feed * 60_000_000.0 / most_steps_per_mm).round() as u32;
         let mask = group.iter().fold(0u8, |acc, &i| acc | (1 << i));
         st.out.actions.push(Action::Home {
             to_max,
             axes: mask,
-            step_us: (1_000_000.0 / steps_per_s).round() as u32,
+            step_us,
             timeout_s: m.timeout_s,
         });
     }
@@ -448,7 +455,20 @@ fn move_to(st: &mut State, words: &[(char, &str)]) -> Result<(), String> {
         }
     }
     let feed_mm_s = feed / 60.0;
-    let dda_rate = (feed_mm_s * most as f64 / distance).round().max(1.0) as u32;
+    // A move far shorter than one step can still cross a step boundary; its step rate
+    // would then come out far above what the motor can do. Cap it at the fastest rate of
+    // the axis that steps most.
+    let dominant = (0..4).max_by_key(|&i| delta_steps[i]).unwrap_or(0);
+    let dominant_axis = if dominant == 3 {
+        3 + st.tool as usize
+    } else {
+        dominant
+    };
+    let max_rate = m.max_feedrate[dominant_axis] / 60.0 * m.steps_per_mm[dominant_axis];
+    let dda_rate = (feed_mm_s * most as f64 / distance)
+        .min(max_rate)
+        .round()
+        .max(1.0) as u32;
     let mut steps = [new_steps[0], new_steps[1], new_steps[2], 0, 0];
     steps[3 + st.tool as usize] = a_steps;
     st.out.actions.push(Action::Move {
@@ -527,9 +547,13 @@ mod tests {
             }
         ));
         assert_eq!(homing[2], &Action::RecallHome { axes: XYZ });
-        // 2500 mm/min at 94.117647 steps/mm is 3921.6 steps/s: 255 µs per step.
+        // GPX's figures for the Creator Pro: X and Y together at 2500 mm/min take 361 µs
+        // per step; Z alone at 1100 mm/min, 136 µs.
         if let Action::Home { step_us, .. } = homing[0] {
-            assert_eq!(*step_us, 255);
+            assert_eq!(*step_us, 361);
+        }
+        if let Action::Home { step_us, .. } = homing[1] {
+            assert_eq!(*step_us, 136);
         }
     }
 
@@ -616,12 +640,12 @@ mod tests {
                 },
                 &Action::WaitForTool {
                     tool: 0,
-                    timeout_s: 600
+                    timeout_s: 65535
                 },
                 // M140 sets the bed; M190 sets it again and waits.
                 &Action::SetBedTemp { celsius: 60 },
                 &Action::SetBedTemp { celsius: 60 },
-                &Action::WaitForBed { timeout_s: 600 },
+                &Action::WaitForBed { timeout_s: 65535 },
                 &Action::SetNozzleTemp {
                     tool: 0,
                     celsius: 0
@@ -667,6 +691,70 @@ mod tests {
         assert_eq!(t.warnings.len(), 2, "{:?}", t.warnings);
         assert!(t.actions.contains(&Action::Fan { tool: 0, on: true }));
         assert!(t.actions.contains(&Action::Fan { tool: 0, on: false }));
+    }
+
+    /// Packets GPX 2.6.8 wrote for the same G-code (`gpx -I -r -F -m fcp`, with the G-code
+    /// shifted to the bed's centre), kept as reference bytes. They pin the framing, the CRC
+    /// and each command's layout to what a proven tool sends a Creator Pro.
+    #[test]
+    fn matches_packets_written_by_gpx() {
+        let hex = |s: &str| -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let framed = |a: &Action| crate::x3g::frame(&a.encode());
+        let g = "M140 S60\nM104 S210\nG28\nM190 S60\nG1 Z2.0 F3000\n\
+                 G1 X1.5 Y20.0 F5000\nG1 Z0.30 F600\nM107\n";
+        let o = Options {
+            bed_mm: (227.0, 148.0),
+            job_name: "cube".into(),
+            total_layers: 0,
+        };
+        let t = translate(g, &Machine::creator_pro(), &o).unwrap();
+        let find = |pred: &dyn Fn(&Action) -> bool| -> Vec<u8> {
+            framed(t.actions.iter().find(|a| pred(a)).unwrap())
+        };
+        assert_eq!(
+            find(&|a| matches!(a, Action::SetBedTemp { .. })),
+            hex("d50688001f023c00c6")
+        );
+        assert_eq!(
+            find(&|a| matches!(a, Action::SetNozzleTemp { .. })),
+            hex("d50688000302d20045")
+        );
+        assert_eq!(
+            find(&|a| matches!(a, Action::Home { to_max: true, .. })),
+            hex("d50884036901000014008f")
+        );
+        assert_eq!(
+            find(&|a| matches!(a, Action::Home { to_max: false, .. })),
+            hex("d50883048800000014003f")
+        );
+        assert_eq!(
+            find(&|a| matches!(a, Action::WaitForBed { .. })),
+            hex("d5068d006400ffff8a")
+        );
+        // GPX sends M107 unframed in its serial log as 88 00 0D 01 00.
+        assert_eq!(
+            find(&|a| matches!(a, Action::Fan { .. }))[2..7],
+            hex("88000d0100")[..]
+        );
+        // The third move: down to Z 0.3 at the purge start, (-112, -54) mm from the centre.
+        let third_move = t
+            .actions
+            .iter()
+            .filter(|a| matches!(a, Action::Move { .. }))
+            .nth(2)
+            .unwrap();
+        assert_eq!(
+            framed(third_move),
+            hex(concat!(
+                "d5209bd3d6ffff26ecffff780000000000000000000000a00f0000",
+                "189a99d93f8002fa"
+            ))
+        );
     }
 
     #[test]
