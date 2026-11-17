@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-11-18
+
 ### Added
 - Repetier-Firmware printers over USB, recognised from their M115 name. The printer's
   screen shows print mode, the job name and progress (`M530`/`M531`/`M532`),
@@ -136,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects (`.printcraft`) that save the plate, settings and printer.
 - Command-line slicing (`printcraft --slice`).
 
-[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/thawkins/PrintCraft/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/thawkins/PrintCraft/compare/4a62057...v0.0.2
 [0.0.1]: https://github.com/thawkins/PrintCraft/commit/4a62057
