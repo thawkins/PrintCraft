@@ -792,13 +792,21 @@ impl PrintCraftApp {
                     let a = (a + 180.0).rem_euclid(360.0) - 180.0;
                     (a * 10.0).round() / 10.0
                 };
-                let mut r = g.start_rotation;
-                match g.handle {
-                    Handle::RotateX => r.x = wrap(r.x + turn),
-                    Handle::RotateY => r.y = wrap(r.y + turn),
-                    _ => r.z = wrap(r.z + turn),
-                }
-                o.rotation = r;
+                // The rings are drawn about the world axes, so they turn about them.
+                let r = match g.handle {
+                    Handle::RotateX => {
+                        crate::model::rotation_turned_about(g.start_rotation, 0, turn)
+                    }
+                    Handle::RotateY => {
+                        crate::model::rotation_turned_about(g.start_rotation, 1, turn)
+                    }
+                    _ => {
+                        let mut r = g.start_rotation;
+                        r.z += turn;
+                        r
+                    }
+                };
+                o.rotation = Vec3::new(wrap(r.x), wrap(r.y), wrap(r.z));
             }
         }
         self.refresh_object(g.index);

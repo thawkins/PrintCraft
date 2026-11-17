@@ -386,6 +386,60 @@ impl PlacedObject {
     }
 }
 
+/// The rotation angles after turning `degrees` about a world axis (0 = X, 1 = Y, 2 = Z).
+/// `PlacedObject` applies its angles X, then Y, then Z, so only a Z turn is a plain sum:
+/// an X or Y turn is composed with the current rotation and converted back to angles.
+pub fn rotation_turned_about(rotation: Vec3, axis: usize, degrees: f32) -> Vec3 {
+    let turn = axis_matrix(axis, (degrees as f64).to_radians());
+    angles_of(&mat_mul(&turn, &rotation_matrix(rotation)))
+}
+
+type Mat3 = [[f64; 3]; 3];
+
+/// A turn of `rad` about world axis 0 (X), 1 (Y) or 2 (Z).
+fn axis_matrix(axis: usize, rad: f64) -> Mat3 {
+    let (s, c) = rad.sin_cos();
+    match axis {
+        0 => [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
+        1 => [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
+        _ => [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+    }
+}
+
+fn mat_mul(a: &Mat3, b: &Mat3) -> Mat3 {
+    let mut m = [[0.0; 3]; 3];
+    for (i, row) in m.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    m
+}
+
+/// The matrix `PlacedObject::rotate` applies: Z · Y · X.
+fn rotation_matrix(r: Vec3) -> Mat3 {
+    let rad = |d: f32| (d as f64).to_radians();
+    let zy = mat_mul(&axis_matrix(2, rad(r.z)), &axis_matrix(1, rad(r.y)));
+    mat_mul(&zy, &axis_matrix(0, rad(r.x)))
+}
+
+/// Angles (degrees, X then Y then Z) that make the matrix `m` = Z · Y · X.
+fn angles_of(m: &Mat3) -> Vec3 {
+    let sy = (-m[2][0]).clamp(-1.0, 1.0);
+    let y = sy.asin();
+    let (x, z) = if sy.abs() < 0.999_999 {
+        (m[2][1].atan2(m[2][2]), m[1][0].atan2(m[0][0]))
+    } else {
+        // Straight up or down: X and Z turn about the same line; put it all in Z.
+        (0.0, (-m[0][1]).atan2(m[1][1]))
+    };
+    Vec3::new(
+        x.to_degrees() as f32,
+        y.to_degrees() as f32,
+        z.to_degrees() as f32,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +496,38 @@ mod tests {
         let text = "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n";
         let m = Mesh::parse_stl(text.as_bytes()).unwrap();
         assert_eq!(m.triangles.len(), 1);
+    }
+
+    #[test]
+    fn x_and_y_rings_turn_about_the_world_axes_after_a_z_turn() {
+        let mut o = PlacedObject::new("c", Mesh::cube(Vec3::new(1.0, 1.0, 1.0)));
+        o.rotation = Vec3::new(0.0, 0.0, 90.0);
+        let probe = Vec3::new(1.0, 2.0, 3.0);
+        let before = o.rotate(probe);
+        for (axis, expect) in [
+            // 90° about world X: (x, y, z) -> (x, -z, y).
+            (0, Vec3::new(before.x, -before.z, before.y)),
+            // 90° about world Y: (x, y, z) -> (z, y, -x).
+            (1, Vec3::new(before.z, before.y, -before.x)),
+            // 90° about world Z: (x, y, z) -> (-y, x, z).
+            (2, Vec3::new(-before.y, before.x, before.z)),
+        ] {
+            let mut turned = o.clone();
+            turned.rotation = rotation_turned_about(o.rotation, axis, 90.0);
+            let got = turned.rotate(probe);
+            assert!(
+                (got - expect).length() < 1e-4,
+                "axis {axis}: {got:?} vs {expect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ring_turn_from_no_rotation_is_a_plain_angle() {
+        let r = rotation_turned_about(Vec3::default(), 0, 30.0);
+        assert!((r - Vec3::new(30.0, 0.0, 0.0)).length() < 1e-4, "{r:?}");
+        let r = rotation_turned_about(Vec3::default(), 1, -45.0);
+        assert!((r - Vec3::new(0.0, -45.0, 0.0)).length() < 1e-4, "{r:?}");
     }
 
     #[test]
