@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Printing to MakerBot / Sailfish printers over USB. The plate is translated to X3G and
+  recorded onto the SD card where the firmware allows, otherwise streamed. Stock
+  Sailfish can't record, so it streams. Also:
+  * pause, resume and stop (the queue is emptied and the heaters switched off);
+  * nozzle and bed temperatures, the part fan, jog and home;
+  * the SD card's file list, and printing a file from it.
+
+  Not yet confirmed on a real printer.
+- Two-nozzle printing, for two nozzles on one carriage (Creator Pro, Replicator Dual).
+  A printer's "Nozzles" setting (the Creator Pro preset has 2) shows:
+  * a nozzle choice for each part;
+  * the support nozzle;
+  * a second filament;
+  * Ditto printing.
+
+  Each layer prints one nozzle's paths, then the other's, with a retract-switch-prime
+  tool change. The second nozzle is heated, purged and switched off with the first. X3G
+  files carry the tool changes. One-nozzle printers get the same G-code as before.
+
+- Retraction settings in the printer profile:
+  * "Retract on travels over" (the travel length that retracts; 2 mm as before);
+  * "Retract on layer change";
+  * "Wipe" (retract while moving back along the line just printed).
+
+  The defaults keep the G-code exactly as before.
+- Anti-ooze for two nozzles. The nozzle being set aside is pulled back by a
+  "Tool-change retraction" (8 mm), dropped to a standby temperature ("Standby drop",
+  15 °C below printing), then heated back and primed by the same amount before it prints
+  again. The second nozzle is also set aside after its start-up purge.
+- A prime tower for two-nozzle prints ("Prime tower" under Two nozzles, on by
+  default): a 12 mm square near the back-right corner. The incoming nozzle primes on it
+  after each tool change, up to the last layer with a change. Its position can be set
+  ("Tower position", mm from the front-left corner). It must stand on the plate and clear
+  of parts.
+- An ooze shield for two-nozzle prints ("Ooze shield" under Two nozzles, off by
+  default). It is a one-line wall a set distance (3 mm) outside everything the print lays
+  down, skirt, brim and raft included, for the idle nozzle to wipe on.
+  * It is the same on every layer, so it never overhangs, and is built up to the last
+    layer with a tool change.
+  * Each layer prints it first, with the nozzle already selected, so it adds no tool
+    changes.
+  * A shield that would run off the plate, or a prime tower inside it, is refused after
+    slicing.
+
+- Two-nozzle prints show filament, weight and cost for each nozzle, worked out with
+  each nozzle's own filament. The preview can colour paths by nozzle, and shows the Ditto
+  copy dimmed beside the part.
+- The printer editor scrolls within the space above the Move / Scale / Rotate buttons,
+  instead of running under them now that it has more rows.
+- On X3G printers the export button and File menu item say "Export X3G". On two-nozzle
+  printers the filament chips say which nozzle each filament is in.
+- Ditto checks:
+  * The job as sliced, skirt, brim and raft included, must be narrower than the nozzle
+    spacing less 3 mm, so the two copies can't print into each other. A job that isn't
+    shows why, and can't be sent or exported.
+  * A copy that would print off the plate is refused.
+  * The spacing is a printer setting ("Nozzle spacing", 33 mm by default for the Creator
+    Pro family).
+
+- AGENTS.md and AGENTS-LANGUAGE.md in the app folder, copied from the ragent project.
+  (159e565)
+
+### Changed
+
+- Two-nozzle printers have a primary nozzle: a "Primary nozzle" setting in the printer
+  editor, right (T0) by default, the firmware's tool 0. New parts, supports, the skirt and one-nozzle prints use
+  it, and it has the main filament ("01"). The other nozzle is heated only when something
+  uses it. Changing the primary moves the parts and supports that were on the old one.
+- The G-code header now says the plate size (`; plate: 227.0 x 148.0 mm`), which the X3G
+  translator reads.
+
 ## [0.0.4] - 2026-11-18
 
 ### Fixed

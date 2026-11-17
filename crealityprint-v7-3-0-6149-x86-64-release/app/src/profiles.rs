@@ -27,6 +27,12 @@ pub mod limits {
     pub const FIRST_LAYER_SPEED: RangeInclusive<f32> = 15.0..=100.0;
     pub const TRAVEL_SPEED: RangeInclusive<f32> = 20.0..=600.0;
     pub const MIN_LAYER_TIME: RangeInclusive<f32> = 0.0..=120.0;
+    pub const RETRACT_MIN_TRAVEL: RangeInclusive<f32> = 0.0..=20.0;
+    pub const WIPE_MM: RangeInclusive<f32> = 0.0..=10.0;
+    pub const TOOL_CHANGE_RETRACT: RangeInclusive<f32> = 0.0..=30.0;
+    pub const STANDBY_DROP: RangeInclusive<u32> = 0..=100;
+    pub const NOZZLE_SPACING: RangeInclusive<f32> = 5.0..=200.0;
+    pub const SHIELD_DISTANCE: RangeInclusive<f32> = 1.0..=20.0;
     pub const Z_HOP: RangeInclusive<f32> = 0.0..=2.0;
 }
 
@@ -46,6 +52,98 @@ pub struct Printer {
     /// A MakerBot-protocol printer (Sailfish: FlashForge Creator Pro, Replicator): print
     /// files are X3G, translated from the G-code (src/x3g).
     pub x3g: bool,
+    /// Nozzles: 1, or 2 (two nozzles on one carriage, like the Creator Pro). With 1, no
+    /// dual-nozzle setting shows and the G-code is unchanged.
+    pub extruders: u8,
+    /// Retract before travels longer than this (mm). Shorter travels stay over the part.
+    pub retract_min_travel: f32,
+    /// Also retract before every layer change.
+    pub retract_layer_change: bool,
+    /// Wipe: while retracting, move back this far (mm) along the line just printed, to
+    /// wipe the ooze off on the part. 0 = off.
+    pub wipe_mm: f32,
+    /// Two nozzles: how far the nozzle being set aside is pulled back (mm), so it doesn't
+    /// ooze while the other prints. It is pushed forward by the same amount when it is
+    /// used again.
+    pub tool_change_retract: f32,
+    /// Two nozzles: the idle nozzle waits this many °C below its printing temperature (0 =
+    /// keep it hot). It is heated back, with a wait, before it prints again.
+    pub standby_drop: u32,
+    /// Two nozzles: the primary (default) nozzle, 0 = right (T0), 1 = left (T1). New parts,
+    /// supports, the skirt and one-nozzle prints use it, and it has the main filament.
+    pub primary_nozzle: u8,
+    /// Two nozzles: the distance between them along X (mm), the extruder offset. A Ditto
+    /// copy prints this far to the side, so a Ditto job must be narrower than it.
+    pub nozzle_spacing: f32,
+}
+
+impl Printer {
+    /// The nozzle used by default on a two-nozzle printer (`primary_nozzle`), for new
+    /// parts, supports, the skirt and one-nozzle prints. Tool 0 on a one-nozzle printer.
+    pub fn primary_tool(&self) -> u8 {
+        if self.extruders >= 2 {
+            self.primary_nozzle.min(1)
+        } else {
+            0
+        }
+    }
+}
+
+/// The default primary nozzle of a two-nozzle printer profile: T0, the right nozzle, which
+/// is also the firmware's tool 0 and the nozzle a one-nozzle print uses. Each printer
+/// profile can change it (`Printer::primary_nozzle`).
+pub const PRIMARY_TOOL: u8 = 0;
+/// The default distance between two nozzles on one carriage: GPX's `r1d` toolhead
+/// offset (33 mm) for the Creator Pro / Replicator Dual family.
+pub const DEFAULT_NOZZLE_SPACING_MM: f32 = 33.0;
+/// The default travel length above which a travel retracts.
+pub const DEFAULT_RETRACT_MIN_TRAVEL_MM: f32 = 2.0;
+/// The default tool-change retraction on two-nozzle printers. Estimated: a common figure
+/// for one carriage with two nozzles.
+pub const DEFAULT_TOOL_CHANGE_RETRACT_MM: f32 = 8.0;
+/// The default standby drop for the idle nozzle. Estimated.
+pub const DEFAULT_STANDBY_DROP_C: u32 = 15;
+
+/// The job's two-nozzle choices, used only on a printer with `extruders: 2`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DualNozzle {
+    /// The filament in the nozzle that isn't the primary; None: the same as the
+    /// primary's.
+    pub second_filament: Option<Filament>,
+    /// The nozzle that prints supports (0 = right, 1 = left).
+    pub support_tool: u8,
+    /// Ditto printing: the printer's firmware prints a copy beside the part with the
+    /// second nozzle. It is switched on in the printer's own menu; the app heats the second
+    /// nozzle and keeps the plate narrow enough for the copy.
+    pub ditto: bool,
+    /// A prime tower: after each tool change the incoming nozzle primes on it before
+    /// printing the part.
+    pub prime_tower: bool,
+    /// Where the prime tower's centre stands, in mm from the plate's front-left corner;
+    /// None: near the back-right corner.
+    pub tower_at: Option<[f32; 2]>,
+    /// An ooze shield: a one-line wall around the print, for the idle nozzle to wipe on.
+    pub ooze_shield: bool,
+    /// How far the ooze shield stands outside everything else the print lays down (mm).
+    pub shield_distance: f32,
+}
+
+/// The default ooze shield distance. Estimated: close enough to catch the idle nozzle's
+/// ooze, far enough to clear the print's own lines.
+pub const DEFAULT_SHIELD_DISTANCE_MM: f32 = 3.0;
+
+impl Default for DualNozzle {
+    fn default() -> Self {
+        DualNozzle {
+            second_filament: None,
+            support_tool: PRIMARY_TOOL,
+            ditto: false,
+            prime_tower: true,
+            tower_at: None,
+            ooze_shield: false,
+            shield_distance: DEFAULT_SHIELD_DISTANCE_MM,
+        }
+    }
 }
 
 /// Filament for the purge lines: about what common start routines for this size of
@@ -66,6 +164,14 @@ impl Printer {
             // The KE runs Klipper (Creality OS); the others here run Marlin or Prusa firmware.
             klipper: name.contains("Ender-3 V3 KE"),
             x3g: name.contains("Sailfish"),
+            extruders: if name.contains("Sailfish") { 2 } else { 1 },
+            retract_min_travel: DEFAULT_RETRACT_MIN_TRAVEL_MM,
+            retract_layer_change: false,
+            wipe_mm: 0.0,
+            tool_change_retract: DEFAULT_TOOL_CHANGE_RETRACT_MM,
+            standby_drop: DEFAULT_STANDBY_DROP_C,
+            primary_nozzle: PRIMARY_TOOL,
+            nozzle_spacing: DEFAULT_NOZZLE_SPACING_MM,
         };
         // Build volumes of named printers are their makers' published specifications;
         // retraction values are common starting points (estimated).

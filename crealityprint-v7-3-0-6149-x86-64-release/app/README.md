@@ -36,9 +36,11 @@ printer or slicer maker.
   "v2", or "Marlin-style protocol"), and every line sent and received is recorded in
   `usb-serial.log` in the settings folder's `logs` folder, for diagnosing a printer.
 - MakerBot-protocol printers over USB (Sailfish: FlashForge Creator Pro, early Creator
-  Pro 2, Replicator), read-only for now: firmware, temperatures, the printer's own SD
-  prints and its machine settings. Their print files can be exported as X3G (preset
-  "FlashForge Creator Pro (Sailfish)"); printing over USB is planned in makerbot.md.
+  Pro 2, Replicator): printing as X3G, with pause, stop, the controls and the SD card's
+  files. X3G export saves files for the card (preset "FlashForge Creator Pro
+  (Sailfish)").
+- Two-nozzle printers: a nozzle for each part, a support nozzle, a second filament and
+  Ditto printing.
 - Finds printers on the local network and remembers known ones, and finds a known
   printer again when it has moved to a new address.
 - Live status, temperatures, pause / resume / stop, camera view (Creality and Klipper

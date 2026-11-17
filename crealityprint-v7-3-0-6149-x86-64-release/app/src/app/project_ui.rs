@@ -42,7 +42,14 @@ impl PrintCraftApp {
             }
             let can_export = self.slice_is_current();
             if ui
-                .add_enabled(can_export, egui::Button::new("Export G-code…"))
+                .add_enabled(
+                    can_export,
+                    egui::Button::new(if self.printer.x3g {
+                        "Export X3G…"
+                    } else {
+                        "Export G-code…"
+                    }),
+                )
                 .clicked()
             {
                 self.export();
@@ -150,6 +157,7 @@ impl PrintCraftApp {
             quality: self.quality,
             objects: self.objects.clone(),
             device: self.device.current_device(),
+            dual: self.dual.clone(),
         }
     }
 
@@ -202,6 +210,7 @@ impl PrintCraftApp {
         self.camera = Camera::for_plate(p.printer.bed_x, p.printer.bed_y);
         self.printer = p.printer;
         self.filament = p.filament;
+        self.dual = p.dual;
         self.settings = p.settings;
         self.quality = p
             .quality

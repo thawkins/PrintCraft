@@ -22,10 +22,15 @@ pub enum PathKind {
     TopSurface,
     /// Lines of a raft under the print or under supports.
     Raft,
+    /// The prime tower of a two-nozzle print: each nozzle primes on it after a tool change.
+    PrimeTower,
+    /// The ooze shield of a two-nozzle print: a one-line wall around the print that the idle
+    /// nozzle wipes its ooze on.
+    OozeShield,
 }
 
 impl PathKind {
-    pub const ALL: [PathKind; 10] = [
+    pub const ALL: [PathKind; 12] = [
         Self::OuterWall,
         Self::InnerWall,
         Self::TopSurface,
@@ -36,6 +41,8 @@ impl PathKind {
         Self::Skirt,
         Self::Brim,
         Self::Raft,
+        Self::PrimeTower,
+        Self::OozeShield,
     ];
 
     pub fn label(self) -> &'static str {
@@ -50,6 +57,8 @@ impl PathKind {
             Self::Ironing => "Ironing",
             Self::TopSurface => "Top surface",
             Self::Raft => "Raft",
+            Self::PrimeTower => "Prime tower",
+            Self::OozeShield => "Ooze shield",
         }
     }
 
@@ -63,8 +72,9 @@ impl PathKind {
             Self::Support => "SUPPORT",
             Self::Ironing => "IRONING",
             Self::TopSurface => "TOP-SURFACE",
-            // Printer screens and other slicers treat a raft as support.
-            Self::Raft => "SUPPORT",
+            // Printer screens and other slicers treat a raft as support, and the prime tower
+            // too: it isn't part of the model.
+            Self::Raft | Self::PrimeTower | Self::OozeShield => "SUPPORT",
         }
     }
 }
@@ -989,7 +999,7 @@ fn adhesion_paths(first: &[Polygon], adhesion: Adhesion, lw: f32) -> Vec<ToolPat
 }
 
 /// Counter-clockwise convex hull (monotone chain).
-fn convex_hull(mut pts: Vec<Point2>) -> Polygon {
+pub fn convex_hull(mut pts: Vec<Point2>) -> Polygon {
     pts.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
     pts.dedup();
     if pts.len() < 3 {

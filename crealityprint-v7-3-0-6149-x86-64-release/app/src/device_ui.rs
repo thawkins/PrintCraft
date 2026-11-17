@@ -894,7 +894,7 @@ impl DevicePage {
         let mut go = false;
         card(ui, "Printer on a USB cable", |ui| {
             ui.label(
-                RichText::new("For printers running Marlin, Prusa or Repetier firmware. The app sends the print line by line, so keep this computer awake until it finishes. MakerBot-protocol printers (Sailfish: FlashForge Creator Pro, Replicator) can be connected to read their temperatures, state and settings.")
+                RichText::new("For printers running Marlin, Prusa or Repetier firmware. The app sends the print line by line, so keep this computer awake until it finishes. For MakerBot-protocol printers (Sailfish: FlashForge Creator Pro, early Creator Pro 2, Replicator) choose that protocol: prints are sent as X3G.")
                     .color(theme::TEXT_DIM),
             );
             ui.horizontal(|ui| {
@@ -1388,11 +1388,7 @@ impl DevicePage {
             calibration_changed = self.calibration_details(ui, &st, self_levelling);
             ui.add_space(6.0);
             if !controls {
-                let why = match self.api() {
-                    Some(Api::Sailfish) => "The MakerBot-protocol connection only reads from the printer for now. Use the printer's screen.",
-                    _ => "These controls aren't available for this printer's connection (PrusaLink). Use the printer's screen.",
-                };
-                ui.label(RichText::new(why).color(theme::TEXT_DIM));
+                ui.label(RichText::new("These controls aren't available for this printer's connection (PrusaLink). Use the printer's screen.").color(theme::TEXT_DIM));
             }
             ui.add_enabled_ui(controls, |ui| {
                 self.temperature_tiles(ui, &st, &mut cmds);
@@ -2048,7 +2044,7 @@ fn protocol_badge(ui: &mut Ui, api: Option<Api>, firmware: Option<&str>) {
             theme::ACCENT,
             format!(
                 "The printer answered the MakerBot (S3G) version questions: {name}. \
-                 Read-only for now: temperatures, state and settings."
+                 Prints are translated to X3G and sent in that protocol."
             ),
         ),
         (Some(Api::Sailfish), None) => (
@@ -2099,7 +2095,7 @@ fn protocol_badge(ui: &mut Ui, api: Option<Api>, firmware: Option<&str>) {
 /// The protocol choices for a printer on a USB cable.
 fn usb_protocol_name(api: Api) -> &'static str {
     match api {
-        Api::Sailfish => "MakerBot / Sailfish (read-only)",
+        Api::Sailfish => "MakerBot / Sailfish (X3G)",
         _ => "G-code (Marlin, Prusa, Repetier)",
     }
 }

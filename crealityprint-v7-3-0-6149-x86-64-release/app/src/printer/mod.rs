@@ -10,7 +10,7 @@
 //! * A USB cable: G-code is streamed line by line over the serial port (Marlin and Prusa
 //!   firmware).
 //! * A USB cable to a MakerBot-protocol printer (Sailfish: FlashForge Creator Pro and early
-//!   Creator Pro 2, Replicator 1/2/2X): binary S3G packets. Read-only for now.
+//!   Creator Pro 2, Replicator 1/2/2X): binary S3G packets.
 
 pub mod calibration;
 pub mod camera;
@@ -359,10 +359,10 @@ impl Api {
                 files: false,
                 history: false,
             },
-            // Read-only for now (makerbot.md, step 3a).
+            // The SD card's files can be listed and printed; there is no print history.
             Self::Sailfish => Abilities {
-                controls: false,
-                files: false,
+                controls: true,
+                files: true,
                 history: false,
             },
         }

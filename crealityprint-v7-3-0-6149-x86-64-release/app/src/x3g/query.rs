@@ -3,7 +3,12 @@
 //! them, and none of them moves, heats or changes anything.
 //!
 //! Two host commands are deliberately absent: 3 (clear buffer) and 7 (abort). Sailfish
-//! answers both by restarting the board (`Host.cc`), which ends any print.
+//! answers both by restarting the board (`Host.cc`). Stopping a print uses 22 (extended
+//! stop) instead, which halts the motors and empties the command queue without a restart.
+//!
+//! A few of these do change the printer's state, and are only sent when the person asks:
+//! 8 (pause/resume), 22 (stop), 14/15 (record a file on the SD card) and 16 (print a file
+//! from the card).
 
 /// The host version sent with the version questions. Sailfish answers version 0 to a
 /// host older than 39 (ReplicatorG 0038), so anything from 39 up works.
@@ -38,7 +43,7 @@ impl ToolQuery {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Query {
     /// 0: the firmware version.
     Version,
@@ -56,28 +61,54 @@ pub enum Query {
     Position,
     /// 12: `len` bytes of EEPROM from `offset` (at most [`EEPROM_CHUNK`]).
     ReadEeprom { offset: u16, len: u8 },
+    /// 8: pause the build, or resume it if it is paused.
+    PauseResume,
+    /// 22: halt the motors at once and empty the command queue.
+    ExtendedStop,
+    /// 18: the next file name on the SD card (`restart` starts from the first).
+    NextFileName { restart: bool },
+    /// 16: print a file from the SD card.
+    PlayFile { name: String },
+    /// 14: record the following commands into a file on the SD card instead of running
+    /// them (only in firmware built with `S3G_CAPTURE_2_SD`).
+    CaptureToFile { name: String },
+    /// 15: stop recording; answers the number of bytes written.
+    EndCapture,
 }
 
 impl Query {
-    pub fn payload(self) -> Vec<u8> {
+    pub fn payload(&self) -> Vec<u8> {
         let hv = HOST_VERSION.to_le_bytes();
+        let named = |code: u8, name: &str| {
+            let mut v = vec![code];
+            v.extend(name.bytes().take(SD_NAME_MAX));
+            v.push(0);
+            v
+        };
         match self {
             Query::Version => vec![0, hv[0], hv[1]],
             Query::AdvancedVersion => vec![27, hv[0], hv[1]],
-            Query::Tool { tool, what } => vec![10, tool, what.code()],
+            Query::Tool { tool, what } => vec![10, *tool, what.code()],
             Query::BoardStatus => vec![23],
             Query::BuildStatistics => vec![24],
             Query::BuildName => vec![20],
             Query::Position => vec![21],
             Query::ReadEeprom { offset, len } => {
                 let o = offset.to_le_bytes();
-                vec![12, o[0], o[1], len.min(EEPROM_CHUNK)]
+                vec![12, o[0], o[1], (*len).min(EEPROM_CHUNK)]
             }
+            Query::PauseResume => vec![8],
+            // Bit 0 halts the motors, bit 1 empties the queue (`Host.cc`).
+            Query::ExtendedStop => vec![22, 0b11],
+            Query::NextFileName { restart } => vec![18, u8::from(*restart)],
+            Query::PlayFile { name } => named(16, name),
+            Query::CaptureToFile { name } => named(14, name),
+            Query::EndCapture => vec![15],
         }
     }
 
     /// A few words for the serial log.
-    pub fn describe(self) -> String {
+    pub fn describe(&self) -> String {
         match self {
             Query::Version => "version?".into(),
             Query::AdvancedVersion => "advanced version?".into(),
@@ -95,8 +126,54 @@ impl Query {
             Query::BuildName => "build name?".into(),
             Query::Position => "position?".into(),
             Query::ReadEeprom { offset, len } => format!("EEPROM 0x{offset:04X} +{len}?"),
+            Query::PauseResume => "pause / resume".into(),
+            Query::ExtendedStop => "stop: halt the motors and empty the queue".into(),
+            Query::NextFileName { restart: true } => "first SD file?".into(),
+            Query::NextFileName { restart: false } => "next SD file?".into(),
+            Query::PlayFile { name } => format!("print {name} from the SD card"),
+            Query::CaptureToFile { name } => format!("record into {name} on the SD card"),
+            Query::EndCapture => "end recording".into(),
         }
     }
+}
+
+/// The longest file name the SD commands take: 8.3, so 12 characters.
+pub const SD_NAME_MAX: usize = 12;
+
+/// A file name the printer's SD card (FAT16, 8.3 names) can hold: up to 8 letters,
+/// digits, `-` or `_` from the job's name, then `.x3g`.
+pub fn sd_file_name(job: &str) -> String {
+    let stem = job.rsplit_once('.').map(|(s, _)| s).unwrap_or(job);
+    let clean: String = stem
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(8)
+        .collect();
+    format!("{}.x3g", if clean.is_empty() { "print" } else { &clean })
+}
+
+/// What the SD status byte of commands 14, 16 and 18 means (0 is success).
+pub fn sd_problem(code: u8) -> &'static str {
+    match code {
+        0 => "no problem",
+        1 => "there is no SD card in the printer",
+        2 => "the SD card could not be started",
+        3 => "the SD card's partition table can't be read",
+        4 => "the SD card's file system can't be opened",
+        5 => "the SD card's main folder can't be opened",
+        6 => "the SD card is locked (write-protected)",
+        _ => "the SD card reported an unknown problem",
+    }
+}
+
+/// Command 18's answer: Ok(None) when the list is done.
+pub fn read_next_file_name(answer: &[u8]) -> Result<Option<String>, u8> {
+    let code = *answer.first().ok_or(0xFF)?;
+    if code != 0 {
+        return Err(code);
+    }
+    let name = read_text(&answer[1..]);
+    Ok(Some(name).filter(|n| !n.is_empty()))
 }
 
 fn u16_at(b: &[u8], i: usize) -> Option<u16> {
@@ -105,6 +182,11 @@ fn u16_at(b: &[u8], i: usize) -> Option<u16> {
 
 fn i16_at(b: &[u8], i: usize) -> Option<i16> {
     Some(i16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?))
+}
+
+/// A little-endian u32 at `i` in an answer (command 15's byte count).
+pub fn read_u32(b: &[u8], i: usize) -> Option<u32> {
+    u32_at(b, i)
 }
 
 fn u32_at(b: &[u8], i: usize) -> Option<u32> {
@@ -413,6 +495,44 @@ mod tests {
             assert!(code < 128, "{q:?} must be a query");
             assert!(code != 3 && code != 7, "{q:?} would restart the board");
         }
+    }
+
+    #[test]
+    fn printing_questions_follow_the_specification() {
+        assert_eq!(Query::ExtendedStop.payload(), vec![22, 0b11]);
+        assert_eq!(Query::PauseResume.payload(), vec![8]);
+        assert_eq!(
+            Query::PlayFile {
+                name: "cube.x3g".into()
+            }
+            .payload(),
+            b"\x10cube.x3g\0".to_vec()
+        );
+        assert_eq!(Query::NextFileName { restart: true }.payload(), vec![18, 1]);
+        for q in [
+            Query::PauseResume,
+            Query::ExtendedStop,
+            Query::EndCapture,
+            Query::NextFileName { restart: false },
+        ] {
+            let code = q.payload()[0];
+            assert!(code != 3 && code != 7, "{q:?} would restart the board");
+        }
+    }
+
+    #[test]
+    fn makes_sd_card_names_and_reads_the_file_list() {
+        assert_eq!(sd_file_name("XYZ calibration cube.gcode"), "XYZcalib.x3g");
+        assert_eq!(sd_file_name("ORBIT_print-in-place"), "ORBIT_pr.x3g");
+        assert_eq!(sd_file_name("äöü"), "print.x3g");
+        assert!(sd_file_name("a-very-long-name").len() <= SD_NAME_MAX);
+        assert_eq!(
+            read_next_file_name(b"\0CUBE.X3G\0"),
+            Ok(Some("CUBE.X3G".into()))
+        );
+        assert_eq!(read_next_file_name(b"\0\0"), Ok(None));
+        assert_eq!(read_next_file_name(&[1, 0]), Err(1));
+        assert_eq!(sd_problem(1), "there is no SD card in the printer");
     }
 
     #[test]

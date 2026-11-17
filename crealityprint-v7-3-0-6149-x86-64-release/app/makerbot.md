@@ -4,9 +4,17 @@ Status, 2026-11-18:
 * **Phase 0** (checking the facts) is done.
 * **Step 3a** (the read-only Sailfish connection) is written and tested against a
   pretend printer. It has **not yet been run on the real printer**.
-* **Steps 3b and 3c** (the translator and X3G export, single nozzle) are written and
-  checked by tests and an independent decode of an exported file. **No X3G file has
-  been printed yet.**
+* **Steps 3b and 3c** (the translator and X3G export) are written and checked by tests,
+  an independent decode of an exported file, and a comparison with GPX 2.6.8.
+* **Steps 3d, 3e and 3f** and the core of **track 1** are written and tested against a
+  pretend printer:
+  * printing over USB, with pause, stop and the controls;
+  * the SD card's files;
+  * recording onto the card where the firmware can;
+  * a configurable nozzle count, a nozzle for each part, the support nozzle, the second
+    filament, and Ditto.
+
+  **Nothing has been printed on the real printer yet.**
 PrintCraft version at the time: 0.0.3.
 
 ## What phase 0 found
@@ -101,6 +109,83 @@ nozzles may appear, or change the output, unless the printer profile says it has
 * Saved profiles and projects from before this change have no extruder setting. They
   load with one extruder. Projects that name extruder 2 on a printer that has only one
   fall back to extruder 1, with a note in the status line.
+
+### What is done (2026-11-18)
+
+* **Profiles:** `Printer::extruders` (1 or 2, "Nozzles" in the printer editor). The
+  Creator Pro (Sailfish) preset has 2; every other preset has 1, and old projects load
+  with 1.
+* **Parts and settings:** each part has a nozzle ("Nozzle" under Selected object). The
+  "Two nozzles" group sets the support nozzle and Ditto. The "02" filament chip sets the
+  second nozzle's filament (or "Same as 01"). All of these are saved in the project.
+* **Slicing:** the plate is sliced once, as before, so supports and the skirt stay shared.
+  Each finished path is then given a nozzle:
+  * supports go to the support nozzle;
+  * skirt, brim and raft go to the first nozzle any part uses;
+  * everything else goes to the part whose footprint it lies in.
+
+  Each layer prints the selected nozzle's paths first, then the other's. That is one tool
+  change per layer, alternating, and each change retracts, switches, resets E and
+  primes.
+* **G-code:** the second nozzle is heated and waited for at the start, purged with its
+  own two lines, and switched off at the end.
+* **One nozzle:** the G-code is unchanged, and a test checks it is identical.
+
+**Added after (2026-11-18, the owner's choices):**
+* **Primary nozzle: a printer setting** ("Primary nozzle" in the printer editor, right
+  (T0) by default, which matches the firmware's tool 0, saved in projects as
+  `primary_nozzle`).
+  * New parts, supports, the skirt and one-nozzle prints use it, and it has the main
+    filament ("01"); "02" is the other nozzle's.
+  * A plate printed by one nozzle heats only that nozzle.
+  * Changing the primary moves the parts and supports that were on the old one. Those
+    set to the other nozzle stay. A part saved without a nozzle loads onto the printer's
+    primary.
+* **Anti-ooze at tool changes.** The nozzle set aside is pulled back by the
+  "Tool-change retraction" (8 mm, estimated) and left at "Standby drop" (15 °C, estimated)
+  below its printing temperature. Before it prints again it is heated back (`M109 T`, a
+  short wait) and primed by exactly what it was pulled back. The second nozzle is set
+  aside the same way after its start-up purge.
+* **Retraction for every printer:** "Retract on travels over" (the old fixed 2 mm),
+  "Retract on layer change" and "Wipe". The defaults leave the G-code byte-for-byte as
+  before, which was checked against saved output for three printers.
+
+* **Prime tower** ("Prime tower" under Two nozzles, on by default). It is a 12 mm square
+  10 mm in from the back-right corner.
+  * After each tool change the incoming nozzle primes on it before printing the part. A
+    layer without a change prints it first.
+  * It is built up to the last layer with a tool change, never higher.
+  * Slicing is refused while a part is within 3 mm of it.
+  * One-nozzle plates and Ditto get no tower.
+* **Per-nozzle estimates:** filament, weight and cost are worked out for each nozzle with
+  its own filament. They show in the estimate card and in the G-code footer.
+* **Preview:** "Colour by nozzle" (T0 blue, T1 orange) next to the path types. With
+  Ditto, the copy is drawn dimmed one nozzle spacing to the side (left when T0 prints,
+  right when T1 does).
+* **Ditto checks.** The nozzle spacing is a printer setting ("Nozzle spacing", 33 mm by
+  default: GPX's `r1d` offset).
+  * Before slicing, the parts must fit within the spacing less 3 mm, and the copy must
+    land on the plate.
+  * After slicing, the same check runs on everything the job prints, skirt, brim and raft
+    included, because those widen the job and would collide with the copy's. A job that
+    fails shows why and can't be sent or exported.
+
+* **Tower position** under Two nozzles: automatic (back right), or set in mm from the
+  plate's front-left corner. Saved in the project. Slicing is refused if the tower would
+  stand partly off the plate or within 3 mm of a part.
+
+* **Ooze shield** ("Ooze shield" under Two nozzles, off by default, 3 mm away by
+  default).
+  * It is one closed line around the convex hull of everything the print lays down
+    (parts, supports, skirt, brim, raft; not the tower), so it can't cross any of them on
+    the first layer.
+  * It is the same shape on every layer and built up to the last tool change. Each layer
+    prints it first, with the selected nozzle.
+  * After slicing, a shield off the plate or a tower inside it is refused, and the job
+    can't be sent or exported.
+
+**Not done yet:**
+* independent carriages (IDEX) and Klipper's tool changes.
 
 ### Plan
 
@@ -340,9 +425,9 @@ Steps:
 | 3a | **Written, not yet run on the printer** (`src/x3g/`, `src/printer/sailfish.rs`). Read-only connection: version (0, 27), temperatures (10), motherboard status (23), build statistics (24), position (21), the whole EEPROM (12), saved as `sailfish-eeprom.bin` and summarised in the log. Badge "MakerBot protocol · Sailfish x.y". Never sends 3 or 7 (Sailfish restarts the board on both). | The test printer's versions, temperatures and EEPROM values are in the log, and the machine values are written into this file. |
 | 3b | **Written, not yet printed** (`src/x3g/command.rs`, `machine.rs`, `translate.rs`). S3G action commands; the Creator Pro machine definition (GPX `r1d` values, replaced by the printer's EEPROM copy when one has been saved); the G-code → S3G translator for single-nozzle prints. X/Y/Z are absolute steps from the bed's centre. The extruder is relative and negative (as GPX writes it), with rounding carried over. Speeds are capped at each axis's limit. G29/G32 are dropped with a note, and fan speeds become on/off. An unknown command is an error naming its line. **Compared with GPX 2.6.8** (`gpx -r -m fcp`, see below). | Unit tests, and the GPX oracle where GPX supports the machine. |
 | 3c | **Written, not yet printed.** The "FlashForge Creator Pro (Sailfish)" preset (227 × 148 × 150) and a "MakerBot / Sailfish" printer setting. Export saves `.x3g` for such a printer, and `printcraft --slice … --output OUT.x3g --printer 11` does the same. An exported test model decodes cleanly with an independent decoder. Its extrusion total matches the slicer's filament estimate (2501.6 mm vs 2.50 m). The purge line sits at X −112 mm, 1.5 mm inside the edge GPX gives: to check on the printer. | A cube exported as X3G prints from the SD card on the test printer. |
-| 3d | Streaming over USB: print, progress, pause, stop, jog, home, heaters. | The cube prints over USB. Stop leaves both heaters off. |
-| 3e | Upload to the SD card (14 capture, the job, 15 end; then 16 to print it) and the SD file list (18). | A job uploaded from PrintCraft prints from the card. |
-| 3f | Two nozzles (after track 1): tool changes (134), the nozzle offset from EEPROM, and Ditto printing (the plate limit and preview copy). | A two-colour or PLA + PVA print succeeds with the colours lined up, and a Ditto print gives two matching parts. |
+| 3d | **Written, not yet printed.** Streaming over USB, paced by "buffer full": print, progress, pause/resume (8), stop (22, then heaters off), jog (relative 155), home, heaters, part fan. Jog and home are refused while printing; there is no speed change. | The cube prints over USB. Stop leaves both heaters off. |
+| 3e | **Written, not yet printed.** The SD file list (18) and printing a file from the card (16) work on any Sailfish. Recording a job onto the card (14, the job, 15, then 16) is tried first, but **stock Sailfish is built without it** (`S3G_CAPTURE_2_SD` is off in every board configuration), so on most printers the app falls back to streaming and says why. To print from the card without the computer, export the X3G file and copy it onto the card. | A job uploaded from PrintCraft prints from the card. |
+| 3f | **Written, not yet printed.** `T0`/`T1` become tool changes (134). The firmware applies the nozzle offset from its EEPROM. `M104/M109 T1` heat the second nozzle, and its extrusion goes to the B axis. Ditto heats both nozzles and limits the plate to 30 mm across (33 mm nozzle spacing less a gap). Ditto itself is switched on in the printer's menu (EEPROM). The preview copy is not done. | A two-colour or PLA + PVA print succeeds with the colours lined up, and a Ditto print gives two matching parts. |
 
 ---
 

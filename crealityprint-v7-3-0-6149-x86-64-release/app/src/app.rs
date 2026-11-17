@@ -25,6 +25,16 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
+/// The gap kept between a Ditto job and its copy: the job must be at least this much
+/// narrower than the nozzle spacing.
+const DITTO_GAP_MM: f32 = 3.0;
+/// How far above the view's centre the Move / Scale / Rotate strip starts.
+const TOOL_STRIP_ABOVE_CENTRE: f32 = 80.0;
+/// How far the prime tower stands from the plate's back and right edges.
+const PRIME_TOWER_MARGIN_MM: f32 = 10.0;
+/// The gap kept between the prime tower and any part.
+const PRIME_TOWER_CLEARANCE_MM: f32 = 3.0;
+
 /// How the program was started.
 #[derive(Default)]
 pub struct StartOptions {
@@ -69,6 +79,9 @@ struct Sliced {
     shared_text: Arc<String>,
     /// The 300×300 picture written into the print file.
     picture: Option<Arc<image::RgbaImage>>,
+    /// A Ditto job too wide for its copy (skirt and brim included), or whose copy lands off
+    /// the plate: why it can't be printed or exported.
+    problem: Option<String>,
 }
 
 struct SliceJob {
@@ -119,6 +132,8 @@ pub struct PrintCraftApp {
     printer: Printer,
     filaments: Vec<Filament>,
     filament: Filament,
+    /// Two-nozzle choices (used when the printer has two).
+    dual: crate::profiles::DualNozzle,
     quality: Option<Quality>,
     settings: PrintSettings,
     objects: Vec<PlacedObject>,
@@ -131,6 +146,8 @@ pub struct PrintCraftApp {
     sliced: Option<Sliced>,
     layer: usize,
     hidden_kinds: Vec<PathKind>,
+    /// Two-nozzle printers: colour the preview by nozzle instead of by path type.
+    colour_by_nozzle: bool,
     status: String,
     screenshot: Option<ScreenshotTask>,
     device: DevicePage,
@@ -172,6 +189,7 @@ impl PrintCraftApp {
             printer,
             printers,
             filament: filaments[0].clone(),
+            dual: Default::default(),
             filaments,
             quality: Some(Quality::Standard),
             settings: Quality::Standard.settings(),
@@ -184,6 +202,7 @@ impl PrintCraftApp {
             sliced: None,
             layer: 0,
             hidden_kinds: Vec::new(),
+            colour_by_nozzle: false,
             status: "Open a model (STL, OBJ or 3MF) or add a shape to start.".into(),
             screenshot: start.screenshot.map(|path| ScreenshotTask {
                 path,
@@ -255,7 +274,9 @@ impl PrintCraftApp {
         }
     }
 
-    fn add_object(&mut self, obj: PlacedObject) {
+    fn add_object(&mut self, mut obj: PlacedObject) {
+        // A new part is printed by the printer's primary nozzle until changed.
+        obj.extruder = self.printer.primary_nozzle.min(1);
         self.objects.push(obj);
         self.selected = Some(self.objects.len() - 1);
         self.arrange();
@@ -387,19 +408,81 @@ impl PrintCraftApp {
     // ----- slicing --------------------------------------------------------------------------
 
     fn fingerprint(&self) -> String {
-        let mut s = format!("{:?}|{:?}|{:?}", self.settings, self.printer, self.filament);
+        let mut s = format!(
+            "{:?}|{:?}|{:?}|{:?}",
+            self.settings, self.printer, self.filament, self.dual
+        );
         for o in &self.objects {
             s += &format!(
-                "|{}:{}:{}:{:?}:{}:{}",
+                "|{}:{}:{}:{:?}:{}:{}:{}",
                 o.name,
                 o.x,
                 o.y,
                 o.rotation,
                 o.scale_percent,
-                o.mesh.triangles.len()
+                o.mesh.triangles.len(),
+                o.extruder
             );
         }
         s
+    }
+
+    /// Where a Ditto copy prints, along X (mm): one nozzle spacing towards the other
+    /// nozzle, so to the left when the right nozzle (T0) prints, to the right when T1 does.
+    fn ditto_offset(&self) -> f32 {
+        let spacing = self.printer.nozzle_spacing;
+        if self.printer.primary_tool() == 0 {
+            -spacing
+        } else {
+            spacing
+        }
+    }
+
+    /// Which nozzle prints what, from each part's nozzle and the two-nozzle settings. Err
+    /// says why the plate can't be printed that way (a Ditto plate too wide for the copy).
+    fn tools(&self) -> Result<crate::gcode::Tools, String> {
+        if self.printer.extruders < 2 {
+            return Ok(crate::gcode::Tools::default());
+        }
+        let parts: Vec<([f32; 4], u8)> = self
+            .objects
+            .iter()
+            .map(|o| {
+                let b = o.world_bounds();
+                ([b.min.x, b.min.y, b.max.x, b.max.y], o.extruder)
+            })
+            .collect();
+        if self.dual.ditto {
+            let bounds: Vec<[f32; 4]> = parts.iter().map(|(b, _)| *b).collect();
+            ditto_check(&bounds, self.printer.bed_x, self.ditto_offset())?;
+        }
+        let tower_at = tower_centre(&self.printer, &self.dual);
+        let both_used = {
+            let mut used = [false; 2];
+            for (_, t) in &parts {
+                used[(*t).min(1) as usize] = true;
+            }
+            if self.settings.supports {
+                used[self.dual.support_tool.min(1) as usize] = true;
+            }
+            used[0] && used[1]
+        };
+        let tower = (self.dual.prime_tower && !self.dual.ditto && both_used).then_some(tower_at);
+        if let Some(c) = tower {
+            let bounds: Vec<[f32; 4]> = parts.iter().map(|(b, _)| *b).collect();
+            tower_check(c, &bounds, self.printer.bed_x, self.printer.bed_y)?;
+        }
+        let shield = (self.dual.ooze_shield && !self.dual.ditto && both_used)
+            .then_some(self.dual.shield_distance);
+        Ok(crate::gcode::Tools {
+            shield,
+            tower,
+            parts,
+            support_tool: self.dual.support_tool,
+            primary: self.printer.primary_tool(),
+            second: self.dual.second_filament.clone(),
+            ditto: self.dual.ditto,
+        })
     }
 
     fn slice_is_current(&self) -> bool {
@@ -425,11 +508,23 @@ impl PrintCraftApp {
             return;
         }
         let tris: Vec<Triangle> = self.plate.concat();
+        let tools = match self.tools() {
+            Ok(t) => t,
+            Err(why) => {
+                self.status = why;
+                return;
+            }
+        };
         let (settings, printer, filament) = (
             self.settings.clone(),
             self.printer.clone(),
             self.filament.clone(),
         );
+        let ditto_dx =
+            (self.printer.extruders >= 2 && self.dual.ditto).then(|| self.ditto_offset());
+        // The ooze shield's outline exists only once sliced: it must be on the plate and
+        // clear of the prime tower.
+        let shield_check = tools.shield.map(|_| tools.tower);
         let fingerprint = self.fingerprint();
         let progress = Arc::new(AtomicU32::new(0f32.to_bits()));
         let (tx, rx) = mpsc::channel();
@@ -439,16 +534,33 @@ impl PrintCraftApp {
                 result,
                 gcode,
                 picture,
-            } = pipeline::slice_plate(&tris, &printer, &filament, &settings, &|v| {
-                p.store(v.to_bits(), Ordering::Relaxed)
-            });
+            } = pipeline::slice_plate_with_tools(
+                &tris,
+                &printer,
+                &filament,
+                &settings,
+                &tools,
+                &|v| p.store(v.to_bits(), Ordering::Relaxed),
+            );
             let shared_text = Arc::new(gcode.text.clone());
+            // Ditto: the job as sliced (skirt, brim and raft included) must leave room for
+            // its copy.
+            let problem = ditto_dx
+                .and_then(|dx| {
+                    let extent = job_extent(&result)?;
+                    ditto_check(&[extent], printer.bed_x, dx).err()
+                })
+                .or_else(|| {
+                    let tower = shield_check?;
+                    shield_check_fn(&result, tower, printer.bed_x, printer.bed_y).err()
+                });
             let _ = tx.send(Sliced {
                 result,
                 gcode,
                 fingerprint,
                 shared_text,
                 picture: picture.map(Arc::new),
+                problem,
             });
         });
         self.job = Some(SliceJob { progress, rx });
@@ -483,10 +595,15 @@ impl PrintCraftApp {
                     e.grams
                 );
                 self.layer = done.result.layers.len().saturating_sub(1);
+                let problem = done.problem.clone();
                 self.sliced = Some(done);
                 self.mode = Mode::Preview;
                 self.job = None;
-                if std::mem::take(&mut self.send_after_slice) {
+                if let Some(why) = problem {
+                    // Shown, and the job is held back from the printer and from export.
+                    self.status = why;
+                    self.send_after_slice = false;
+                } else if std::mem::take(&mut self.send_after_slice) {
                     self.send_print();
                 }
             }
@@ -520,6 +637,10 @@ impl PrintCraftApp {
 
     fn export(&mut self) {
         let Some(sliced) = &self.sliced else { return };
+        if let Some(why) = &sliced.problem {
+            self.status = why.clone();
+            return;
+        }
         if self.screenshot.is_some() {
             return;
         }
@@ -612,6 +733,8 @@ impl PrintCraftApp {
         let mut changed = false;
         let mut action = None;
         let size = self.object_bounds(i).size();
+        let two_nozzles = self.printer.extruders >= 2 && !self.dual.ditto;
+        let primary = self.printer.primary_tool();
         card(ui, "Selected object", |ui| {
             let o = &mut self.objects[i];
             ui.label(
@@ -621,6 +744,18 @@ impl PrintCraftApp {
                 ))
                 .color(theme::TEXT_DIM),
             );
+            if two_nozzles {
+                ui.horizontal(|ui| {
+                    ui.label("Nozzle");
+                    egui::ComboBox::from_id_salt("object_nozzle")
+                        .selected_text(nozzle_name(o.extruder, primary))
+                        .show_ui(ui, |ui| {
+                            for t in [0u8, 1] {
+                                ui.selectable_value(&mut o.extruder, t, nozzle_name(t, primary));
+                            }
+                        });
+                });
+            }
             changed |= object_placement_grid(ui, o, ox, oy);
             let (edited, clicked) = object_buttons(ui, o);
             changed |= edited;
@@ -667,9 +802,25 @@ impl PrintCraftApp {
                     ui.label(RichText::new(v).strong());
                     ui.end_row();
                 }
+                if let Some(n) = e.per_nozzle {
+                    for (t, (mm, g)) in n.iter().enumerate() {
+                        ui.label(
+                            RichText::new(nozzle_name(t as u8, self.printer.primary_tool()))
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.label(
+                            RichText::new(format!("{:.2} m · {g:.1} g", mm / 1000.0)).strong(),
+                        );
+                        ui.end_row();
+                    }
+                }
             });
         });
         card(ui, "Show", |ui| {
+            if self.printer.extruders >= 2 && !self.dual.ditto {
+                ui.checkbox(&mut self.colour_by_nozzle, "Colour by nozzle")
+                    .on_hover_text("Right nozzle (T0) blue, left nozzle (T1) orange");
+            }
             for kind in PathKind::ALL {
                 let mut on = !self.hidden_kinds.contains(&kind);
                 ui.horizontal(|ui| {
@@ -735,13 +886,28 @@ impl PrintCraftApp {
         if preview {
             let sliced = self.sliced.as_ref().unwrap();
             let hidden = &self.hidden_kinds;
+            let tools = self.tools().unwrap_or_default();
+            let dual = self.printer.extruders >= 2;
+            let by_nozzle = dual && self.colour_by_nozzle && !self.dual.ditto;
+            let color = |p: &crate::slicer::ToolPath| {
+                if by_nozzle {
+                    theme::nozzle_color(tools.tool_for(p))
+                } else {
+                    theme::path_color(p.kind)
+                }
+            };
+            let look = view3d::PathLook {
+                visible: &|k| !hidden.contains(&k),
+                color: &color,
+                copy_dx: (dual && self.dual.ditto).then(|| self.ditto_offset()),
+            };
             view3d::draw_toolpaths(
                 &painter,
                 &self.camera,
                 rect,
                 &sliced.result,
                 self.layer,
-                &|k| !hidden.contains(&k),
+                &look,
             );
         } else {
             let draw: Vec<DrawObject> = (0..self.objects.len())
@@ -861,7 +1027,10 @@ impl PrintCraftApp {
     fn tool_bar(&mut self, ui: &mut Ui, rect: egui::Rect) {
         const BUTTON: f32 = 44.0;
         let area = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + 10.0, rect.center().y - 80.0),
+            egui::pos2(
+                rect.left() + 10.0,
+                rect.center().y - TOOL_STRIP_ABOVE_CENTRE,
+            ),
             egui::vec2(BUTTON + 12.0, 3.0 * BUTTON + 24.0),
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
@@ -1102,8 +1271,16 @@ impl PrintCraftApp {
 
     /// Printer box (top left) and model tools (along the top), as in the original.
     fn prepare_overlays(&mut self, ui: &mut Ui, rect: egui::Rect) {
-        let boxr =
-            egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 10.0), egui::vec2(350.0, 260.0));
+        // The box ends above the Move / Scale / Rotate strip (see `tool_bar`), so a long
+        // printer editor scrolls instead of running under it.
+        let strip_top = rect.center().y - TOOL_STRIP_ABOVE_CENTRE;
+        let boxr = egui::Rect::from_min_max(
+            rect.min + egui::vec2(10.0, 10.0),
+            egui::pos2(
+                rect.left() + 360.0,
+                (strip_top - 10.0).max(rect.top() + 200.0),
+            ),
+        );
         ui.scope_builder(egui::UiBuilder::new().max_rect(boxr), |ui| {
             self.printer_box(ui)
         });
@@ -1473,4 +1650,288 @@ fn object_buttons(ui: &mut Ui, o: &mut PlacedObject) -> (bool, Option<ObjectActi
         }
     });
     (changed, action)
+}
+
+/// A nozzle of a two-nozzle printer, as the window names it (tool 0 is the right nozzle on
+/// the Creator Pro / Replicator Dual family), marked when it is the printer's primary.
+pub(crate) fn nozzle_name(tool: u8, primary: u8) -> String {
+    let side = if tool == 0 { "Right (T0)" } else { "Left (T1)" };
+    if tool == primary {
+        format!("{side} · primary")
+    } else {
+        side.to_string()
+    }
+}
+
+/// Whether a Ditto job works: its extent (min x, min y, max x, max y, plate coordinates;
+/// the parts, or after slicing every line printed, skirt and brim included) must be at
+/// least [`DITTO_GAP_MM`] narrower than the nozzle spacing `|dx|`, or the two copies
+/// print into each other, and the copy, `dx` along X, must land on a plate `bed_x` wide.
+/// Err says what to change.
+fn ditto_check(parts: &[[f32; 4]], bed_x: f32, dx: f32) -> Result<(), String> {
+    if parts.is_empty() {
+        return Ok(());
+    }
+    let (lo, hi) = parts.iter().fold((f32::MAX, f32::MIN), |(lo, hi), b| {
+        (lo.min(b[0]), hi.max(b[2]))
+    });
+    let spacing = dx.abs();
+    let widest = spacing - DITTO_GAP_MM;
+    if hi - lo > widest {
+        return Err(format!(
+            "Ditto prints a copy {spacing:.0} mm to the side (the nozzle spacing), so the \
+             job must fit within {widest:.0} mm across or the copies print into each other; \
+             this one is {:.0} mm.",
+            hi - lo
+        ));
+    }
+    let half = bed_x / 2.0;
+    if lo + dx < -half || hi + dx > half {
+        return Err(format!(
+            "The Ditto copy would print off the plate: move the parts {} by about {:.0} mm.",
+            if dx < 0.0 { "right" } else { "left" },
+            if dx < 0.0 {
+                -half - (lo + dx)
+            } else {
+                hi + dx - half
+            }
+        ));
+    }
+    Ok(())
+}
+
+/// Where the prime tower's centre stands, in plate coordinates (0, 0 at the centre): the
+/// position set under Two nozzles, or near the back-right corner.
+fn tower_centre(
+    printer: &crate::profiles::Printer,
+    dual: &crate::profiles::DualNozzle,
+) -> crate::geometry::Point2 {
+    let (hx, hy) = (printer.bed_x / 2.0, printer.bed_y / 2.0);
+    match dual.tower_at {
+        Some([x, y]) => crate::geometry::Point2::new(x - hx, y - hy),
+        None => {
+            let inset = PRIME_TOWER_MARGIN_MM + crate::gcode::PRIME_TOWER_MM / 2.0;
+            crate::geometry::Point2::new(hx - inset, hy - inset)
+        }
+    }
+}
+
+/// Whether the prime tower, centred at `c` (plate coordinates), stands wholly on a plate
+/// `bed_x` x `bed_y` and at least [`PRIME_TOWER_CLEARANCE_MM`] from every part. Err says
+/// what to change.
+fn tower_check(
+    c: crate::geometry::Point2,
+    parts: &[[f32; 4]],
+    bed_x: f32,
+    bed_y: f32,
+) -> Result<(), String> {
+    let half = crate::gcode::PRIME_TOWER_MM / 2.0;
+    if c.x - half < -bed_x / 2.0
+        || c.x + half > bed_x / 2.0
+        || c.y - half < -bed_y / 2.0
+        || c.y + half > bed_y / 2.0
+    {
+        return Err(
+            "The prime tower would stand partly off the plate: change its position under Two \
+             nozzles."
+                .into(),
+        );
+    }
+    let h = half + PRIME_TOWER_CLEARANCE_MM;
+    if parts
+        .iter()
+        .any(|b| b[0] < c.x + h && b[2] > c.x - h && b[1] < c.y + h && b[3] > c.y - h)
+    {
+        return Err(
+            "The prime tower stands where a part is: move the part, set the tower's position, \
+             or turn the prime tower off under Two nozzles."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Whether a sliced job's ooze shield stands on the plate and clear of the prime tower
+/// (centred at `tower`, when there is one). Err says what to change.
+fn shield_check_fn(
+    result: &SliceResult,
+    tower: Option<crate::geometry::Point2>,
+    bed_x: f32,
+    bed_y: f32,
+) -> Result<(), String> {
+    let pts: Vec<_> = result
+        .layers
+        .iter()
+        .flat_map(|l| &l.paths)
+        .filter(|p| p.kind == PathKind::OozeShield)
+        .flat_map(|p| p.points.iter().copied())
+        .collect();
+    if pts.is_empty() {
+        return Ok(());
+    }
+    let (mut lo, mut hi) = (pts[0], pts[0]);
+    for p in &pts {
+        lo = crate::geometry::Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = crate::geometry::Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    if lo.x < -bed_x / 2.0 || hi.x > bed_x / 2.0 || lo.y < -bed_y / 2.0 || hi.y > bed_y / 2.0 {
+        return Err(
+            "The ooze shield would run off the plate: move the parts in from the edge, lower \
+             the shield distance, or turn the shield off under Two nozzles."
+                .into(),
+        );
+    }
+    if let Some(c) = tower {
+        let h = crate::gcode::PRIME_TOWER_MM / 2.0 + PRIME_TOWER_CLEARANCE_MM;
+        if lo.x < c.x + h && hi.x > c.x - h && lo.y < c.y + h && hi.y > c.y - h {
+            return Err(
+                "The prime tower stands inside or against the ooze shield: set the tower's \
+                 position further from the parts under Two nozzles."
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The X/Y extent of everything a sliced job prints (min x, min y, max x, max y).
+fn job_extent(result: &SliceResult) -> Option<[f32; 4]> {
+    let mut b: Option<[f32; 4]> = None;
+    for p in result
+        .layers
+        .iter()
+        .flat_map(|l| &l.paths)
+        .flat_map(|p| &p.points)
+    {
+        let e = b.get_or_insert([p.x, p.y, p.x, p.y]);
+        *e = [e[0].min(p.x), e[1].min(p.y), e[2].max(p.x), e[3].max(p.y)];
+    }
+    b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ditto_needs_a_narrow_plate_whose_copy_lands_on_the_plate() {
+        // A 20 mm part at the centre; the copy 33 mm to the left: fine.
+        assert_eq!(
+            ditto_check(&[[-10.0, -5.0, 10.0, 5.0]], 227.0, -33.0),
+            Ok(())
+        );
+        // Too wide for the spacing.
+        let e = ditto_check(&[[-20.0, -5.0, 20.0, 5.0]], 227.0, -33.0).unwrap_err();
+        assert!(
+            e.contains("within 30 mm") && e.contains("into each other"),
+            "{e}"
+        );
+        // At the left edge the copy, further left, would fall off.
+        let e = ditto_check(&[[-110.0, -5.0, -95.0, 5.0]], 227.0, -33.0).unwrap_err();
+        assert!(e.contains("move the parts right"), "{e}");
+        // With T1 printing the copy goes right instead, so the left edge is fine.
+        assert_eq!(
+            ditto_check(&[[-110.0, -5.0, -95.0, 5.0]], 227.0, 33.0),
+            Ok(())
+        );
+        assert_eq!(ditto_check(&[], 227.0, -33.0), Ok(()));
+    }
+
+    #[test]
+    fn a_brim_can_make_a_ditto_job_too_wide_for_its_copy() {
+        use crate::geometry::Vec3;
+        use crate::model::{Mesh, PlacedObject};
+        use crate::profiles::{Adhesion, Filament, PrintSettings, Printer};
+        let printer = Printer::presets()
+            .into_iter()
+            .find(|p| p.extruders == 2)
+            .unwrap();
+        let part = PlacedObject::new("part", Mesh::cube(Vec3::new(26.0, 10.0, 1.0)));
+        let b = part.world_bounds();
+        let dx = -printer.nozzle_spacing;
+        // The part alone fits within 30 mm (33 mm spacing less the gap).
+        assert_eq!(
+            ditto_check(&[[b.min.x, b.min.y, b.max.x, b.max.y]], printer.bed_x, dx),
+            Ok(())
+        );
+        // Sliced with a brim, the job is wider than that, and is refused.
+        let settings = PrintSettings {
+            adhesion: Adhesion::Brim,
+            ..PrintSettings::default()
+        };
+        let sliced = crate::pipeline::slice_plate(
+            &part.world_triangles(),
+            &printer,
+            &Filament::presets()[0],
+            &settings,
+            &|_| {},
+        );
+        let extent = job_extent(&sliced.result).unwrap();
+        assert!(extent[2] - extent[0] > 30.0, "{extent:?}");
+        let e = ditto_check(&[extent], printer.bed_x, dx).unwrap_err();
+        assert!(e.contains("into each other"), "{e}");
+        // A printer with its nozzles further apart takes the same job.
+        assert_eq!(ditto_check(&[extent], printer.bed_x, -60.0), Ok(()));
+    }
+
+    #[test]
+    fn the_prime_tower_goes_where_it_is_set_and_stays_clear_and_on_the_plate() {
+        use crate::geometry::Point2;
+        use crate::profiles::{DualNozzle, Printer};
+        let printer = Printer::presets()
+            .into_iter()
+            .find(|p| p.extruders == 2)
+            .unwrap();
+        // Automatic: 10 mm in from the back-right corner.
+        let auto = tower_centre(&printer, &DualNozzle::default());
+        assert_eq!(auto, Point2::new(227.0 / 2.0 - 16.0, 148.0 / 2.0 - 16.0));
+        // Set: mm from the front-left corner.
+        let set = DualNozzle {
+            tower_at: Some([20.0, 30.0]),
+            ..DualNozzle::default()
+        };
+        assert_eq!(
+            tower_centre(&printer, &set),
+            Point2::new(20.0 - 113.5, 30.0 - 74.0)
+        );
+        let part = [[-10.0, -10.0, 10.0, 10.0]];
+        assert_eq!(tower_check(auto, &part, 227.0, 148.0), Ok(()));
+        let e = tower_check(Point2::new(12.0, 0.0), &part, 227.0, 148.0).unwrap_err();
+        assert!(e.contains("where a part is"), "{e}");
+        let e = tower_check(Point2::new(110.0, 0.0), &part, 227.0, 148.0).unwrap_err();
+        assert!(e.contains("off the plate"), "{e}");
+    }
+
+    #[test]
+    fn the_ooze_shield_must_stay_on_the_plate_and_clear_of_the_tower() {
+        use crate::geometry::Point2;
+        use crate::slicer::{Layer, PathKind, ToolPath};
+        let ring = |h: f32| SliceResult {
+            layers: vec![Layer {
+                z: 0.2,
+                height: 0.2,
+                paths: vec![ToolPath {
+                    kind: PathKind::OozeShield,
+                    points: vec![
+                        Point2::new(-h, -h),
+                        Point2::new(h, -h),
+                        Point2::new(h, h),
+                        Point2::new(-h, h),
+                    ],
+                    closed: true,
+                }],
+            }],
+            line_width: 0.44,
+        };
+        assert_eq!(shield_check_fn(&ring(20.0), None, 227.0, 148.0), Ok(()));
+        let e = shield_check_fn(&ring(80.0), None, 227.0, 148.0).unwrap_err();
+        assert!(e.contains("off the plate"), "{e}");
+        let e =
+            shield_check_fn(&ring(20.0), Some(Point2::new(15.0, 0.0)), 227.0, 148.0).unwrap_err();
+        assert!(e.contains("inside or against the ooze shield"), "{e}");
+        assert_eq!(
+            shield_check_fn(&ring(20.0), Some(Point2::new(80.0, 50.0)), 227.0, 148.0),
+            Ok(())
+        );
+    }
 }

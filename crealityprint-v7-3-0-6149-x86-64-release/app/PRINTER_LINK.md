@@ -208,7 +208,7 @@ Sources: the RepRap wiki pages "Repetier-Firmware" and "G-code", read for this.
 * **Heat waits.** `M109 S` and `M190 S` wait only while heating, as in Marlin, so print
   files need no change.
 
-## 3d. MakerBot protocol / Sailfish over USB (src/printer/sailfish.rs, src/x3g) — documented, read-only, unverified on a real printer
+## 3d. MakerBot protocol / Sailfish over USB (src/printer/sailfish.rs, src/x3g) — documented, unverified on a real printer
 
 For Sailfish and MakerBot firmware: the FlashForge Creator Pro and early Creator Pro 2,
 Replicator 1/2/2X and their clones. The plan and the sources are in makerbot.md.
@@ -219,7 +219,7 @@ Sources:
 * the Sailfish 7.8 source (`Packet.hh`, `Packet.cc`, `Commands.hh`, `Host.cc`,
   `EepromMap.hh`, `Configuration.hh`).
 
-* **Choosing it.** Under USB, set **Protocol** to "MakerBot / Sailfish (read-only)". It
+* **Choosing it.** Under USB, set **Protocol** to "MakerBot / Sailfish (X3G)". It
   isn't detected by itself yet. The choice is saved with the printer (`"api": "sailfish"`).
 * **Packets.** Each packet is:
   * `0xD5`;
@@ -230,7 +230,7 @@ Sources:
   One question is in flight at a time. A damaged, missing or "send again" answer
   (`0x80`, `0x82`, `0x83`, `0x88`, `0x8C`) is asked again, up to 5 times. Any other error
   code is final for that question.
-* **What it asks, all questions that change nothing:**
+* **What it asks on connecting and while idle (nothing that changes the printer):**
   * version (0) and advanced version (27);
   * a copy of the whole 4 KB EEPROM (12, 31 bytes at a time);
   * position (21);
@@ -238,8 +238,8 @@ Sources:
     temperatures (10 with subcommands 2, 32, 30, 33);
   * motherboard status (23) and build statistics (24);
   * the build name (20) while a build runs.
-* **Never sent:** anything that moves, heats or writes. Also never sent: 3 (clear buffer)
-  and 7 (abort), which make Sailfish restart the board. A test checks this.
+* **Never sent:** 3 (clear buffer) and 7 (abort), which make Sailfish restart the board.
+  Tests check this for connecting, printing, stopping and the controls.
 * **Shown to the person:**
   * a "MakerBot protocol · Sailfish 7.8" badge, from the variant byte: 0x80 is Sailfish
     (the specification and `Configuration.hh`), and 2 is accepted too;
@@ -249,8 +249,34 @@ Sources:
   * temperatures (right and left nozzle on two-nozzle machines, with tool 0 as the
     right one);
   * a print started from the printer's own SD card, with its name and running time.
-* **Controls** (temperatures, moves, starting a print) are refused with a note. They
-  come with the next stages.
+* **Printing.** The sliced plate is translated to S3G (`x3g::translate`; the plate
+  size comes from the `; plate:` line in the G-code's header).
+  * The app first tries to record the job onto the SD card (14, the commands, 15) and
+    print it from there (16), so the computer may disconnect.
+  * Stock Sailfish is built without that recording (`S3G_CAPTURE_2_SD` is off in every
+    board's `Configuration.hh`) and answers "unsupported". So does a card that isn't
+    ready, with the reason. In both cases the commands are streamed over USB instead,
+    paced by the printer's "buffer full" answers. Progress is how many commands have
+    been sent.
+  * When an answer to a command is lost, the command is sent again, as GPX does. If
+    the printer had in fact taken it, an extrusion move can run twice.
+* **Pause / resume** use query 8, which toggles, so it is sent only to change state.
+  **Stop** uses 22 (halt the motors and empty the queue), then switches both nozzles and
+  the bed off and ends the build. Extended stop leaves Sailfish's build state alone, and
+  the build end then reads "finished normally", so the app keeps showing Stopped until
+  the next print. Disconnecting stops a streamed print. A print running from the card
+  carries on.
+* **Controls.**
+  * Nozzle and bed temperatures and the part fan (output 13, on/off) are queued
+    commands. During a print they take effect after what is already queued.
+  * Jog sends a relative move (155 with every axis relative), at 3000 mm/min for X/Y
+    and 600 mm/min for Z, capped at the axis's limit.
+  * Home sends the same homing as a print (X/Y to max, Z to min, then the stored home
+    position).
+  * Jog and home are refused while a print runs. The print speed can't be changed:
+    S3G has no command for it.
+* **Files.** The SD card's `.x3g` / `.s3g` files are listed with 18 and printed with 16.
+  There is no print history.
 * **Records.** The packets go into `usb-serial.log` as hex, with what each one means. The
   EEPROM copy is saved as `sailfish-eeprom.bin` beside it.
 

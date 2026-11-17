@@ -33,6 +33,17 @@ pub fn path_color(kind: PathKind) -> Color32 {
         PathKind::TopSurface => Color32::from_rgb(236, 120, 196),
         PathKind::Skirt | PathKind::Brim => Color32::from_rgb(140, 214, 140),
         PathKind::Raft => Color32::from_rgb(160, 160, 170),
+        PathKind::PrimeTower => Color32::from_rgb(120, 200, 170),
+        PathKind::OozeShield => Color32::from_rgb(150, 170, 200),
+    }
+}
+
+/// The preview colour of a nozzle when colouring by nozzle: T0 blue, T1 orange.
+pub fn nozzle_color(tool: u8) -> Color32 {
+    if tool == 0 {
+        Color32::from_rgb(70, 150, 245)
+    } else {
+        Color32::from_rgb(255, 120, 60)
     }
 }
 

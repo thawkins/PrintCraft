@@ -288,6 +288,16 @@ fn inside_triangle(p: Pos2, a: Pos2, b: Pos2, c: Pos2) -> bool {
     (neg || pos) && !(neg && pos)
 }
 
+/// How the preview colours and repeats the toolpaths.
+pub struct PathLook<'a> {
+    /// Whether a kind of path is shown.
+    pub visible: &'a dyn Fn(PathKind) -> bool,
+    /// A path's colour (by type, or by nozzle).
+    pub color: &'a dyn Fn(&crate::slicer::ToolPath) -> egui::Color32,
+    /// Ditto printing: the second nozzle's copy, this far along X (mm), drawn dimmed.
+    pub copy_dx: Option<f32>,
+}
+
 /// Toolpaths of layers 0..=`upto`; the top one drawn brighter and thicker.
 pub fn draw_toolpaths(
     painter: &egui::Painter,
@@ -295,7 +305,7 @@ pub fn draw_toolpaths(
     rect: Rect,
     result: &SliceResult,
     upto: usize,
-    visible: &dyn Fn(PathKind) -> bool,
+    look: &PathLook,
 ) {
     let total: usize = result
         .layers
@@ -312,27 +322,37 @@ pub fn draw_toolpaths(
             continue;
         }
         for path in &layer.paths {
-            if !visible(path.kind) {
+            if !(look.visible)(path.kind) {
                 continue;
             }
-            let mut pts: Vec<Pos2> = path
-                .points
-                .iter()
-                .filter_map(|p| view.project(Vec3::new(p.x, p.y, layer.z)).map(|q| q.0))
-                .collect();
-            if path.closed && !pts.is_empty() {
-                pts.push(pts[0]);
-            }
-            if pts.len() < 2 {
-                continue;
-            }
-            let base = theme::path_color(path.kind);
+            let base = (look.color)(path);
             let (width, color) = if current {
                 (2.0, base)
             } else {
                 (1.0, base.gamma_multiply(0.75))
             };
-            painter.add(Shape::line(pts, Stroke::new(width, color)));
+            let copies = [Some(0.0), look.copy_dx];
+            for (ci, dx) in copies.iter().enumerate() {
+                let Some(dx) = dx else { continue };
+                let mut pts: Vec<Pos2> = path
+                    .points
+                    .iter()
+                    .filter_map(|p| view.project(Vec3::new(p.x + dx, p.y, layer.z)).map(|q| q.0))
+                    .collect();
+                if path.closed && !pts.is_empty() {
+                    pts.push(pts[0]);
+                }
+                if pts.len() < 2 {
+                    continue;
+                }
+                // The Ditto copy is drawn dimmer than the part itself.
+                let color = if ci == 0 {
+                    color
+                } else {
+                    color.gamma_multiply(0.45)
+                };
+                painter.add(Shape::line(pts, Stroke::new(width, color)));
+            }
         }
     }
 }

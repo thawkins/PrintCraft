@@ -61,6 +61,81 @@ impl std::fmt::Display for TranslateError {
     }
 }
 
+impl Options {
+    /// The options a sliced plate's own G-code gives: its plate size (the `; plate:`
+    /// header PrintCraft writes) and its layer count (`;LAYER_COUNT:`).
+    pub fn from_gcode(gcode: &str, job_name: &str) -> Result<Options, String> {
+        let mut bed = None;
+        let mut layers = 0;
+        for line in gcode.lines().take(200) {
+            if let Some(rest) = line.strip_prefix("; plate:") {
+                let nums: Vec<f64> = rest
+                    .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+                    .filter_map(|n| n.parse().ok())
+                    .collect();
+                if let [x, y, ..] = nums[..] {
+                    bed = Some((x, y));
+                }
+            } else if let Some(n) = line.strip_prefix(";LAYER_COUNT:") {
+                layers = n.trim().parse().unwrap_or(0);
+            }
+        }
+        Ok(Options {
+            bed_mm: bed.ok_or(
+                "the print file doesn't say its plate size; slice it again with this \
+                 version of PrintCraft",
+            )?,
+            job_name: job_name.to_string(),
+            total_layers: layers,
+        })
+    }
+}
+
+/// The commands that home the printer (G28), without the build notices around a print.
+pub fn home_actions(m: &Machine) -> Vec<Action> {
+    let o = Options {
+        bed_mm: (0.0, 0.0),
+        job_name: String::new(),
+        total_layers: 0,
+    };
+    translate("G28\n", m, &o)
+        .map(|t| {
+            t.actions
+                .into_iter()
+                .filter(|a| matches!(a, Action::Home { .. } | Action::RecallHome { .. }))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One jog: move `axis` ('X', 'Y' or 'Z') by `mm` from wherever it is, at
+/// `feed_mm_min` (capped at the axis's limit). Every axis is sent relative, so the
+/// printer's position needn't be known. None for an unknown axis or a move under a step.
+pub fn jog(m: &Machine, axis: char, mm: f64, feed_mm_min: f64) -> Option<Action> {
+    let i = match axis.to_ascii_uppercase() {
+        'X' => 0,
+        'Y' => 1,
+        'Z' => 2,
+        _ => return None,
+    };
+    let steps = (mm * m.steps_per_mm[i]).round() as i32;
+    if steps == 0 {
+        return None;
+    }
+    let feed = feed_mm_min.min(m.max_feedrate[i]) / 60.0;
+    let mut all = [0; 5];
+    all[i] = steps;
+    Some(Action::Move {
+        steps: all,
+        dda_rate: (feed * steps.unsigned_abs() as f64 / mm.abs())
+            .round()
+            .max(1.0) as u32,
+        relative: super::command::ALL_AXES,
+        distance_mm: mm.abs() as f32,
+        feedrate: feed as f32,
+    })
+}
+
 /// The commands as an `.x3g` file.
 pub fn to_x3g(actions: &[Action]) -> Vec<u8> {
     actions.iter().flat_map(|a| a.encode()).collect()
@@ -507,6 +582,39 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn reads_the_plate_and_layers_from_the_gcode_header() {
+        let g = "; printer: x\n; plate: 227.0 x 148.0 mm\n;LAYER_COUNT:12\nG28\n";
+        let o = Options::from_gcode(g, "cube").unwrap();
+        assert_eq!(o.bed_mm, (227.0, 148.0));
+        assert_eq!(o.total_layers, 12);
+        assert!(Options::from_gcode("G28\n", "cube")
+            .unwrap_err()
+            .contains("plate size"));
+    }
+
+    #[test]
+    fn jogs_are_relative_and_homing_has_no_build_notices() {
+        let m = Machine::creator_pro();
+        let Some(Action::Move {
+            steps,
+            relative,
+            feedrate,
+            ..
+        }) = jog(&m, 'z', -1.0, 600.0)
+        else {
+            panic!("no jog");
+        };
+        assert_eq!(steps, [0, 0, -400, 0, 0]);
+        assert_eq!(relative, crate::x3g::command::ALL_AXES);
+        assert_eq!(feedrate, 10.0);
+        assert_eq!(jog(&m, 'Q', 1.0, 600.0), None);
+        assert_eq!(jog(&m, 'X', 0.001, 600.0), None, "under one step");
+        let home = home_actions(&m);
+        assert_eq!(home.len(), 3);
+        assert!(matches!(home[2], Action::RecallHome { .. }));
     }
 
     #[test]

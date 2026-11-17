@@ -14,7 +14,8 @@ use crate::geometry::Vec3;
 use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::FoundPrinter;
 use crate::profiles::{
-    limits, Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
+    limits, Adhesion, DualNozzle, Filament, InfillPattern, PrintSettings, Printer, Quality,
+    SeamPosition,
 };
 use serde_json::{json, Value};
 use std::ops::RangeInclusive;
@@ -33,6 +34,8 @@ pub struct Project {
     pub objects: Vec<PlacedObject>,
     /// The printer device in use when the project was saved.
     pub device: Option<FoundPrinter>,
+    /// Two-nozzle choices (second filament, support nozzle, Ditto).
+    pub dual: DualNozzle,
 }
 
 /// A project read from a file, with the format version it was written in.
@@ -70,6 +73,7 @@ pub fn to_json(p: &Project) -> String {
                 "y": o.y,
                 "rotation": [o.rotation.x, o.rotation.y, o.rotation.z],
                 "scale_percent": o.scale_percent,
+                "extruder": o.extruder,
                 "triangles": o.mesh.triangles.len(),
                 "mesh": crate::codec::base64(&mesh_bytes(&o.mesh.triangles)),
             })
@@ -89,15 +93,24 @@ pub fn to_json(p: &Project) -> String {
             "purge_mm": p.printer.purge_mm,
             "klipper": p.printer.klipper,
             "x3g": p.printer.x3g,
+            "extruders": p.printer.extruders,
+            "retract_min_travel": p.printer.retract_min_travel,
+            "retract_layer_change": p.printer.retract_layer_change,
+            "wipe_mm": p.printer.wipe_mm,
+            "tool_change_retract": p.printer.tool_change_retract,
+            "standby_drop": p.printer.standby_drop,
+            "primary_nozzle": p.printer.primary_nozzle,
+            "nozzle_spacing": p.printer.nozzle_spacing,
         },
-        "filament": {
-            "name": p.filament.name,
-            "nozzle_temp": p.filament.nozzle_temp,
-            "bed_temp": p.filament.bed_temp,
-            "diameter": p.filament.diameter,
-            "density": p.filament.density,
-            "fan_percent": p.filament.fan_percent,
-            "price_per_kg": p.filament.price_per_kg,
+        "filament": filament_json(&p.filament),
+        "dual": {
+            "second_filament": p.dual.second_filament.as_ref().map(filament_json),
+            "support_tool": p.dual.support_tool,
+            "ditto": p.dual.ditto,
+            "prime_tower": p.dual.prime_tower,
+            "tower_at": p.dual.tower_at,
+            "ooze_shield": p.dual.ooze_shield,
+            "shield_distance": p.dual.shield_distance,
         },
         "quality": p.quality.map(quality_name),
         "settings": {
@@ -173,6 +186,21 @@ fn project_from(v: &Value) -> Result<Project, String> {
     };
     let flag = |o: &Value, k: &str, d: bool| o.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
     let text_of = |o: &Value, k: &str| o.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    // A filament (the main one, or the second nozzle's); anything missing is the first
+    // preset's.
+    let filament_from = |fi: &Value| {
+        let fbase = Filament::presets().into_iter().next().expect("presets");
+        Filament {
+            name: text_of(fi, "name").unwrap_or(fbase.name.clone()),
+            nozzle_temp: int_in(fi, "nozzle_temp", fbase.nozzle_temp, limits::NOZZLE_TEMP),
+            bed_temp: int_in(fi, "bed_temp", fbase.bed_temp, limits::BED_TEMP),
+            // Not in the panel; kept physical so filament maths stays finite.
+            diameter: num(fi, "diameter", fbase.diameter).clamp(1.0, 3.0),
+            density: num(fi, "density", fbase.density).max(0.1),
+            fan_percent: int_in(fi, "fan_percent", fbase.fan_percent, limits::FAN_PERCENT),
+            price_per_kg: num(fi, "price_per_kg", fbase.price_per_kg).max(0.0),
+        }
+    };
     let empty = Value::Null;
 
     let pr = v.get("printer").unwrap_or(&empty);
@@ -194,19 +222,53 @@ fn project_from(v: &Value) -> Result<Project, String> {
         purge_mm: num_in(pr, "purge_mm", base.purge_mm, limits::PURGE_MM),
         klipper: flag(pr, "klipper", base.klipper),
         x3g: flag(pr, "x3g", base.x3g),
+        // Projects from before two nozzles have one.
+        extruders: num(pr, "extruders", 1.0).clamp(1.0, 2.0) as u8,
+        retract_min_travel: num_in(
+            pr,
+            "retract_min_travel",
+            base.retract_min_travel,
+            limits::RETRACT_MIN_TRAVEL,
+        ),
+        retract_layer_change: flag(pr, "retract_layer_change", base.retract_layer_change),
+        wipe_mm: num_in(pr, "wipe_mm", base.wipe_mm, limits::WIPE_MM),
+        tool_change_retract: num_in(
+            pr,
+            "tool_change_retract",
+            base.tool_change_retract,
+            limits::TOOL_CHANGE_RETRACT,
+        ),
+        standby_drop: int_in(pr, "standby_drop", base.standby_drop, limits::STANDBY_DROP),
+        primary_nozzle: num(pr, "primary_nozzle", base.primary_nozzle as f32).clamp(0.0, 1.0) as u8,
+        nozzle_spacing: num_in(
+            pr,
+            "nozzle_spacing",
+            base.nozzle_spacing,
+            limits::NOZZLE_SPACING,
+        ),
     };
 
-    let fi = v.get("filament").unwrap_or(&empty);
-    let fbase = Filament::presets().into_iter().next().expect("presets");
-    let filament = Filament {
-        name: text_of(fi, "name").unwrap_or(fbase.name.clone()),
-        nozzle_temp: int_in(fi, "nozzle_temp", fbase.nozzle_temp, limits::NOZZLE_TEMP),
-        bed_temp: int_in(fi, "bed_temp", fbase.bed_temp, limits::BED_TEMP),
-        // Not in the panel; kept physical so filament maths stays finite.
-        diameter: num(fi, "diameter", fbase.diameter).clamp(1.0, 3.0),
-        density: num(fi, "density", fbase.density).max(0.1),
-        fan_percent: int_in(fi, "fan_percent", fbase.fan_percent, limits::FAN_PERCENT),
-        price_per_kg: num(fi, "price_per_kg", fbase.price_per_kg).max(0.0),
+    let filament = filament_from(v.get("filament").unwrap_or(&empty));
+    let du = v.get("dual").unwrap_or(&empty);
+    let dual = DualNozzle {
+        second_filament: du
+            .get("second_filament")
+            .filter(|f| f.is_object())
+            .map(filament_from),
+        support_tool: num(du, "support_tool", printer.primary_nozzle as f32).clamp(0.0, 1.0) as u8,
+        ditto: flag(du, "ditto", false),
+        prime_tower: flag(du, "prime_tower", true),
+        tower_at: du.get("tower_at").and_then(|a| a.as_array()).and_then(|a| {
+            let c = |k: usize| a.get(k).and_then(|x| x.as_f64()).map(|x| x as f32);
+            Some([c(0)?, c(1)?])
+        }),
+        ooze_shield: flag(du, "ooze_shield", false),
+        shield_distance: num_in(
+            du,
+            "shield_distance",
+            crate::profiles::DEFAULT_SHIELD_DISTANCE_MM,
+            limits::SHIELD_DISTANCE,
+        ),
     };
 
     let st = v.get("settings").unwrap_or(&empty);
@@ -299,6 +361,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
             obj.rotation = Vec3::new(c(0), c(1), c(2));
         }
         obj.scale_percent = num(o, "scale_percent", 100.0).clamp(1.0, 10_000.0);
+        obj.extruder = num(o, "extruder", printer.primary_nozzle as f32).clamp(0.0, 1.0) as u8;
         objects.push(obj);
     }
 
@@ -318,6 +381,19 @@ fn project_from(v: &Value) -> Result<Project, String> {
         quality,
         objects,
         device,
+        dual,
+    })
+}
+
+fn filament_json(f: &Filament) -> Value {
+    json!({
+        "name": f.name,
+        "nozzle_temp": f.nozzle_temp,
+        "bed_temp": f.bed_temp,
+        "diameter": f.diameter,
+        "density": f.density,
+        "fan_percent": f.fan_percent,
+        "price_per_kg": f.price_per_kg,
     })
 }
 
@@ -397,12 +473,15 @@ mod tests {
         cube.y = -12.5;
         cube.rotation = Vec3::new(0.0, 0.0, 45.0);
         cube.scale_percent = 150.0;
+        cube.extruder = 1;
         let tube = PlacedObject::new("tube", SampleShape::Tube.mesh());
         let mut printer = Printer::presets()
             .into_iter()
             .find(|p| p.name.contains("KE"))
             .unwrap();
         printer.purge_mm = 42.0;
+        printer.primary_nozzle = 1;
+        printer.nozzle_spacing = 34.5;
         let mut filament = Filament::presets()
             .into_iter()
             .find(|f| f.name == "PETG")
@@ -431,6 +510,15 @@ mod tests {
                 login: Some(("maker".into(), "secret".into())),
                 baud: None,
             }),
+            dual: DualNozzle {
+                second_filament: Filament::presets().into_iter().find(|f| f.name == "PLA"),
+                support_tool: 1,
+                ditto: false,
+                prime_tower: false,
+                tower_at: Some([30.0, 120.0]),
+                ooze_shield: true,
+                shield_distance: 4.5,
+            },
         }
     }
 
@@ -443,6 +531,18 @@ mod tests {
         assert_eq!(back.printer, p.printer);
         assert_eq!(back.filament, p.filament);
         assert_eq!(back.settings, p.settings);
+        assert_eq!(back.dual, p.dual, "two-nozzle choices");
+        assert_eq!(back.printer.nozzle_spacing, 34.5, "the nozzle spacing");
+        assert_eq!(back.objects[0].extruder, 1, "each part's nozzle");
+        assert_eq!(
+            back.printer.primary_nozzle, 1,
+            "the printer's primary nozzle"
+        );
+        // A part saved without a nozzle (an older file) goes to the printer's primary.
+        let mut v: Value = serde_json::from_str(&text).unwrap();
+        v["objects"][0].as_object_mut().unwrap().remove("extruder");
+        let older = v.to_string();
+        assert_eq!(from_json(&older).unwrap().objects[0].extruder, 1);
         assert_eq!(back.quality, None);
         assert_eq!(back.objects.len(), 2);
         let (a, b) = (&back.objects[0], &p.objects[0]);

@@ -276,6 +276,9 @@ pub struct PlacedObject {
     pub rotation: Vec3,
     /// Uniform scale, in percent.
     pub scale_percent: f32,
+    /// The nozzle that prints this part on a two-nozzle printer (0 = right, 1 = left). New
+    /// parts get the printer's primary nozzle. Ignored on a one-nozzle printer.
+    pub extruder: u8,
 }
 
 impl PlacedObject {
@@ -287,6 +290,7 @@ impl PlacedObject {
             y: 0.0,
             rotation: Vec3::default(),
             scale_percent: 100.0,
+            extruder: crate::profiles::PRIMARY_TOOL,
         }
     }
 

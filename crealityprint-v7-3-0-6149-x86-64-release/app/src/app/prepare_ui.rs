@@ -69,7 +69,12 @@ impl PrintCraftApp {
         ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_export = self.slice_is_current();
-                let r = ui.add_enabled(can_export, egui::Button::new("Export G-code"));
+                let label = if self.printer.x3g {
+                    "Export X3G"
+                } else {
+                    "Export G-code"
+                };
+                let r = ui.add_enabled(can_export, egui::Button::new(label));
                 let r = if can_export {
                     r
                 } else {
@@ -142,6 +147,12 @@ impl PrintCraftApp {
                 egui::CollapsingHeader::new("Edit plate, retraction and purge")
                     .id_salt("printer_more")
                     .show(ui, |ui| {
+                        // Scrolls within the room left above the tool strip.
+                        let room = (ui.available_height() - 24.0).max(80.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt("printer_more_scroll")
+                            .max_height(room)
+                            .show(ui, |ui| {
                         settings_grid(ui, "printer_grid", |ui| {
                             row(
                                 ui,
@@ -182,6 +193,69 @@ impl PrintCraftApp {
                             );
                             ui.checkbox(&mut self.printer.x3g, "");
                             ui.end_row();
+                            ui.label("Nozzles").on_hover_text(
+                                "2 for printers with two nozzles on one carriage (Creator Pro, Replicator Dual): each part can have its own nozzle and filament",
+                            );
+                            ui.add(egui::DragValue::new(&mut self.printer.extruders).range(1..=2));
+                            ui.end_row();
+                            ui.label("Retract on travels over").on_hover_text(
+                                "Travels longer than this pull the filament back first, so it doesn't ooze or string on the way",
+                            );
+                            ui.add(mm(&mut self.printer.retract_min_travel, limits::RETRACT_MIN_TRAVEL, 0.1));
+                            ui.end_row();
+                            ui.label("Retract on layer change").on_hover_text(
+                                "Also pull the filament back before every move up to the next layer",
+                            );
+                            ui.checkbox(&mut self.printer.retract_layer_change, "");
+                            ui.end_row();
+                            ui.label("Wipe").on_hover_text(
+                                "While retracting, move back this far along the line just printed, wiping the ooze off onto the part (0 = off)",
+                            );
+                            ui.add(mm(&mut self.printer.wipe_mm, limits::WIPE_MM, 0.1));
+                            ui.end_row();
+                            if self.printer.extruders >= 2 {
+                                ui.label("Primary nozzle").on_hover_text(
+                                    "The default nozzle: new parts, supports, the skirt and one-nozzle prints use it, and it has the main filament (01)",
+                                );
+                                let before = self.printer.primary_nozzle;
+                                egui::ComboBox::from_id_salt("primary_nozzle")
+                                    .selected_text(if self.printer.primary_nozzle == 0 { "Right (T0)" } else { "Left (T1)" })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.printer.primary_nozzle, 0, "Right (T0)");
+                                        ui.selectable_value(&mut self.printer.primary_nozzle, 1, "Left (T1)");
+                                    });
+                                let now = self.printer.primary_nozzle;
+                                if now != before {
+                                    // Parts and supports on the old primary follow it to the
+                                    // new one; those set to the other nozzle stay there.
+                                    if self.dual.support_tool == before {
+                                        self.dual.support_tool = now;
+                                    }
+                                    for o in self.objects.iter_mut().filter(|o| o.extruder == before) {
+                                        o.extruder = now;
+                                    }
+                                }
+                                ui.end_row();
+                                ui.label("Nozzle spacing").on_hover_text(
+                                    "The distance between the two nozzles along X (the extruder offset). A Ditto copy prints this far to the side, so a Ditto job must be narrower",
+                                );
+                                ui.add(mm(&mut self.printer.nozzle_spacing, limits::NOZZLE_SPACING, 0.1));
+                                ui.end_row();
+                                ui.label("Tool-change retraction").on_hover_text(
+                                    "How far the nozzle being set aside is pulled back so it doesn't ooze while the other one prints; it is pushed forward by the same amount before it prints again",
+                                );
+                                ui.add(mm(&mut self.printer.tool_change_retract, limits::TOOL_CHANGE_RETRACT, 0.1));
+                                ui.end_row();
+                                ui.label("Standby drop").on_hover_text(
+                                    "The idle nozzle waits this much below its printing temperature, which stops it oozing; it is heated back (a short wait) before it prints again. 0 keeps it hot",
+                                );
+                                ui.add(
+                                    egui::DragValue::new(&mut self.printer.standby_drop)
+                                        .range(limits::STANDBY_DROP)
+                                        .suffix(" °C"),
+                                );
+                                ui.end_row();
+                            }
                             ui.label("Purge amount")
                                 .on_hover_text("Filament pushed through the two purge lines at the left edge before printing, to clear the nozzle");
                             ui.add(
@@ -193,6 +267,7 @@ impl PrintCraftApp {
                             );
                             ui.end_row();
                         });
+                            });
                     });
             });
     }
@@ -306,6 +381,15 @@ impl PrintCraftApp {
             self.status = "Connect a printer first, then press Send print again.".into();
             return;
         }
+        if let Some(why) = self
+            .sliced
+            .as_ref()
+            .filter(|_| self.slice_is_current())
+            .and_then(|s| s.problem.clone())
+        {
+            self.status = why;
+            return;
+        }
         match self.print_job() {
             Some(job) => {
                 self.device.ask_to_print(job);
@@ -383,9 +467,18 @@ impl PrintCraftApp {
                     });
                 });
             ui.vertical(|ui| {
+                // On a two-nozzle printer, say which nozzle this filament is in.
+                let which = if self.printer.extruders < 2 {
+                    String::new()
+                } else if self.dual.ditto {
+                    "Both nozzles (Ditto) · ".to_string()
+                } else {
+                    let primary = self.printer.primary_tool();
+                    format!("{} · ", crate::app::nozzle_name(primary, primary))
+                };
                 ui.label(
                     RichText::new(format!(
-                        "Nozzle {} °C · plate {} °C",
+                        "{which}Nozzle {} °C · plate {} °C",
                         self.filament.nozzle_temp, self.filament.bed_temp
                     ))
                     .color(theme::TEXT_DIM),
@@ -399,6 +492,9 @@ impl PrintCraftApp {
                 );
             });
         });
+        if self.printer.extruders >= 2 && !self.dual.ditto {
+            self.second_filament_row(ui);
+        }
         egui::CollapsingHeader::new("Temperatures and cooling")
             .id_salt("filament_more")
             .show(ui, |ui| {
@@ -427,6 +523,65 @@ impl PrintCraftApp {
             });
     }
 
+    /// The second nozzle's filament: "Same as 01" or one of the filament presets.
+    fn second_filament_row(&mut self, ui: &mut Ui) {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            egui::Frame::new()
+                .fill(theme::ACCENT_DARK)
+                .corner_radius(6)
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("02").color(Color32::WHITE).small());
+                        let shown = self
+                            .dual
+                            .second_filament
+                            .as_ref()
+                            .map(|f| f.name.clone())
+                            .unwrap_or_else(|| "Same as 01".into());
+                        let mut chosen: Option<Option<usize>> = None;
+                        egui::ComboBox::from_id_salt("filament2")
+                            .selected_text(RichText::new(shown).color(Color32::WHITE))
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(
+                                        self.dual.second_filament.is_none(),
+                                        "Same as 01",
+                                    )
+                                    .clicked()
+                                {
+                                    chosen = Some(None);
+                                }
+                                for (i, f) in self.filaments.iter().enumerate() {
+                                    let on = self
+                                        .dual
+                                        .second_filament
+                                        .as_ref()
+                                        .is_some_and(|s| s.name == f.name);
+                                    if ui.selectable_label(on, &f.name).clicked() {
+                                        chosen = Some(Some(i));
+                                    }
+                                }
+                            });
+                        if let Some(c) = chosen {
+                            self.dual.second_filament = c.map(|i| self.filaments[i].clone());
+                        }
+                    });
+                });
+            let f = self.dual.second_filament.as_ref().unwrap_or(&self.filament);
+            let primary = self.printer.primary_tool();
+            ui.label(
+                RichText::new(format!(
+                    "{} · nozzle {} °C",
+                    crate::app::nozzle_name(1 - primary, primary),
+                    f.nozzle_temp
+                ))
+                .color(theme::TEXT_DIM),
+            );
+        });
+    }
+
     /// Global process settings, grouped like the original's Process panel.
     fn process_settings(&mut self, ui: &mut Ui) {
         self.process_profile_picker(ui);
@@ -440,6 +595,11 @@ impl PrintCraftApp {
         walls_and_surfaces_group(ui, s, advanced);
         infill_group(ui, s);
         support_group(ui, s);
+        if self.printer.extruders >= 2 {
+            let primary = self.printer.primary_tool();
+            two_nozzle_group(ui, &mut self.dual, self.settings.supports, primary);
+        }
+        let s = &mut self.settings;
         adhesion_group(ui, s);
         speed_group(ui, s, advanced);
         if advanced {
@@ -695,6 +855,87 @@ fn special_mode_group(ui: &mut Ui, s: &mut PrintSettings) {
             "Spiral vase",
             egui::Checkbox::without_text(&mut s.vase_mode),
         );
+    });
+}
+
+/// The two-nozzle choices: which nozzle prints supports, and Ditto printing.
+fn two_nozzle_group(ui: &mut Ui, d: &mut crate::profiles::DualNozzle, supports: bool, primary: u8) {
+    group(ui, "Two nozzles", |ui| {
+        if supports && !d.ditto {
+            ui.label("Supports with");
+            egui::ComboBox::from_id_salt("support_nozzle")
+                .selected_text(crate::app::nozzle_name(d.support_tool, primary))
+                .show_ui(ui, |ui| {
+                    for t in [0u8, 1] {
+                        ui.selectable_value(
+                            &mut d.support_tool,
+                            t,
+                            crate::app::nozzle_name(t, primary),
+                        );
+                    }
+                });
+            ui.end_row();
+        }
+        if !d.ditto {
+            ui.label("Prime tower").on_hover_text(
+                "A small tower in the back-right corner: after each tool change the incoming nozzle primes on it, so ooze ends up there and not on the part",
+            );
+            ui.add(egui::Checkbox::without_text(&mut d.prime_tower));
+            ui.end_row();
+            if d.prime_tower {
+                ui.label("Tower position").on_hover_text(
+                    "Where the tower's centre stands, in mm from the plate's front-left corner. Automatic puts it near the back-right corner",
+                );
+                ui.horizontal(|ui| {
+                    let mut custom = d.tower_at.is_some();
+                    if ui.checkbox(&mut custom, "Set").changed() {
+                        d.tower_at = custom.then_some([30.0, 30.0]);
+                    }
+                    match &mut d.tower_at {
+                        Some([x, y]) => {
+                            ui.add(
+                                egui::DragValue::new(x)
+                                    .prefix("X ")
+                                    .suffix(" mm")
+                                    .speed(0.5),
+                            );
+                            ui.add(
+                                egui::DragValue::new(y)
+                                    .prefix("Y ")
+                                    .suffix(" mm")
+                                    .speed(0.5),
+                            );
+                        }
+                        None => {
+                            ui.label("Back right (automatic)");
+                        }
+                    }
+                });
+                ui.end_row();
+            }
+        }
+        if !d.ditto {
+            ui.label("Ooze shield").on_hover_text(
+                "A one-line wall around the print: the idle nozzle wipes its ooze on it when it crosses, instead of on the parts",
+            );
+            ui.horizontal(|ui| {
+                ui.add(egui::Checkbox::without_text(&mut d.ooze_shield));
+                if d.ooze_shield {
+                    ui.add(
+                        egui::DragValue::new(&mut d.shield_distance)
+                            .range(crate::profiles::limits::SHIELD_DISTANCE)
+                            .speed(0.1)
+                            .suffix(" mm away"),
+                    );
+                }
+            });
+            ui.end_row();
+        }
+        ui.label("Ditto printing").on_hover_text(
+            "The printer prints a copy of the plate with its second nozzle, one nozzle spacing to the side. Switch Ditto on in the printer's own menu too; the app heats both nozzles and keeps the plate narrow enough for the copy.",
+        );
+        ui.add(egui::Checkbox::without_text(&mut d.ditto));
+        ui.end_row();
     });
 }
 

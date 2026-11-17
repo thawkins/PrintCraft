@@ -5,8 +5,6 @@ use crate::profiles::{Filament, PrintSettings, Printer, SeamPosition};
 use crate::slicer::{Layer, PathKind, SliceResult, ToolPath};
 use std::fmt::Write;
 
-/// Travel moves longer than this retract the filament first.
-const RETRACT_MIN_TRAVEL_MM: f32 = 2.0;
 /// Outer walls print slower than the main speed for a nicer surface.
 const OUTER_WALL_SPEED_FACTOR: f32 = 0.5;
 /// Extra time per layer for slowing down, turning and layer changes.
@@ -31,6 +29,9 @@ pub struct Estimate {
     pub grams: f32,
     pub cost: f32,
     pub layers: usize,
+    /// On a two-nozzle print, filament (mm) and weight (g) for each nozzle (T0, T1), each
+    /// worked out with that nozzle's filament. None on a one-nozzle print.
+    pub per_nozzle: Option<[(f32, f32); 2]>,
 }
 
 impl Estimate {
@@ -303,15 +304,198 @@ pub struct GcodeOutput {
     pub estimate: Estimate,
 }
 
-/// Builds the whole G-code file. Plate coordinates are centred on the plate; the
-/// printer's coordinates start at its front-left corner.
+/// Which nozzle prints what, on a printer with two (`Printer::extruders`). With the
+/// default (one nozzle) the G-code is exactly what a one-nozzle printer gets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Tools {
+    /// Each part's footprint on the plate (plate coordinates: min x, min y, max x, max y)
+    /// and the nozzle that prints it (0 = first/right, 1 = second/left).
+    pub parts: Vec<([f32; 4], u8)>,
+    /// The nozzle that prints supports.
+    pub support_tool: u8,
+    /// The default nozzle: the skirt, brim and raft use it when a part does, and a plate
+    /// with nothing assigned prints with it (`Printer::primary_tool`).
+    pub primary: u8,
+    /// The other nozzle's filament (when nothing is given, the primary's).
+    pub second: Option<Filament>,
+    /// Ditto printing (two nozzles on one carriage print the same part side by side; the
+    /// firmware copies the moves): only the second nozzle's heating is added.
+    pub ditto: bool,
+    /// The prime tower's centre on the plate (plate coordinates), when there is one.
+    pub tower: Option<Point2>,
+    /// The ooze shield's distance (mm) outside everything else the print lays down, when
+    /// there is one.
+    pub shield: Option<f32>,
+}
+
+/// The ooze shield's outline: one loop `distance` mm outside the convex hull of every line
+/// the print lays down (parts, supports, skirt, brim and raft; not the prime tower). The
+/// same on every layer, so the wall never overhangs. None for an empty print.
+pub fn ooze_shield_outline(result: &SliceResult, distance: f32) -> Option<Vec<Point2>> {
+    let pts: Vec<Point2> = result
+        .layers
+        .iter()
+        .flat_map(|l| &l.paths)
+        .filter(|p| !matches!(p.kind, PathKind::PrimeTower | PathKind::OozeShield))
+        .flat_map(|p| p.points.iter().copied())
+        .collect();
+    let hull = crate::slicer::convex_hull(pts);
+    crate::slicer::offset_left(&hull, -distance.max(0.5))
+}
+
+/// The prime tower's side length (mm).
+pub const PRIME_TOWER_MM: f32 = 12.0;
+
+/// The prime tower's lines for layer `li`: a square outline and a zigzag fill, along X on
+/// even layers and along Y on odd ones, `width` apart.
+pub fn prime_tower_paths(centre: Point2, width: f32, li: usize) -> Vec<ToolPath> {
+    let h = PRIME_TOWER_MM / 2.0;
+    let corner = |dx: f32, dy: f32| Point2::new(centre.x + dx, centre.y + dy);
+    let outline = ToolPath {
+        kind: PathKind::PrimeTower,
+        points: vec![corner(-h, -h), corner(h, -h), corner(h, h), corner(-h, h)],
+        closed: true,
+    };
+    let inner = h - width;
+    let mut fill = Vec::new();
+    let mut k = 0;
+    let mut t = -inner;
+    while t <= inner + 1e-4 {
+        let (a, b) = if li % 2 == 0 {
+            (corner(-inner, t), corner(inner, t))
+        } else {
+            (corner(t, -inner), corner(t, inner))
+        };
+        if k % 2 == 0 {
+            fill.extend([a, b]);
+        } else {
+            fill.extend([b, a]);
+        }
+        k += 1;
+        t += width;
+    }
+    vec![
+        outline,
+        ToolPath {
+            kind: PathKind::PrimeTower,
+            points: fill,
+            closed: false,
+        },
+    ]
+}
+
+/// The last layer on which the nozzles change, following the order the writer uses
+/// (the selected nozzle's paths first, then the other's). None when they never change.
+pub fn last_tool_change(result: &SliceResult, tools: &Tools) -> Option<usize> {
+    let mut current = tools.first_tool();
+    let mut last = None;
+    for (li, layer) in result.layers.iter().enumerate() {
+        let mut used = [false; 2];
+        for p in layer.paths.iter().filter(|p| {
+            p.points.len() >= 2 && !matches!(p.kind, PathKind::PrimeTower | PathKind::OozeShield)
+        }) {
+            used[tools.tool_for(p).min(1) as usize] = true;
+        }
+        let other = 1 - current;
+        if used[other as usize] {
+            last = Some(li);
+            current = other;
+        }
+    }
+    last
+}
+
+impl Tools {
+    /// Which nozzles print something: each part's, the supports' (when on) and the
+    /// skirt's.
+    pub fn used(&self, supports: bool) -> [bool; 2] {
+        let mut used = [false; 2];
+        used[self.first_tool() as usize] = true;
+        for (_, t) in &self.parts {
+            used[(*t).min(1) as usize] = true;
+        }
+        if supports {
+            used[self.support_tool.min(1) as usize] = true;
+        }
+        used
+    }
+
+    /// Whether the non-primary nozzle prints anything.
+    #[cfg(test)]
+    pub fn uses_second(&self, supports: bool) -> bool {
+        self.used(supports)[(1 - self.primary.min(1)) as usize]
+    }
+
+    /// The nozzle for the skirt, brim and raft, and the one a print starts with: the
+    /// primary, unless no part uses it.
+    fn first_tool(&self) -> u8 {
+        let other = 1 - self.primary.min(1);
+        if !self.parts.is_empty() && self.parts.iter().all(|(_, t)| *t == other) {
+            other
+        } else {
+            self.primary.min(1)
+        }
+    }
+
+    /// The nozzle that prints `path`.
+    pub fn tool_for(&self, path: &ToolPath) -> u8 {
+        match path.kind {
+            PathKind::Support => self.support_tool,
+            PathKind::Skirt
+            | PathKind::Brim
+            | PathKind::Raft
+            | PathKind::PrimeTower
+            | PathKind::OozeShield => self.first_tool(),
+            _ => {
+                let p = path.points[0];
+                self.parts
+                    .iter()
+                    .find(|(b, _)| {
+                        p.x >= b[0] - 1.0
+                            && p.y >= b[1] - 1.0
+                            && p.x <= b[2] + 1.0
+                            && p.y <= b[3] + 1.0
+                    })
+                    .map(|(_, t)| *t)
+                    .unwrap_or_else(|| self.first_tool())
+            }
+        }
+    }
+}
+
+/// The absolute E value the purge lines end at (their last `E` word).
+fn purge_end_e(purge: &str) -> f64 {
+    purge
+        .lines()
+        .rev()
+        .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix('E')))
+        .find_map(|e| e.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+/// Builds the whole G-code file for one nozzle. Plate coordinates are centred on the
+/// plate; the printer's coordinates start at its front-left corner. (The app goes through
+/// [`generate_with_tools`]; this is the one-nozzle shorthand the tests use.)
+#[cfg(test)]
 pub fn generate(
     result: &SliceResult,
     printer: &Printer,
     filament: &Filament,
     s: &PrintSettings,
 ) -> GcodeOutput {
-    let mut w = Writer::start(result, printer, filament, s);
+    generate_with_tools(result, printer, filament, s, &Tools::default())
+}
+
+/// Like [`generate`], for a printer with two nozzles: each path goes to its nozzle (see
+/// [`Tools`]), and each layer is printed nozzle by nozzle with a tool change between.
+pub fn generate_with_tools(
+    result: &SliceResult,
+    printer: &Printer,
+    filament: &Filament,
+    s: &PrintSettings,
+    tools: &Tools,
+) -> GcodeOutput {
+    let mut w = Writer::start(result, printer, filament, s, tools);
     // Where the wall loops of the previous layer started (for Aligned seams).
     let mut seams_below: Vec<Point2> = Vec::new();
     for (li, layer) in result.layers.iter().enumerate() {
@@ -340,7 +524,29 @@ struct Writer<'a> {
     /// Filament used by the purge lines.
     prime_e: f32,
     seconds: f32,
+    tools: &'a Tools,
+    /// A two-nozzle printer: nozzles are named in every heat command and selected
+    /// explicitly.
+    dual: bool,
+    /// Which nozzles print something (heated, purged, switched off).
+    used: [bool; 2],
+    /// Both nozzles print, so layers change tools.
+    two: bool,
+    /// The nozzle selected now.
+    tool: u8,
+    /// Filament pulled back now (by a travel or layer-change retraction), pushed forward
+    /// again before the next line.
+    retracted: bool,
+    /// How far each nozzle was pulled back when it was set aside (mm).
+    parked: [f32; 2],
+    /// The line just printed, for wiping back along it.
+    last_path: Vec<Point2>,
+    /// Filament pushed by each nozzle (mm), purge lines included.
+    by_tool: [f64; 2],
 }
+
+/// Time for a tool change: retract, switch, prime.
+const TOOL_CHANGE_SECONDS: f32 = 5.0;
 
 impl<'a> Writer<'a> {
     /// Header comments, heating, homing and the purge lines.
@@ -349,13 +555,34 @@ impl<'a> Writer<'a> {
         printer: &'a Printer,
         filament: &'a Filament,
         s: &'a PrintSettings,
+        tools: &'a Tools,
     ) -> Self {
+        let dual = printer.extruders >= 2;
+        let used = if !dual {
+            [true, false]
+        } else if tools.ditto {
+            [true, true]
+        } else {
+            tools.used(s.supports)
+        };
+        let two = dual && used[0] && used[1] && !tools.ditto;
+        let start_tool = if dual { tools.first_tool() } else { 0 };
+        // The primary nozzle has the main filament, the other one the second (in Ditto both
+        // print the main one).
+        let temp_of = |t: u8| -> u32 {
+            match &tools.second {
+                Some(f) if t != tools.primary && !tools.ditto => f.nozzle_temp,
+                _ => filament.nozzle_temp,
+            }
+        };
         let mut g = String::with_capacity(1 << 20);
         let ox = printer.bed_x / 2.0;
         let oy = printer.bed_y / 2.0;
 
         let _ = writeln!(g, "; Made with PrintCraft (a simple slicer)");
         let _ = writeln!(g, "; printer: {}", printer.name);
+        // Read back by the X3G translator, which needs the plate's centre.
+        let _ = writeln!(g, "; plate: {:.1} x {:.1} mm", printer.bed_x, printer.bed_y);
         let _ = writeln!(
             g,
             "; filament: {} {}C / bed {}C",
@@ -377,22 +604,71 @@ impl<'a> Writer<'a> {
         // without them it may prepare at 0 °C and heat up again afterwards.
         g.push_str(&header_block(filament, s, printer));
         let _ = writeln!(g, "M140 S{} ; bed temperature", filament.bed_temp);
-        let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
+        if dual {
+            for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
+                let _ = writeln!(g, "M104 T{t} S{} ; nozzle {t} temperature", temp_of(t));
+            }
+        } else {
+            let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
+        }
         let _ = writeln!(g, "G90 ; absolute positions");
         let _ = writeln!(g, "M82 ; absolute extrusion");
         let _ = writeln!(g, "G28 ; home all axes");
         // Wait only while heating up: a nozzle or plate that is already hotter carries on.
         g.push_str(&crate::heat::wait_bed(filament.bed_temp, printer.klipper));
-        g.push_str(&crate::heat::wait_nozzle(
-            filament.nozzle_temp,
-            printer.klipper,
-        ));
+        if dual {
+            for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
+                let _ = writeln!(g, "M109 T{t} S{} ; wait for nozzle {t}", temp_of(t));
+            }
+        } else {
+            g.push_str(&crate::heat::wait_nozzle(
+                filament.nozzle_temp,
+                printer.klipper,
+            ));
+        }
         let _ = writeln!(g, "M107 ; fan off");
         let _ = writeln!(g, "G92 E0");
+        if dual {
+            let _ = writeln!(g, "T{start_tool} ; start with nozzle {start_tool}");
+            let _ = writeln!(g, "G92 E0");
+        }
         // Purge: clear the nozzle with two side-by-side lines along the left edge.
         let purge = purge_lines(printer);
         g.push_str(&purge.gcode);
         let _ = writeln!(g, "G92 E0");
+        let mut prime_e = purge.filament_mm;
+        let mut purge_seconds = purge.seconds;
+        let mut parked = [0.0f32; 2];
+        let mut by_tool = [0.0f64; 2];
+        by_tool[start_tool as usize] = purge.filament_mm as f64;
+        if two {
+            // The other nozzle clears itself the same way, is set aside (pulled back and
+            // left to cool to its standby temperature), and the first is selected again.
+            let other = 1 - start_tool;
+            let _ = writeln!(g, "T{other} ; purge nozzle {other} too");
+            let _ = writeln!(g, "G92 E0");
+            g.push_str(&purge.gcode);
+            let park = printer.tool_change_retract.max(0.0);
+            if park > 0.0 {
+                let f = printer.retract_speed * 60.0;
+                let _ = writeln!(
+                    g,
+                    "G1 E{:.5} F{f:.0} ; set nozzle {other} aside",
+                    purge_end_e(&purge.gcode) - park as f64
+                );
+            }
+            parked[other as usize] = park;
+            if printer.standby_drop > 0 {
+                let standby = temp_of(other).saturating_sub(printer.standby_drop);
+                let _ = writeln!(g, "M104 T{other} S{standby} ; standby");
+            }
+            let _ = writeln!(g, "G92 E0");
+            let _ = writeln!(g, "T{start_tool} ; back to nozzle {start_tool}");
+            let _ = writeln!(g, "G92 E0");
+            prime_e += purge.filament_mm;
+            by_tool[other as usize] += purge.filament_mm as f64;
+            purge_seconds += purge.seconds + 2.0 * TOOL_CHANGE_SECONDS;
+        }
 
         Self {
             g,
@@ -405,9 +681,161 @@ impl<'a> Writer<'a> {
             travel_f: s.travel_speed * 60.0,
             pos: Point2::new(purge.end.x - ox, purge.end.y - oy),
             ext: Extruder::default(),
-            prime_e: purge.filament_mm,
-            seconds: WARMUP_SECONDS + purge.seconds,
+            prime_e,
+            seconds: WARMUP_SECONDS + purge_seconds,
+            tools,
+            dual,
+            used,
+            two,
+            tool: start_tool,
+            retracted: false,
+            parked,
+            last_path: Vec::new(),
+            by_tool,
         }
+    }
+
+    /// The filament in the selected nozzle: the primary has the main filament, the other
+    /// nozzle the second one.
+    fn filament_now(&self) -> &Filament {
+        match &self.tools.second {
+            Some(f) if self.dual && self.tool != self.tools.primary && !self.tools.ditto => f,
+            _ => self.filament,
+        }
+    }
+
+    /// The printing temperature of nozzle `t`.
+    fn temp_of(&self, t: u8) -> u32 {
+        match &self.tools.second {
+            Some(f) if t != self.tools.primary && !self.tools.ditto => f.nozzle_temp,
+            _ => self.filament.nozzle_temp,
+        }
+    }
+
+    /// Pulls the filament back before a travel or layer change: in place, or, with a wipe
+    /// set, while moving back along the line just printed.
+    fn retract_now(&mut self) {
+        let p = self.printer;
+        if self.retracted || p.retract_length <= 0.0 {
+            return;
+        }
+        let f = p.retract_speed * 60.0;
+        let wipe = self.wipe_points();
+        if wipe.is_empty() {
+            let e = self.ext.retract(p.retract_length);
+            let _ = writeln!(self.g, "G1 E{e:.5} F{f:.0}");
+        } else {
+            // Spread the retraction over the wipe, so it ends fully retracted.
+            let total: f32 = wipe
+                .iter()
+                .scan(self.pos, |at, q| {
+                    let d = at.distance(*q);
+                    *at = *q;
+                    Some(d)
+                })
+                .sum::<f32>()
+                .max(1e-6);
+            let mut at = self.pos;
+            for q in wipe {
+                let share = p.retract_length * at.distance(q) / total;
+                let e = self.ext.retract(share);
+                let _ = writeln!(
+                    self.g,
+                    "G1 X{:.3} Y{:.3} E{e:.5} F{:.0} ; wipe",
+                    q.x + self.ox,
+                    q.y + self.oy,
+                    self.travel_f
+                );
+                self.seconds += at.distance(q) / self.s.travel_speed;
+                at = q;
+            }
+            self.pos = at;
+        }
+        self.seconds += p.retract_length / p.retract_speed;
+        self.retracted = true;
+    }
+
+    /// Where a wipe goes: back along the line just printed, up to the wipe length. Empty
+    /// when wiping is off or there is no line to wipe along.
+    fn wipe_points(&self) -> Vec<Point2> {
+        let mut left = self.printer.wipe_mm;
+        let mut out = Vec::new();
+        if left <= 0.0 || self.last_path.len() < 2 {
+            return out;
+        }
+        let mut at = self.pos;
+        for q in self.last_path.iter().rev().skip(1) {
+            let d = at.distance(*q);
+            if d >= left {
+                let t = left / d;
+                out.push(Point2::new(
+                    at.x + (q.x - at.x) * t,
+                    at.y + (q.y - at.y) * t,
+                ));
+                return out;
+            }
+            left -= d;
+            out.push(*q);
+            at = *q;
+        }
+        out
+    }
+
+    /// Pushes the filament forward again after a retraction.
+    fn unretract_now(&mut self) {
+        if !self.retracted {
+            return;
+        }
+        let p = self.printer;
+        let e = self.ext.unretract(p.retract_length);
+        let _ = writeln!(self.g, "G1 E{e:.5} F{:.0}", p.retract_speed * 60.0);
+        self.seconds += p.retract_length / p.retract_speed;
+        self.retracted = false;
+    }
+
+    /// Switches nozzles: the old one is pulled back by the tool-change retraction and
+    /// left at its standby temperature; the new one is selected, heated back if it was on
+    /// standby, and pushed forward by as much as it was pulled back when set aside.
+    fn change_tool(&mut self, tool: u8) {
+        let p = self.printer;
+        let old = self.tool;
+        let f = p.retract_speed * 60.0;
+        let already = if self.retracted {
+            p.retract_length
+        } else {
+            0.0
+        };
+        let park = p.tool_change_retract.max(already);
+        if park > already {
+            let e = self.ext.retract(park - already);
+            let _ = writeln!(self.g, "G1 E{e:.5} F{f:.0} ; set nozzle {old} aside");
+        }
+        self.parked[old as usize] = park;
+        if p.standby_drop > 0 {
+            let standby = self.temp_of(old).saturating_sub(p.standby_drop);
+            let _ = writeln!(self.g, "M104 T{old} S{standby} ; standby");
+        }
+        let _ = writeln!(self.g, "T{tool}");
+        let _ = writeln!(self.g, "G92 E0");
+        if p.standby_drop > 0 {
+            let _ = writeln!(
+                self.g,
+                "M109 T{tool} S{} ; back to printing temperature",
+                self.temp_of(tool)
+            );
+            // About a degree a second to heat back.
+            self.seconds += p.standby_drop as f32;
+        }
+        let prime = self.parked[tool as usize];
+        if prime > 0.0 {
+            let _ = writeln!(self.g, "G1 E{prime:.5} F{f:.0} ; prime");
+        }
+        let _ = writeln!(self.g, "G92 E0");
+        self.parked[tool as usize] = 0.0;
+        self.ext.e = 0.0;
+        self.retracted = false;
+        self.tool = tool;
+        self.seconds += TOOL_CHANGE_SECONDS;
     }
 
     /// One layer: the layer change, then every path. `seams_below` holds the wall seams
@@ -421,31 +849,125 @@ impl<'a> Writer<'a> {
             self.s.seam
         };
 
-        let mut last_kind = None;
-        let mut seams_here: Vec<Point2> = Vec::new();
-        for (pi, path) in layer.paths.iter().enumerate() {
-            if path.points.len() < 2 {
+        // The prime tower is printed by the nozzle that comes in at this layer's tool
+        // change (or by the selected one when there is none), so it isn't in the order.
+        let tower: Vec<usize> = (0..layer.paths.len())
+            .filter(|&i| layer.paths[i].kind == PathKind::PrimeTower)
+            .collect();
+        // The ooze shield is printed first, by the nozzle already selected, so it adds no
+        // tool change.
+        let shield: Vec<usize> = (0..layer.paths.len())
+            .filter(|&i| layer.paths[i].kind == PathKind::OozeShield)
+            .collect();
+        // One nozzle: every path in order. Two: the selected nozzle's paths first, then
+        // the other's after a tool change, each group in the slicer's order.
+        let order: Vec<(usize, u8)> = if self.two && !self.tools.ditto {
+            let tool_of: Vec<u8> = layer
+                .paths
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    if tower.contains(&i) || shield.contains(&i) {
+                        u8::MAX
+                    } else if p.points.is_empty() {
+                        self.tool
+                    } else {
+                        self.tools.tool_for(p)
+                    }
+                })
+                .collect();
+            let other = 1 - self.tool;
+            [self.tool, other]
+                .into_iter()
+                .flat_map(|t| {
+                    tool_of
+                        .iter()
+                        .enumerate()
+                        .filter(move |(_, &pt)| pt == t)
+                        .map(move |(i, _)| (i, t))
+                })
+                .collect()
+        } else {
+            (0..layer.paths.len()).map(|i| (i, self.tool)).collect()
+        };
+        let mut look = LayerLook {
+            li,
+            seam,
+            spiral,
+            slowdown,
+            last_kind: None,
+            seams_here: Vec::new(),
+        };
+        for &pi in &shield {
+            self.print_path(layer, pi, &mut look, seams_below);
+        }
+        // No tool change on this layer: the tower comes first, with the selected nozzle.
+        let changes = order.iter().any(|(_, t)| *t != self.tool);
+        let mut tower_done = tower.is_empty();
+        if !changes && !tower_done {
+            for &pi in &tower {
+                self.print_path(layer, pi, &mut look, seams_below);
+            }
+            tower_done = true;
+        }
+        for (pi, tool) in order {
+            if layer.paths[pi].points.len() < 2 {
                 continue;
             }
-            if last_kind != Some(path.kind) {
-                let _ = writeln!(self.g, ";TYPE:{}", path.kind.gcode_type());
-                last_kind = Some(path.kind);
+            if tool != self.tool {
+                self.change_tool(tool);
+                look.last_kind = None;
+                // The incoming nozzle primes on the tower before it prints the part.
+                if !tower_done {
+                    for &pi in &tower {
+                        self.print_path(layer, pi, &mut look, seams_below);
+                    }
+                    tower_done = true;
+                }
             }
-            let salt = li * 7919 + pi;
-            let pts = ordered_points(path, self.pos, seam, salt, seams_below, &mut seams_here);
-            self.travel_to(pts[0], layer.z);
-            let style = PathStyle {
-                li,
-                pi,
-                kind: path.kind,
-                spiral,
-                slowdown,
-            };
-            self.extrude(layer, &style, pts);
+            self.print_path(layer, pi, &mut look, seams_below);
         }
+        let seams_here = std::mem::take(&mut look.seams_here);
         if !seams_here.is_empty() {
             *seams_below = seams_here;
         }
+    }
+
+    /// One path of a layer: its type marker when the type changes, a travel to its start
+    /// and the extrusion.
+    fn print_path(
+        &mut self,
+        layer: &Layer,
+        pi: usize,
+        look: &mut LayerLook,
+        seams_below: &[Point2],
+    ) {
+        let path = &layer.paths[pi];
+        if path.points.len() < 2 {
+            return;
+        }
+        if look.last_kind != Some(path.kind) {
+            let _ = writeln!(self.g, ";TYPE:{}", path.kind.gcode_type());
+            look.last_kind = Some(path.kind);
+        }
+        let salt = look.li * 7919 + pi;
+        let pts = ordered_points(
+            path,
+            self.pos,
+            look.seam,
+            salt,
+            seams_below,
+            &mut look.seams_here,
+        );
+        self.travel_to(pts[0], layer.z);
+        let style = PathStyle {
+            li: look.li,
+            pi,
+            kind: path.kind,
+            spiral: look.spiral,
+            slowdown: look.slowdown,
+        };
+        self.extrude(layer, &style, pts);
     }
 
     /// The layer marker, the Z move (skipped while spiralling), and the part fan from
@@ -455,6 +977,9 @@ impl<'a> Writer<'a> {
         // Vase mode: above the solid bottom, the wall climbs continuously instead.
         let spiral = self.s.vase_mode && li >= self.s.bottom_layers as usize && li > 0;
         if !spiral {
+            if li > 0 && self.printer.retract_layer_change {
+                self.retract_now();
+            }
             let _ = writeln!(self.g, "G1 Z{:.3} F600", layer.z);
         }
         if li == 1 && self.filament.fan_percent > 0 {
@@ -473,20 +998,19 @@ impl<'a> Writer<'a> {
     fn travel_to(&mut self, to: Point2, z: f32) {
         let p = self.printer;
         let travel = self.pos.distance(to);
-        // Retracted for this travel only: the path after it always starts un-retracted.
-        let mut retracted = false;
+        let mut hopped = false;
         if travel > 0.01 {
-            let retract = travel > RETRACT_MIN_TRAVEL_MM && p.retract_length > 0.0;
+            let retract = travel > p.retract_min_travel && p.retract_length > 0.0;
             if retract {
-                let e = self.ext.retract(p.retract_length);
-                let _ = writeln!(self.g, "G1 E{:.5} F{:.0}", e, p.retract_speed * 60.0);
-                retracted = true;
-                self.seconds += p.retract_length / p.retract_speed * 2.0;
+                self.retract_now();
                 if self.s.z_hop > 0.0 {
                     let _ = writeln!(self.g, "G1 Z{:.3} F600 ; z-hop", z + self.s.z_hop);
                     self.seconds += 2.0 * self.s.z_hop / 10.0;
+                    hopped = true;
                 }
             }
+            // A wipe may have moved the nozzle: travel from where it is now.
+            let travel = self.pos.distance(to);
             let _ = writeln!(
                 self.g,
                 "G0 X{:.3} Y{:.3} F{:.0}",
@@ -496,13 +1020,11 @@ impl<'a> Writer<'a> {
             );
             self.seconds += travel / self.s.travel_speed;
         }
-        if retracted {
-            if self.s.z_hop > 0.0 {
-                let _ = writeln!(self.g, "G1 Z{:.3} F600", z);
-            }
-            let e = self.ext.unretract(p.retract_length);
-            let _ = writeln!(self.g, "G1 E{:.5} F{:.0}", e, p.retract_speed * 60.0);
+        if hopped {
+            let _ = writeln!(self.g, "G1 Z{:.3} F600", z);
         }
+        // The next line starts un-retracted (after a travel or layer-change retraction).
+        self.unretract_now();
     }
 
     /// Prints along `pts`: one G1 per segment, with a rising Z on vase-spiral walls and
@@ -531,9 +1053,14 @@ impl<'a> Writer<'a> {
                 continue;
             }
             done_len += len;
-            let de =
-                filament_for(len, self.line_width, layer.height, self.filament.diameter) * flow;
+            let de = filament_for(
+                len,
+                self.line_width,
+                layer.height,
+                self.filament_now().diameter,
+            ) * flow;
             let e = self.ext.extrude(de);
+            self.by_tool[self.tool as usize] += de as f64;
             self.seconds += len / speed;
             let z = if climb {
                 format!(
@@ -565,6 +1092,7 @@ impl<'a> Writer<'a> {
             let _ = writeln!(self.g, "G1 Z{:.3} F600", layer.z);
         }
         self.pos = *pts.last().unwrap();
+        self.last_path = pts;
     }
 
     /// The end sequence (retract, lift, present the print, heaters and motors off), the
@@ -581,7 +1109,13 @@ impl<'a> Writer<'a> {
             printer.bed_y - 10.0,
             self.travel_f
         );
-        let _ = writeln!(g, "M104 S0");
+        if self.dual {
+            for t in [0u8, 1].into_iter().filter(|t| self.used[*t as usize]) {
+                let _ = writeln!(g, "M104 T{t} S0");
+            }
+        } else {
+            let _ = writeln!(g, "M104 S0");
+        }
         let _ = writeln!(g, "M140 S0");
         let _ = writeln!(g, "M107");
         let _ = writeln!(g, "M84 ; motors off");
@@ -591,12 +1125,44 @@ impl<'a> Writer<'a> {
         let volume_cm3 =
             total_e * std::f32::consts::PI * (filament.diameter / 2.0).powi(2) / 1000.0;
         let grams = volume_cm3 * filament.density;
+        // A two-nozzle print: each nozzle's share with its own filament.
+        let per_nozzle = self.two.then(|| {
+            let second = self.tools.second.as_ref().unwrap_or(filament);
+            std::array::from_fn(|t| {
+                let f = if t as u8 == self.tools.primary || self.tools.ditto {
+                    filament
+                } else {
+                    second
+                };
+                let mm = self.by_tool[t] as f32;
+                let g = mm * std::f32::consts::PI * (f.diameter / 2.0).powi(2) / 1000.0 * f.density;
+                (mm, g)
+            })
+        });
+        let (grams, cost) = match per_nozzle {
+            Some(n) => {
+                let second = self.tools.second.as_ref().unwrap_or(filament);
+                let price = |t: usize| {
+                    if t as u8 == self.tools.primary {
+                        filament.price_per_kg
+                    } else {
+                        second.price_per_kg
+                    }
+                };
+                (
+                    n[0].1 + n[1].1,
+                    n[0].1 / 1000.0 * price(0) + n[1].1 / 1000.0 * price(1),
+                )
+            }
+            None => (grams, grams / 1000.0 * filament.price_per_kg),
+        };
         let estimate = Estimate {
             seconds,
             filament_mm: total_e,
             grams,
-            cost: grams / 1000.0 * filament.price_per_kg,
+            cost,
             layers: result.layers.len(),
+            per_nozzle,
         };
         let _ = writeln!(g, "; estimated time: {}", estimate.time_text());
         let _ = writeln!(
@@ -605,12 +1171,33 @@ impl<'a> Writer<'a> {
             total_e / 1000.0,
             grams
         );
+        if let Some(n) = per_nozzle {
+            for (t, (mm, grams)) in n.iter().enumerate() {
+                let _ = writeln!(
+                    g,
+                    "; filament used by nozzle {t}: {:.2} m, {grams:.1} g",
+                    mm / 1000.0
+                );
+            }
+        }
         g.push_str(&config_block(filament, self.s, printer));
         GcodeOutput {
             text: self.g,
             estimate,
         }
     }
+}
+
+/// What stays the same for every path of a layer, and what the layer collects.
+struct LayerLook {
+    li: usize,
+    seam: SeamPosition,
+    spiral: bool,
+    slowdown: f32,
+    /// The path type last marked with `;TYPE:`.
+    last_kind: Option<PathKind>,
+    /// Where this layer's wall loops started.
+    seams_here: Vec<Point2>,
 }
 
 /// What `Writer::extrude` needs to know about the path it is printing.
@@ -1092,5 +1679,38 @@ mod tests {
             .text
             .lines()
             .any(|l| l.starts_with("G1 X") && (l.ends_with(" F600") || l.ends_with(" F300"))));
+    }
+
+    #[test]
+    fn supports_go_to_the_support_nozzle_and_parts_to_their_own() {
+        let path = |kind, x: f32| ToolPath {
+            kind,
+            points: vec![Point2::new(x, 0.0), Point2::new(x + 1.0, 0.0)],
+            closed: false,
+        };
+        let tools = Tools {
+            parts: vec![([-35.0, -5.0, -25.0, 5.0], 0), ([25.0, -5.0, 35.0, 5.0], 1)],
+            support_tool: 1,
+            ..Default::default()
+        };
+        assert_eq!(tools.tool_for(&path(PathKind::Support, -30.0)), 1);
+        assert_eq!(tools.tool_for(&path(PathKind::OuterWall, -30.0)), 0);
+        assert_eq!(tools.tool_for(&path(PathKind::SparseInfill, 30.0)), 1);
+        assert_eq!(
+            tools.tool_for(&path(PathKind::Skirt, 30.0)),
+            0,
+            "skirt on the first nozzle used"
+        );
+        assert!(tools.uses_second(false));
+        let only_left = Tools {
+            parts: vec![([-35.0, -5.0, -25.0, 5.0], 0)],
+            support_tool: 1,
+            ..Default::default()
+        };
+        assert!(!only_left.uses_second(false));
+        assert!(
+            only_left.uses_second(true),
+            "supports alone need the second nozzle"
+        );
     }
 }
