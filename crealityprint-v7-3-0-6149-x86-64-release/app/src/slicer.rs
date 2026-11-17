@@ -452,6 +452,9 @@ pub fn area(poly: &[Point2]) -> f32 {
 
 pub fn contains(poly: &[Point2], p: Point2) -> bool {
     let n = poly.len();
+    if n < 3 {
+        return false;
+    }
     let mut inside = false;
     let mut j = n - 1;
     for i in 0..n {
@@ -921,6 +924,14 @@ impl Grid {
 mod tests {
     use super::*;
     use crate::model::{Mesh, PlacedObject};
+
+    #[test]
+    fn a_degenerate_polygon_contains_nothing() {
+        let p = Point2::new(0.0, 0.0);
+        assert!(!contains(&[], p));
+        assert!(!contains(&[p], p));
+        assert!(!contains(&[p, Point2::new(1.0, 1.0)], p));
+    }
 
     fn cube_tris(size: f32) -> Vec<Triangle> {
         PlacedObject::new("c", Mesh::cube(Vec3::new(size, size, size))).world_triangles()

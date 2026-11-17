@@ -255,7 +255,8 @@ fn inside_triangle(p: Pos2, a: Pos2, b: Pos2, c: Pos2) -> bool {
     let (d1, d2, d3) = (s(p, a, b), s(p, b, c), s(p, c, a));
     let neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
     let pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-    !(neg && pos)
+    // All three zero means the triangle has no area on screen: it covers nothing.
+    (neg || pos) && !(neg && pos)
 }
 
 /// Toolpaths of layers 0..=`upto`; the top one drawn brighter and thicker.
@@ -303,5 +304,29 @@ pub fn draw_toolpaths(
             };
             painter.add(Shape::line(pts, Stroke::new(width, color)));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_triangle_squashed_to_a_point_covers_nothing() {
+        let a = Pos2::new(5.0, 5.0);
+        assert!(!inside_triangle(Pos2::new(100.0, 40.0), a, a, a));
+        assert!(!inside_triangle(a, a, a, a));
+    }
+
+    #[test]
+    fn a_real_triangle_still_covers_its_inside_and_edges() {
+        let (a, b, c) = (
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            Pos2::new(0.0, 10.0),
+        );
+        assert!(inside_triangle(Pos2::new(2.0, 2.0), a, b, c));
+        assert!(inside_triangle(Pos2::new(5.0, 0.0), a, b, c), "on an edge");
+        assert!(!inside_triangle(Pos2::new(9.0, 9.0), a, b, c));
     }
 }

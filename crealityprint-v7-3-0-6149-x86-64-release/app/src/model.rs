@@ -44,7 +44,7 @@ impl Mesh {
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        match ext.as_str() {
+        let mesh = match ext.as_str() {
             "obj" => {
                 let data =
                     std::fs::read(path).map_err(|e| format!("Could not read the file: {e}"))?;
@@ -52,7 +52,19 @@ impl Mesh {
             }
             "3mf" => crate::formats::load_3mf(path),
             _ => Self::load_stl(path),
+        }?;
+        if !mesh.is_finite() {
+            return Err("The model has corrupt coordinates (not a number or infinite).".into());
         }
+        Ok(mesh)
+    }
+
+    /// True when every vertex coordinate is an ordinary number (no NaN or infinity).
+    pub fn is_finite(&self) -> bool {
+        self.triangles
+            .iter()
+            .flatten()
+            .all(|v| v.x.is_finite() && v.y.is_finite() && v.z.is_finite())
     }
 
     pub fn load_stl(path: &Path) -> Result<Mesh, String> {
@@ -361,6 +373,23 @@ impl PlacedObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_a_model_with_infinite_or_nan_coordinates() {
+        let dir = std::env::temp_dir().join(format!("printcraft-finite-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, coord) in [("inf.stl", "1e39"), ("nan.stl", "NaN")] {
+            let path = dir.join(name);
+            let stl = format!(
+                "solid t\nfacet normal 0 0 1\nouter loop\nvertex {coord} 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n"
+            );
+            std::fs::write(&path, stl).unwrap();
+            let err = Mesh::load(&path).unwrap_err();
+            assert!(err.contains("corrupt"), "{name}: {err}");
+        }
+        assert!(Mesh::cube(Vec3::new(1.0, 1.0, 1.0)).is_finite());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn binary_stl_round_trips() {

@@ -85,6 +85,7 @@ impl PrintCraftApp {
         self.objects.clear();
         self.plate.clear();
         self.selected = None;
+        self.drag = Drag::None;
         self.sliced = None;
         self.project_path = None;
         self.mode = Mode::Prepare;
@@ -136,6 +137,7 @@ impl PrintCraftApp {
         self.objects = p.objects;
         self.refresh_plate();
         self.selected = None;
+        self.drag = Drag::None;
         self.sliced = None;
         self.mode = Mode::Prepare;
         // The printer device: looked for, then selected only if it is there.

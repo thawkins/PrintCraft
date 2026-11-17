@@ -217,15 +217,17 @@ pub fn from_json(text: &str) -> Result<Project, String> {
         .enumerate()
     {
         let data = o.get("mesh").and_then(|m| m.as_str()).unwrap_or("");
-        let triangles = base64_decode(data)
+        let mesh = base64_decode(data)
             .and_then(|b| mesh_from_bytes(&b))
+            .map(|triangles| Mesh { triangles })
+            .filter(Mesh::is_finite)
             .ok_or_else(|| format!("Object {} in the project is damaged.", i + 1))?;
-        if triangles.is_empty() {
+        if mesh.triangles.is_empty() {
             continue;
         }
         let mut obj = PlacedObject::new(
             text_of(o, "name").unwrap_or_else(|| format!("Object {}", i + 1)),
-            Mesh { triangles },
+            mesh,
         );
         obj.x = num(o, "x", 0.0);
         obj.y = num(o, "y", 0.0);
@@ -322,8 +324,13 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut out = Vec::with_capacity(clean.len() / 4 * 3);
-    for chunk in clean.chunks(4) {
+    let last = clean.len() / 4;
+    for (index, chunk) in clean.chunks(4).enumerate() {
         let pad = chunk.iter().rev().take_while(|c| **c == b'=').count();
+        // Padding is at most "==" and only ends the final block.
+        if pad > 2 || (pad > 0 && index + 1 != last) {
+            return None;
+        }
         let mut n = 0u32;
         for (k, c) in chunk.iter().enumerate() {
             let d = if *c == b'=' { 0 } else { val(*c)? };
@@ -463,5 +470,36 @@ mod tests {
         }
         assert!(base64_decode("abc").is_none());
         assert!(base64_decode("a=bc").is_none());
+    }
+
+    #[test]
+    fn rejects_malformed_base64_padding_without_crashing() {
+        assert!(base64_decode("====").is_none(), "all padding");
+        assert!(base64_decode("a===").is_none(), "three pad characters");
+        assert!(base64_decode("Zg==Zg==").is_none(), "padding mid-string");
+        assert_eq!(base64_decode("Zg==").unwrap(), b"f");
+    }
+
+    #[test]
+    fn a_project_with_an_all_padding_mesh_is_damaged_not_a_crash() {
+        let text =
+            r#"{"format":"printcraft-project","version":1,"objects":[{"name":"x","mesh":"===="}]}"#;
+        let err = from_json(text).unwrap_err();
+        assert!(err.contains("damaged"), "{err}");
+    }
+
+    #[test]
+    fn a_project_mesh_with_infinite_coordinates_is_damaged() {
+        let mut bytes = Vec::new();
+        for k in 0..9 {
+            let v = if k == 0 { f32::INFINITY } else { k as f32 };
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let text = format!(
+            r#"{{"format":"printcraft-project","version":1,"objects":[{{"name":"x","mesh":"{}"}}]}}"#,
+            crate::thumbnail::base64(&bytes)
+        );
+        let err = from_json(&text).unwrap_err();
+        assert!(err.contains("damaged"), "{err}");
     }
 }

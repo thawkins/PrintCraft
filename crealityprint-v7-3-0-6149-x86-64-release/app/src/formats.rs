@@ -21,13 +21,18 @@ pub fn parse_obj(text: &str) -> Result<Mesh, String> {
                 }
             }
             Some("f") => {
-                let idx: Vec<usize> = parts
-                    .filter_map(|p| {
+                // A face with any bad corner is skipped whole: dropping just that corner
+                // would fan the rest into a triangle the file never described.
+                let Some(idx) = parts
+                    .map(|p| {
                         let i: i64 = p.split('/').next()?.parse().ok()?;
                         let k = if i < 0 { verts.len() as i64 + i } else { i - 1 };
                         (k >= 0 && (k as usize) < verts.len()).then_some(k as usize)
                     })
-                    .collect();
+                    .collect::<Option<Vec<usize>>>()
+                else {
+                    continue;
+                };
                 for k in 1..idx.len().saturating_sub(1) {
                     triangles.push([verts[idx[0]], verts[idx[k]], verts[idx[k + 1]]]);
                 }
@@ -98,7 +103,10 @@ fn tags(xml: &str) -> impl Iterator<Item = Tag<'_>> {
         while let Some(eq) = attr_text.find('=') {
             let key = attr_text[..eq].trim();
             let after = attr_text[eq + 1..].trim_start();
-            let Some(q) = after.chars().next() else { break };
+            // XML attribute values are quoted with ' or "; anything else is malformed.
+            let Some(q) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+                break;
+            };
             let Some(close) = after[1..].find(q) else {
                 break;
             };
@@ -279,6 +287,22 @@ pub fn parse_3mf_model(xml: &str) -> Result<Mesh, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obj_face_with_a_bad_corner_is_skipped_not_refanned() {
+        let obj = "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 999 3\nf 1 2 4\n";
+        let m = parse_obj(obj).unwrap();
+        assert_eq!(m.triangles.len(), 1, "only the valid face survives");
+        assert_eq!(m.triangles[0][2], Vec3::new(0.0, 1.0, 0.0));
+    }
+
+    #[test]
+    fn unquoted_non_ascii_attribute_does_not_crash_the_3mf_parser() {
+        let xml = "<model><resources><object id=\"1\"><mesh><vertices>\
+            <vertex x=\u{e9}1 y=\"0\" z=\"0\"/></vertices></mesh></object></resources></model>";
+        // Malformed input: any result is fine as long as it returns.
+        let _ = parse_3mf_model(xml);
+    }
 
     #[test]
     fn reads_obj_with_quads_and_slashes() {

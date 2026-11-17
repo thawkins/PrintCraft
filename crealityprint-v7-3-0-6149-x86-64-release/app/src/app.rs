@@ -307,6 +307,8 @@ impl PrintCraftApp {
 
     fn delete_selected(&mut self) {
         if let Some(i) = self.selected.take() {
+            // A drag in progress may point at this object (or one after it).
+            self.drag = Drag::None;
             let name = self.objects.remove(i).name;
             self.plate.remove(i);
             self.status = format!("Removed {name}.");
@@ -946,9 +948,10 @@ impl PrintCraftApp {
                 Drag::Orbit => self.camera.orbit(delta),
                 Drag::Pan => self.camera.pan(delta, rect),
                 Drag::Move { index, grab } => {
-                    if let Some(p) = pointer.and_then(|at| self.camera.plate_point(at, rect)) {
-                        self.objects[index].x = p.x - grab.x;
-                        self.objects[index].y = p.y - grab.y;
+                    let at = pointer.and_then(|at| self.camera.plate_point(at, rect));
+                    if let (Some(p), Some(o)) = (at, self.objects.get_mut(index)) {
+                        o.x = p.x - grab.x;
+                        o.y = p.y - grab.y;
                         self.refresh_object(index);
                     }
                 }
