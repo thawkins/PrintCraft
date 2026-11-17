@@ -4,7 +4,6 @@
 //! control, files on the printer, records and timelapse on the right. Also finds and
 //! connects printers, and asks "Print again?" when a print finishes.
 
-use crate::app::card;
 use crate::printer::calibration::with_calibration;
 use crate::printer::camera::{CameraFeed, CameraState};
 use crate::printer::discovery::{self, Scan};
@@ -14,6 +13,7 @@ use crate::printer::link::{LinkState, PrinterLink};
 use crate::printer::{prusalink, usb, Api, HistoryEntry};
 use crate::printer::{Command, FoundPrinter, JobState, Wake};
 use crate::theme;
+use crate::widgets::card;
 use eframe::egui::{self, Color32, RichText, Sense, Ui};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

@@ -19,6 +19,7 @@ mod geometry;
 mod gizmo;
 mod heat;
 mod model;
+mod pipeline;
 mod printer;
 mod profiles;
 mod project;
@@ -26,6 +27,7 @@ mod slicer;
 mod theme;
 mod thumbnail;
 mod view3d;
+mod widgets;
 
 use eframe::egui;
 use std::path::PathBuf;
@@ -298,10 +300,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
         let mut obj = model::PlacedObject::new(path.display().to_string(), mesh);
         // Several models: line them up left to right with a gap.
         obj.x = (i as f32 - (count as f32 - 1.0) / 2.0) * 40.0;
-        let b = obj.world_bounds();
-        let (hx, hy) = (printer.bed_x / 2.0, printer.bed_y / 2.0);
-        if b.min.x < -hx || b.max.x > hx || b.min.y < -hy || b.max.y > hy || b.max.z > printer.max_z
-        {
+        if !pipeline::fits_on_plate(&obj.world_bounds(), &printer) {
             eprintln!(
                 "printcraft: {} does not fit on the {} plate",
                 path.display(),
@@ -312,10 +311,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
         triangles.extend(obj.world_triangles());
     }
 
-    let lw = printer.nozzle_diameter * 1.05;
-    let result = slicer::slice(&triangles, &settings, lw, &|_| {});
-    let mut out = gcode::generate(&result, &printer, &filament, &settings);
-    out.text = thumbnail::add_to_gcode(&out.text, &triangles).0;
+    let out = pipeline::slice_plate(&triangles, &printer, &filament, &settings, &|_| {}).gcode;
     if let Err(e) = std::fs::write(output, &out.text) {
         eprintln!("printcraft: could not write {}: {e}", output.display());
         return ExitCode::FAILURE;

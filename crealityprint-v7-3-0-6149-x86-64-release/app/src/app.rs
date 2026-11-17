@@ -6,16 +6,18 @@ mod prepare_ui;
 mod project_ui;
 
 use crate::device_ui::{DevicePage, PrintJob};
-use crate::gcode::{self, GcodeOutput};
+use crate::gcode::GcodeOutput;
 use crate::geometry::Vec3;
 use crate::gizmo;
 use crate::model::{Mesh, PlacedObject, SampleShape, Triangle};
+use crate::pipeline;
 use crate::profiles::{
     limits, Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
 };
-use crate::slicer::{self, PathKind, SliceResult};
+use crate::slicer::{PathKind, SliceResult};
 use crate::theme;
 use crate::view3d::{self, Camera, DrawObject};
+use crate::widgets::{card, row, settings_grid};
 use eframe::egui::{self, Color32, RichText, Sense, Ui};
 use prepare_ui::ProcessTab;
 use std::path::{Path, PathBuf};
@@ -43,6 +45,15 @@ enum Mode {
     Prepare,
     Preview,
     Printer,
+}
+
+/// A button's action on the selected object (the toolbar and Objects panel share them).
+#[derive(Clone, Copy, Debug)]
+enum ObjectAction {
+    LayFlat,
+    Turn90,
+    Duplicate,
+    Delete,
 }
 
 struct Sliced {
@@ -310,6 +321,26 @@ impl PrintCraftApp {
         self.refresh_plate();
     }
 
+    /// Does a toolbar or Objects-panel button's action to the selected object.
+    fn apply_to_selected(&mut self, action: ObjectAction) {
+        let Some(i) = self.selected.filter(|&i| i < self.objects.len()) else {
+            return;
+        };
+        match action {
+            ObjectAction::LayFlat => {
+                self.objects[i].lay_flat();
+                self.refresh_object(i);
+            }
+            ObjectAction::Turn90 => {
+                let o = &mut self.objects[i];
+                o.rotation.z = (o.rotation.z + 90.0) % 360.0;
+                self.refresh_object(i);
+            }
+            ObjectAction::Duplicate => self.duplicate_selected(),
+            ObjectAction::Delete => self.delete_selected(),
+        }
+    }
+
     fn delete_selected(&mut self) {
         if let Some(i) = self.selected.take() {
             // A drag in progress may point at this object (or one after it).
@@ -329,16 +360,7 @@ impl PrintCraftApp {
     }
 
     fn fits_on_plate(&self, i: usize) -> bool {
-        let b = self.object_bounds(i);
-        let (hx, hy) = (
-            self.printer.bed_x / 2.0 + 0.01,
-            self.printer.bed_y / 2.0 + 0.01,
-        );
-        b.min.x >= -hx
-            && b.max.x <= hx
-            && b.min.y >= -hy
-            && b.max.y <= hy
-            && b.max.z <= self.printer.max_z
+        pipeline::fits_on_plate(&self.object_bounds(i), &self.printer)
     }
 
     // ----- slicing --------------------------------------------------------------------------
@@ -365,10 +387,6 @@ impl PrintCraftApp {
             .is_some_and(|s| s.fingerprint == self.fingerprint())
     }
 
-    fn line_width(&self) -> f32 {
-        self.printer.nozzle_diameter * 1.05
-    }
-
     fn start_slice(&mut self) {
         if self.job.is_some() {
             return;
@@ -391,19 +409,18 @@ impl PrintCraftApp {
             self.printer.clone(),
             self.filament.clone(),
         );
-        let lw = self.line_width();
         let fingerprint = self.fingerprint();
         let progress = Arc::new(AtomicU32::new(0f32.to_bits()));
         let (tx, rx) = mpsc::channel();
         let p = progress.clone();
         std::thread::spawn(move || {
-            let result = slicer::slice(&tris, &settings, lw, &|v| {
+            let pipeline::Sliced {
+                result,
+                gcode,
+                picture,
+            } = pipeline::slice_plate(&tris, &printer, &filament, &settings, &|v| {
                 p.store(v.to_bits(), Ordering::Relaxed)
             });
-            let mut gcode = gcode::generate(&result, &printer, &filament, &settings);
-            // Pictures of the part for the printer's screen.
-            let (text, picture) = crate::thumbnail::add_to_gcode(&gcode.text, &tris);
-            gcode.text = text;
             let shared_text = Arc::new(gcode.text.clone());
             let _ = tx.send(Sliced {
                 result,
@@ -588,8 +605,7 @@ impl PrintCraftApp {
             });
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Turn 90°").clicked() {
-                    o.rotation.z = (o.rotation.z + 90.0) % 360.0;
-                    changed = true;
+                    action = Some(ObjectAction::Turn90);
                 }
                 if ui.button("Center").clicked() {
                     (o.x, o.y) = (0.0, 0.0);
@@ -600,8 +616,7 @@ impl PrintCraftApp {
                     .on_hover_text("Turn it so its biggest flat face sits on the plate")
                     .clicked()
                 {
-                    o.lay_flat();
-                    changed = true;
+                    action = Some(ObjectAction::LayFlat);
                 }
                 if ui
                     .button("Reset")
@@ -615,20 +630,18 @@ impl PrintCraftApp {
             });
             ui.horizontal(|ui| {
                 if ui.button("Duplicate").clicked() {
-                    action = Some("dup");
+                    action = Some(ObjectAction::Duplicate);
                 }
                 if ui.button("Delete").clicked() {
-                    action = Some("del");
+                    action = Some(ObjectAction::Delete);
                 }
             });
         });
         if changed {
             self.refresh_object(i);
         }
-        match action {
-            Some("dup") => self.duplicate_selected(),
-            Some("del") => self.delete_selected(),
-            _ => {}
+        if let Some(action) = action {
+            self.apply_to_selected(action);
         }
     }
 
@@ -1272,33 +1285,6 @@ fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
-}
-
-pub(crate) fn card(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
-    egui::Frame::new()
-        .fill(theme::CARD)
-        .corner_radius(8)
-        .inner_margin(egui::Margin::same(10))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).size(15.0).strong());
-            ui.add_space(4.0);
-            add(ui);
-        });
-    ui.add_space(8.0);
-}
-
-fn settings_grid(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
-    egui::Grid::new(id)
-        .num_columns(2)
-        .spacing([10.0, 6.0])
-        .show(ui, add);
-}
-
-fn row(ui: &mut Ui, label: &str, widget: impl egui::Widget) {
-    ui.label(label);
-    ui.add(widget);
-    ui.end_row();
 }
 
 fn paint_background(painter: &egui::Painter, rect: egui::Rect) {

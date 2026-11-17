@@ -70,7 +70,7 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
 2. **Outlines.** Triangle–plane cuts are chained into closed loops (points are snapped to
    0.001 mm). Outer loops run counter-clockwise and holes run clockwise, decided by how
    deeply each loop is nested (`layer_outline`).
-3. **Line width** = nozzle × 1.05 (0.42 mm for a 0.4 mm nozzle). `app.rs line_width`. Estimated.
+3. **Line width** = nozzle × 1.05 (0.42 mm for a 0.4 mm nozzle). `pipeline.rs line_width`. Estimated.
 4. **Walls.** Wall *k* (0 = outside) is the outline moved inwards by `line_width × (k + 0.5)`.
    Walls print from the inside out, with the outer wall last. Loops that would collapse are
    dropped (`offset_left`).

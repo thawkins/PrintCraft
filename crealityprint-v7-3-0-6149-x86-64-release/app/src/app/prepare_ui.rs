@@ -232,26 +232,16 @@ impl PrintCraftApp {
                         .on_hover_text("Put the selected model's biggest flat face down")
                         .clicked()
                     {
-                        if let Some(i) = self.selected {
-                            self.objects[i].lay_flat();
-                            self.refresh_object(i);
+                        self.apply_to_selected(ObjectAction::LayFlat);
+                    }
+                    for (label, action) in [
+                        ("Turn 90°", ObjectAction::Turn90),
+                        ("Duplicate", ObjectAction::Duplicate),
+                        ("Delete", ObjectAction::Delete),
+                    ] {
+                        if ui.add_enabled(sel, egui::Button::new(label)).clicked() {
+                            self.apply_to_selected(action);
                         }
-                    }
-                    if ui.add_enabled(sel, egui::Button::new("Turn 90°")).clicked() {
-                        if let Some(i) = self.selected {
-                            self.objects[i].rotation.z =
-                                (self.objects[i].rotation.z + 90.0) % 360.0;
-                            self.refresh_object(i);
-                        }
-                    }
-                    if ui
-                        .add_enabled(sel, egui::Button::new("Duplicate"))
-                        .clicked()
-                    {
-                        self.duplicate_selected();
-                    }
-                    if ui.add_enabled(sel, egui::Button::new("Delete")).clicked() {
-                        self.delete_selected();
                     }
                     ui.separator();
                     if ui
