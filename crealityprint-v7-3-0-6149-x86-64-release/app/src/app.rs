@@ -522,7 +522,19 @@ impl PrintCraftApp {
 
     // ----- panels ---------------------------------------------------------------------------
 
+    /// The Objects tab: the list of objects on the plate, then the selected object's
+    /// size, placement and buttons.
     fn objects_panel(&mut self, ui: &mut Ui) {
+        self.object_list_card(ui);
+        let Some(i) = self.selected.filter(|&i| i < self.objects.len()) else {
+            return;
+        };
+        self.selected_object_card(ui, i);
+    }
+
+    /// "Objects on the plate": one selectable row per object, in the warning colour when
+    /// it doesn't fit on the plate.
+    fn object_list_card(&mut self, ui: &mut Ui) {
         card(ui, "Objects on the plate", |ui| {
             if self.objects.is_empty() {
                 ui.label(
@@ -547,10 +559,10 @@ impl PrintCraftApp {
                 }
             }
         });
+    }
 
-        let Some(i) = self.selected.filter(|&i| i < self.objects.len()) else {
-            return;
-        };
+    /// "Selected object": its size, position / rotation / scale, and its buttons.
+    fn selected_object_card(&mut self, ui: &mut Ui, i: usize) {
         let (ox, oy) = (self.printer.bed_x / 2.0, self.printer.bed_y / 2.0);
         let mut changed = false;
         let mut action = None;
@@ -564,78 +576,10 @@ impl PrintCraftApp {
                 ))
                 .color(theme::TEXT_DIM),
             );
-            settings_grid(ui, "object_grid", |ui| {
-                let (mut px, mut py) = (o.x + ox, o.y + oy);
-                ui.label("Position X");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut px).speed(0.5).suffix(" mm"))
-                    .changed();
-                ui.end_row();
-                ui.label("Position Y");
-                changed |= ui
-                    .add(egui::DragValue::new(&mut py).speed(0.5).suffix(" mm"))
-                    .changed();
-                ui.end_row();
-                (o.x, o.y) = (px - ox, py - oy);
-                for (label, v) in [
-                    ("Rotate X", &mut o.rotation.x),
-                    ("Rotate Y", &mut o.rotation.y),
-                    ("Rotate Z", &mut o.rotation.z),
-                ] {
-                    ui.label(label);
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(v)
-                                .speed(1.0)
-                                .range(-360.0..=360.0)
-                                .suffix("°"),
-                        )
-                        .changed();
-                    ui.end_row();
-                }
-                ui.label("Scale");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut o.scale_percent, 10.0..=500.0)
-                            .suffix(" %")
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.end_row();
-            });
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Turn 90°").clicked() {
-                    action = Some(ObjectAction::Turn90);
-                }
-                if ui.button("Center").clicked() {
-                    (o.x, o.y) = (0.0, 0.0);
-                    changed = true;
-                }
-                if ui
-                    .button("Lay flat")
-                    .on_hover_text("Turn it so its biggest flat face sits on the plate")
-                    .clicked()
-                {
-                    action = Some(ObjectAction::LayFlat);
-                }
-                if ui
-                    .button("Reset")
-                    .on_hover_text("Undo rotation and scale")
-                    .clicked()
-                {
-                    o.rotation = Vec3::default();
-                    o.scale_percent = 100.0;
-                    changed = true;
-                }
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Duplicate").clicked() {
-                    action = Some(ObjectAction::Duplicate);
-                }
-                if ui.button("Delete").clicked() {
-                    action = Some(ObjectAction::Delete);
-                }
-            });
+            changed |= object_placement_grid(ui, o, ox, oy);
+            let (edited, clicked) = object_buttons(ui, o);
+            changed |= edited;
+            action = clicked;
         });
         if changed {
             self.refresh_object(i);
@@ -897,6 +841,8 @@ impl PrintCraftApp {
         });
     }
 
+    /// Mouse input on the 3D view: gizmo hover, starting and continuing a drag (gizmo
+    /// handle, moving a model, orbit or pan), click to select, and scroll to zoom.
     fn handle_view_input(
         &mut self,
         ui: &Ui,
@@ -905,10 +851,6 @@ impl PrintCraftApp {
         preview: bool,
     ) {
         let pointer = response.interact_pointer_pos().or(response.hover_pos());
-        let pick = |app: &Self, at: egui::Pos2| {
-            let tris: Vec<&[Triangle]> = app.plate.iter().map(|t| t.as_slice()).collect();
-            view3d::pick_object(&app.camera, rect, &tris, at)
-        };
         // Which handle of the selected object is under the mouse.
         let selection = if preview {
             None
@@ -925,80 +867,16 @@ impl PrintCraftApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         if response.drag_started() {
-            let primary = ui.input(|i| i.pointer.primary_down());
-            let grabbed = match (primary, pointer, &selection) {
-                (true, Some(at), Some((index, b))) => {
-                    gizmo::pick(&self.camera, rect, b, self.tool, at).map(|handle| {
-                        let o = &self.objects[*index];
-                        let center = self
-                            .camera
-                            .project(b.center(), rect)
-                            .map(|p| p.0)
-                            .unwrap_or(at);
-                        GizmoDrag {
-                            index: *index,
-                            handle,
-                            start_pointer: at,
-                            start_plate: self.camera.plate_point(at, rect).unwrap_or_default(),
-                            start_x: o.x,
-                            start_y: o.y,
-                            start_scale: o.scale_percent,
-                            start_rotation: o.rotation,
-                            center,
-                            start_angle: gizmo::screen_angle(center, at),
-                        }
-                    })
-                }
-                _ => None,
-            };
-            self.drag = match (primary, pointer, grabbed) {
-                (_, _, Some(g)) => Drag::Gizmo(g),
-                (true, Some(at), None) if !preview => match pick(self, at) {
-                    Some(index) => {
-                        self.selected = Some(index);
-                        let o = &self.objects[index];
-                        let hit = self.camera.plate_point(at, rect).unwrap_or_default();
-                        Drag::Move {
-                            index,
-                            grab: hit - Vec3::new(o.x, o.y, 0.0),
-                        }
-                    }
-                    None => Drag::Orbit,
-                },
-                (true, _, _) => Drag::Orbit,
-                (false, _, _) => Drag::Pan,
-            };
+            self.begin_view_drag(ui, rect, pointer, selection, preview);
         }
         if response.dragged() {
-            let delta = response.drag_delta();
-            match self.drag {
-                Drag::Orbit => self.camera.orbit(delta),
-                Drag::Pan => self.camera.pan(delta, rect),
-                Drag::Move { index, grab } => {
-                    let at = pointer.and_then(|at| self.camera.plate_point(at, rect));
-                    if let (Some(p), Some(o)) = (at, self.objects.get_mut(index)) {
-                        o.x = p.x - grab.x;
-                        o.y = p.y - grab.y;
-                        self.refresh_object(index);
-                    }
-                }
-                Drag::Gizmo(g) => {
-                    if let Some(at) = pointer {
-                        self.apply_gizmo_drag(&g, at, rect);
-                    }
-                }
-                Drag::None => {}
-            }
+            self.continue_view_drag(rect, response.drag_delta(), pointer);
         }
         if response.drag_stopped() {
             self.drag = Drag::None;
         }
         if response.clicked() && !preview {
-            self.selected = pointer.and_then(|at| pick(self, at));
-            if self.selected.is_some() {
-                // Show the picked model's position, rotation and size on the right.
-                self.process_tab = ProcessTab::Objects;
-            }
+            self.select_clicked_object(rect, pointer);
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -1008,26 +886,162 @@ impl PrintCraftApp {
         }
     }
 
-    fn view_overlays(&mut self, ui: &mut Ui, rect: egui::Rect, preview: bool) {
-        // Printer box (top left) and model tools (along the top), as in the original.
-        if self.mode == Mode::Prepare {
-            let boxr = egui::Rect::from_min_size(
-                rect.min + egui::vec2(10.0, 10.0),
-                egui::vec2(350.0, 260.0),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(boxr), |ui| {
-                self.printer_box(ui)
-            });
-            let tools = egui::Rect::from_min_max(
-                egui::pos2(rect.left() + 372.0, rect.top() + 10.0),
-                egui::pos2(rect.right() - 90.0, rect.top() + 60.0),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(tools), |ui| {
-                self.model_toolbar(ui)
-            });
+    /// The object drawn under `at` on the view, if any.
+    fn object_under(&self, rect: egui::Rect, at: egui::Pos2) -> Option<usize> {
+        let tris: Vec<&[Triangle]> = self.plate.iter().map(|t| t.as_slice()).collect();
+        view3d::pick_object(&self.camera, rect, &tris, at)
+    }
+
+    /// A drag starts: a primary drag on a gizmo handle grabs it, on a model selects and
+    /// moves it (Prepare only), on empty space orbits; any other button pans.
+    fn begin_view_drag(
+        &mut self,
+        ui: &Ui,
+        rect: egui::Rect,
+        pointer: Option<egui::Pos2>,
+        selection: Option<(usize, crate::geometry::Bounds)>,
+        preview: bool,
+    ) {
+        let primary = ui.input(|i| i.pointer.primary_down());
+        let grabbed = match (primary, pointer, &selection) {
+            (true, Some(at), Some((index, b))) => self.grab_gizmo(rect, at, *index, b),
+            _ => None,
+        };
+        self.drag = match (primary, pointer, grabbed) {
+            (_, _, Some(g)) => Drag::Gizmo(g),
+            (true, Some(at), None) if !preview => match self.object_under(rect, at) {
+                Some(index) => {
+                    self.selected = Some(index);
+                    let o = &self.objects[index];
+                    let hit = self.camera.plate_point(at, rect).unwrap_or_default();
+                    Drag::Move {
+                        index,
+                        grab: hit - Vec3::new(o.x, o.y, 0.0),
+                    }
+                }
+                None => Drag::Orbit,
+            },
+            (true, _, _) => Drag::Orbit,
+            (false, _, _) => Drag::Pan,
+        };
+    }
+
+    /// The gizmo handle of object `index` (with bounds `b`) under `at`, recorded with the
+    /// object's starting placement so the drag can be applied relative to it.
+    fn grab_gizmo(
+        &self,
+        rect: egui::Rect,
+        at: egui::Pos2,
+        index: usize,
+        b: &crate::geometry::Bounds,
+    ) -> Option<GizmoDrag> {
+        gizmo::pick(&self.camera, rect, b, self.tool, at).map(|handle| {
+            let o = &self.objects[index];
+            let center = self
+                .camera
+                .project(b.center(), rect)
+                .map(|p| p.0)
+                .unwrap_or(at);
+            GizmoDrag {
+                index,
+                handle,
+                start_pointer: at,
+                start_plate: self.camera.plate_point(at, rect).unwrap_or_default(),
+                start_x: o.x,
+                start_y: o.y,
+                start_scale: o.scale_percent,
+                start_rotation: o.rotation,
+                center,
+                start_angle: gizmo::screen_angle(center, at),
+            }
+        })
+    }
+
+    /// While dragging: turn or pan the view, slide the grabbed model, or apply the
+    /// gizmo handle's move, scale or rotation.
+    fn continue_view_drag(
+        &mut self,
+        rect: egui::Rect,
+        delta: egui::Vec2,
+        pointer: Option<egui::Pos2>,
+    ) {
+        match self.drag {
+            Drag::Orbit => self.camera.orbit(delta),
+            Drag::Pan => self.camera.pan(delta, rect),
+            Drag::Move { index, grab } => {
+                let at = pointer.and_then(|at| self.camera.plate_point(at, rect));
+                if let (Some(p), Some(o)) = (at, self.objects.get_mut(index)) {
+                    o.x = p.x - grab.x;
+                    o.y = p.y - grab.y;
+                    self.refresh_object(index);
+                }
+            }
+            Drag::Gizmo(g) => {
+                if let Some(at) = pointer {
+                    self.apply_gizmo_drag(&g, at, rect);
+                }
+            }
+            Drag::None => {}
         }
-        // View buttons, top right: like the original's TOP / FRONT cube and home button.
+    }
+
+    /// A click selects the model under the pointer (or clears the selection on empty
+    /// space).
+    fn select_clicked_object(&mut self, rect: egui::Rect, pointer: Option<egui::Pos2>) {
+        self.selected = pointer.and_then(|at| self.object_under(rect, at));
+        if self.selected.is_some() {
+            // Show the picked model's position, rotation and size on the right.
+            self.process_tab = ProcessTab::Objects;
+        }
+    }
+
+    /// Everything drawn over the 3D view: the Printer box and model tools (Prepare), the
+    /// view buttons, Slice plate / Send print, and the hints or the layer slider.
+    fn view_overlays(&mut self, ui: &mut Ui, rect: egui::Rect, preview: bool) {
+        if self.mode == Mode::Prepare {
+            self.prepare_overlays(ui, rect);
+        }
         let slider_room = if preview { 70.0 } else { 0.0 };
+        self.view_buttons(ui, rect, slider_room);
+        // Slice plate / Send print, bottom right.
+        let buttons = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - 240.0 - slider_room, rect.bottom() - 96.0),
+            egui::vec2(222.0, 90.0),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(buttons), |ui| {
+            self.slice_buttons(ui)
+        });
+
+        if self.objects.is_empty() && !preview {
+            empty_plate_hint(ui, rect);
+        }
+
+        if !preview {
+            prepare_view_hint(ui, rect);
+            return;
+        }
+        self.layer_slider_overlay(ui, rect);
+    }
+
+    /// Printer box (top left) and model tools (along the top), as in the original.
+    fn prepare_overlays(&mut self, ui: &mut Ui, rect: egui::Rect) {
+        let boxr =
+            egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 10.0), egui::vec2(350.0, 260.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(boxr), |ui| {
+            self.printer_box(ui)
+        });
+        let tools = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 372.0, rect.top() + 10.0),
+            egui::pos2(rect.right() - 90.0, rect.top() + 60.0),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(tools), |ui| {
+            self.model_toolbar(ui)
+        });
+    }
+
+    /// View buttons, top right: like the original's TOP / FRONT cube and home button.
+    /// `slider_room` keeps them clear of the Preview layer slider.
+    fn view_buttons(&mut self, ui: &mut Ui, rect: egui::Rect, slider_room: f32) {
         let views = egui::Rect::from_min_size(
             egui::pos2(rect.right() - 80.0 - slider_room, rect.top() + 12.0),
             egui::vec2(70.0, 120.0),
@@ -1055,43 +1069,11 @@ impl PrintCraftApp {
                 }
             });
         });
-        // Slice plate / Send print, bottom right.
-        let buttons = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 240.0 - slider_room, rect.bottom() - 96.0),
-            egui::vec2(222.0, 90.0),
-        );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(buttons), |ui| {
-            self.slice_buttons(ui)
-        });
+    }
 
-        if self.objects.is_empty() && !preview {
-            ui.painter().text(
-                rect.center() - egui::vec2(0.0, 40.0),
-                egui::Align2::CENTER_CENTER,
-                "Open a model or add a shape to begin",
-                egui::FontId::proportional(20.0),
-                theme::TEXT_DIM,
-            );
-            ui.painter().text(
-                rect.center() - egui::vec2(0.0, 14.0),
-                egui::Align2::CENTER_CENTER,
-                "You can also drop STL, OBJ or 3MF files onto this window",
-                egui::FontId::proportional(14.0),
-                theme::TEXT_DIM,
-            );
-        }
-
-        if !preview {
-            let hint = "Click a model to select it · drag its handles to move (M), scale (S) or rotate (R) · drag empty space to turn the view · right-drag to pan · scroll to zoom";
-            ui.painter().text(
-                rect.left_bottom() + egui::vec2(12.0, -12.0),
-                egui::Align2::LEFT_BOTTOM,
-                hint,
-                egui::FontId::proportional(12.0),
-                theme::TEXT_DIM,
-            );
-            return;
-        }
+    /// Preview: the vertical layer slider on the right, the current layer's number and
+    /// height at the top, and the arrow-key hint. Nothing until there are sliced layers.
+    fn layer_slider_overlay(&mut self, ui: &mut Ui, rect: egui::Rect) {
         let Some(sliced) = &self.sliced else { return };
         let n = sliced.result.layers.len();
         if n == 0 {
@@ -1296,4 +1278,122 @@ fn paint_background(painter: &egui::Painter, rect: egui::Rect) {
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     painter.add(egui::Shape::mesh(mesh));
+}
+
+/// The two-line "Open a model or add a shape" message in the middle of an empty plate.
+fn empty_plate_hint(ui: &Ui, rect: egui::Rect) {
+    ui.painter().text(
+        rect.center() - egui::vec2(0.0, 40.0),
+        egui::Align2::CENTER_CENTER,
+        "Open a model or add a shape to begin",
+        egui::FontId::proportional(20.0),
+        theme::TEXT_DIM,
+    );
+    ui.painter().text(
+        rect.center() - egui::vec2(0.0, 14.0),
+        egui::Align2::CENTER_CENTER,
+        "You can also drop STL, OBJ or 3MF files onto this window",
+        egui::FontId::proportional(14.0),
+        theme::TEXT_DIM,
+    );
+}
+
+/// The mouse hint along the bottom left of the Prepare view.
+fn prepare_view_hint(ui: &Ui, rect: egui::Rect) {
+    let hint = "Click a model to select it · drag its handles to move (M), scale (S) or rotate (R) · drag empty space to turn the view · right-drag to pan · scroll to zoom";
+    ui.painter().text(
+        rect.left_bottom() + egui::vec2(12.0, -12.0),
+        egui::Align2::LEFT_BOTTOM,
+        hint,
+        egui::FontId::proportional(12.0),
+        theme::TEXT_DIM,
+    );
+}
+
+/// Position (shown from the plate's corner; `ox`/`oy` is the plate's centre), rotation
+/// and scale of one object. Returns whether anything changed.
+fn object_placement_grid(ui: &mut Ui, o: &mut PlacedObject, ox: f32, oy: f32) -> bool {
+    let mut changed = false;
+    settings_grid(ui, "object_grid", |ui| {
+        let (mut px, mut py) = (o.x + ox, o.y + oy);
+        ui.label("Position X");
+        changed |= ui
+            .add(egui::DragValue::new(&mut px).speed(0.5).suffix(" mm"))
+            .changed();
+        ui.end_row();
+        ui.label("Position Y");
+        changed |= ui
+            .add(egui::DragValue::new(&mut py).speed(0.5).suffix(" mm"))
+            .changed();
+        ui.end_row();
+        (o.x, o.y) = (px - ox, py - oy);
+        for (label, v) in [
+            ("Rotate X", &mut o.rotation.x),
+            ("Rotate Y", &mut o.rotation.y),
+            ("Rotate Z", &mut o.rotation.z),
+        ] {
+            ui.label(label);
+            changed |= ui
+                .add(
+                    egui::DragValue::new(v)
+                        .speed(1.0)
+                        .range(-360.0..=360.0)
+                        .suffix("°"),
+                )
+                .changed();
+            ui.end_row();
+        }
+        ui.label("Scale");
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut o.scale_percent, 10.0..=500.0)
+                    .suffix(" %")
+                    .logarithmic(true),
+            )
+            .changed();
+        ui.end_row();
+    });
+    changed
+}
+
+/// Turn 90°, Center, Lay flat and Reset, then Duplicate and Delete. Center and Reset
+/// edit the object here; the others are returned as an action. Returns whether the
+/// object was edited, and the action clicked.
+fn object_buttons(ui: &mut Ui, o: &mut PlacedObject) -> (bool, Option<ObjectAction>) {
+    let mut changed = false;
+    let mut action = None;
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Turn 90°").clicked() {
+            action = Some(ObjectAction::Turn90);
+        }
+        if ui.button("Center").clicked() {
+            (o.x, o.y) = (0.0, 0.0);
+            changed = true;
+        }
+        if ui
+            .button("Lay flat")
+            .on_hover_text("Turn it so its biggest flat face sits on the plate")
+            .clicked()
+        {
+            action = Some(ObjectAction::LayFlat);
+        }
+        if ui
+            .button("Reset")
+            .on_hover_text("Undo rotation and scale")
+            .clicked()
+        {
+            o.rotation = Vec3::default();
+            o.scale_percent = 100.0;
+            changed = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Duplicate").clicked() {
+            action = Some(ObjectAction::Duplicate);
+        }
+        if ui.button("Delete").clicked() {
+            action = Some(ObjectAction::Delete);
+        }
+    });
+    (changed, action)
 }

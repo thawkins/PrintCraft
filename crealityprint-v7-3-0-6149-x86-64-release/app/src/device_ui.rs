@@ -11,7 +11,7 @@ use crate::printer::known::KnownPrinters;
 use crate::printer::layer_info::with_layer_info;
 use crate::printer::link::{LinkState, PrinterLink};
 use crate::printer::{prusalink, usb, Api, HistoryEntry};
-use crate::printer::{Command, FoundPrinter, JobState, Wake};
+use crate::printer::{Command, FoundPrinter, JobState, PrinterStatus, Wake};
 use crate::theme;
 use crate::widgets::card;
 use eframe::egui::{self, Color32, RichText, Sense, Ui};
@@ -634,6 +634,8 @@ impl DevicePage {
         }
     }
 
+    /// The known-printers card, then the "Connect a printer" card: a Wi-Fi scan, the
+    /// printers it found, and a box for typing an address.
     fn find_card(&mut self, ui: &mut Ui) {
         self.known_card(ui);
         let ctx = ui.ctx().clone();
@@ -645,108 +647,125 @@ impl DevicePage {
                 .color(theme::TEXT_DIM),
             );
             ui.add_space(4.0);
-            match &self.scan {
-                Some(scan) => {
-                    let n = scan.checked.load(Ordering::Relaxed);
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(format!(
-                            "Looking on {}… {n} of 254 addresses checked",
-                            scan.network
-                        ));
-                    });
-                    ui.add(egui::ProgressBar::new(n as f32 / 254.0));
-                }
-                None => {
-                    let b = egui::Button::new(
-                        RichText::new("Find printers on Wi-Fi")
-                            .strong()
-                            .color(Color32::WHITE),
-                    )
-                    .fill(theme::ACCENT_DARK);
-                    if ui.add(b).clicked() {
-                        match discovery::start() {
-                            Ok(s) => {
-                                self.scan = Some(s);
-                                self.scan_error = None;
-                            }
-                            Err(e) => self.scan_error = Some(e),
-                        }
-                    }
-                }
-            }
-            if let Some(e) = &self.scan_error {
-                ui.label(RichText::new(e).color(theme::WARNING));
-            }
-            if self.scanned_once && self.found.is_empty() && self.scan.is_none() {
-                ui.label(
-                    RichText::new("No printers answered. Check that the printer is on and connected to Wi-Fi, or type its address below.")
-                        .color(theme::WARNING),
-                );
-            }
-            let mut chosen = None;
-            let mut typed = None;
-            for p in &self.found {
-                egui::Frame::new()
-                    .fill(theme::PANEL)
-                    .corner_radius(6)
-                    .inner_margin(8)
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&p.name).strong());
-                                ui.label(
-                                    RichText::new(format!("{} · {}", p.model, p.host))
-                                        .color(theme::TEXT_DIM)
-                                        .small(),
-                                );
-                            });
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.button("Connect").clicked() {
-                                        chosen = Some(p.clone());
-                                    }
-                                },
-                            );
-                        });
-                    });
-            }
+            self.wifi_scan_section(ui);
+            let chosen = self.found_printers_list(ui);
             ui.add_space(8.0);
-            ui.label("Or type the printer's address (shown in its network settings):");
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.manual_host)
-                        .hint_text("192.168.1.50")
-                        .desired_width(170.0),
-                );
-                let host = self.manual_host.trim().to_string();
-                if ui
-                    .add_enabled(!host.is_empty(), egui::Button::new("Connect"))
-                    .clicked()
-                {
-                    typed = Some(host);
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("PrusaLink password");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.prusa_password)
-                        .password(true)
-                        .hint_text("Prusa printers only")
-                        .desired_width(150.0),
-                )
-                .on_hover_text(
-                    "Shown on a Prusa printer's screen under Settings → Network → PrusaLink",
-                );
-            });
+            let typed = self.manual_address_entry(ui);
             if let Some(p) = chosen {
                 self.connect(p, &ctx);
             } else if let Some(host) = typed {
                 self.connect_to(host, &ctx);
             }
         });
+    }
+
+    /// The "Find printers on Wi-Fi" button, or the scan's progress while it runs, then
+    /// any scan error and the "No printers answered" note.
+    fn wifi_scan_section(&mut self, ui: &mut Ui) {
+        match &self.scan {
+            Some(scan) => {
+                let n = scan.checked.load(Ordering::Relaxed);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(format!(
+                        "Looking on {}… {n} of 254 addresses checked",
+                        scan.network
+                    ));
+                });
+                ui.add(egui::ProgressBar::new(n as f32 / 254.0));
+            }
+            None => {
+                let b = egui::Button::new(
+                    RichText::new("Find printers on Wi-Fi")
+                        .strong()
+                        .color(Color32::WHITE),
+                )
+                .fill(theme::ACCENT_DARK);
+                if ui.add(b).clicked() {
+                    match discovery::start() {
+                        Ok(s) => {
+                            self.scan = Some(s);
+                            self.scan_error = None;
+                        }
+                        Err(e) => self.scan_error = Some(e),
+                    }
+                }
+            }
+        }
+        if let Some(e) = &self.scan_error {
+            ui.label(RichText::new(e).color(theme::WARNING));
+        }
+        if self.scanned_once && self.found.is_empty() && self.scan.is_none() {
+            ui.label(
+                RichText::new("No printers answered. Check that the printer is on and connected to Wi-Fi, or type its address below.")
+                    .color(theme::WARNING),
+            );
+        }
+    }
+
+    /// One row per printer the scan found, each with a Connect button; returns the one
+    /// whose Connect was clicked.
+    fn found_printers_list(&self, ui: &mut Ui) -> Option<FoundPrinter> {
+        let mut chosen = None;
+        for p in &self.found {
+            egui::Frame::new()
+                .fill(theme::PANEL)
+                .corner_radius(6)
+                .inner_margin(8)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&p.name).strong());
+                            ui.label(
+                                RichText::new(format!("{} · {}", p.model, p.host))
+                                    .color(theme::TEXT_DIM)
+                                    .small(),
+                            );
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Connect").clicked() {
+                                chosen = Some(p.clone());
+                            }
+                        });
+                    });
+                });
+        }
+        chosen
+    }
+
+    /// The typed-address box with its Connect button, and the PrusaLink password box;
+    /// returns the address when Connect was clicked.
+    fn manual_address_entry(&mut self, ui: &mut Ui) -> Option<String> {
+        let mut typed = None;
+        ui.label("Or type the printer's address (shown in its network settings):");
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.manual_host)
+                    .hint_text("192.168.1.50")
+                    .desired_width(170.0),
+            );
+            let host = self.manual_host.trim().to_string();
+            if ui
+                .add_enabled(!host.is_empty(), egui::Button::new("Connect"))
+                .clicked()
+            {
+                typed = Some(host);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("PrusaLink password");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.prusa_password)
+                    .password(true)
+                    .hint_text("Prusa printers only")
+                    .desired_width(150.0),
+            )
+            .on_hover_text(
+                "Shown on a Prusa printer's screen under Settings → Network → PrusaLink",
+            );
+        });
+        typed
     }
 
     fn usb_card(&mut self, ui: &mut Ui) {
@@ -966,12 +985,40 @@ impl DevicePage {
         self.camera_big = open;
     }
 
+    /// What the printer is doing now: the part's picture, the job's details, and the
+    /// Print again / Pause or Resume / Stop buttons.
     fn current_card(&mut self, ui: &mut Ui, s: &LinkState) {
-        let st = &s.status;
         let mut cmd = None;
         let mut ask_again = false;
-        // The real picture of the part when the job came from this app.
-        let current = st
+        let picture = self.current_job_picture(ui, s);
+        card(ui, "Current printing", |ui| {
+            ui.horizontal(|ui| {
+                job_picture_tile(ui, picture);
+                ui.vertical(|ui| {
+                    self.job_details(ui, s);
+                    (cmd, ask_again) = self.job_buttons(ui, s);
+                });
+            });
+            if let Some(b) = &s.busy {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(b);
+                });
+            }
+        });
+        if let Some(c) = cmd {
+            self.send(c);
+        }
+        if ask_again {
+            self.again = self.again_target();
+        }
+    }
+
+    /// The real picture of the part when the job came from this app: loads it into a
+    /// texture once, and returns it while the printer is still on that file.
+    fn current_job_picture(&mut self, ui: &Ui, s: &LinkState) -> Option<egui::TextureId> {
+        let current = s
+            .status
             .file
             .clone()
             .or_else(|| self.seen_file.as_ref().map(|f| f.0.clone()));
@@ -992,133 +1039,108 @@ impl DevicePage {
                 self.job_picture = Some((job.name.clone(), tex));
             }
         }
-        let picture = self
-            .job_picture
+        self.job_picture
             .as_ref()
             .filter(|(n, _)| current.as_deref().is_none_or(|f| f.ends_with(n.as_str())))
-            .map(|(_, t)| t.id());
-        card(ui, "Current printing", |ui| {
-            ui.horizontal(|ui| {
-                match picture {
-                    Some(id) => {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(150.0, 120.0), Sense::hover());
-                        ui.painter()
-                            .rect_filled(rect, 6.0, Color32::from_rgb(28, 62, 92));
-                        let img =
-                            egui::Rect::from_center_size(rect.center(), egui::vec2(116.0, 116.0));
-                        ui.painter().image(
-                            id,
-                            img,
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                    }
-                    None => thumbnail(ui, egui::vec2(150.0, 120.0)),
-                }
-                ui.vertical(|ui| {
-                    let file = st
-                        .file
-                        .clone()
-                        .or_else(|| self.seen_file.as_ref().map(|f| f.0.clone()));
-                    ui.label(
-                        RichText::new(file.unwrap_or_else(|| "No print".into()))
-                            .size(16.0)
-                            .strong(),
-                    );
-                    if let Some(e) = st.elapsed_s {
-                        ui.label(
-                            RichText::new(format!("Printing for {}", hours_minutes(e)))
-                                .color(theme::TEXT_DIM),
-                        );
-                    }
-                    if let Some(l) = st.layer {
-                        // Some printers report 0 layers; use the count from the job sent from here.
-                        let known = self
-                            .last_job
-                            .as_ref()
-                            .filter(|j| {
-                                st.file
-                                    .as_deref()
-                                    .is_none_or(|f| f.ends_with(j.name.as_str()))
-                            })
-                            .map(|j| j.layers as u32);
-                        let text = match st.total_layers.filter(|t| *t > 0).or(known) {
-                            Some(t) => format!("Layer {l} of {t}"),
-                            None => format!("Layer {l}"),
-                        };
-                        ui.label(RichText::new(text).color(theme::TEXT_DIM));
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(st.state.label())
-                                .color(theme::ACCENT)
-                                .strong(),
-                        );
-                        if let Some(r) = st.remaining_s.filter(|_| st.state.is_active()) {
-                            ui.label(format!("Estimated completion time: {}", completion_time(r)))
-                                .on_hover_text(format!("Your local time ({})", utc_offset_label()));
-                            ui.label(
-                                RichText::new(format!("({} left)", hours_minutes(r)))
-                                    .color(theme::TEXT_DIM),
-                            );
-                        }
-                    });
-                    if let Some(p) = st.progress {
-                        ui.add(
-                            egui::ProgressBar::new(p / 100.0)
-                                .text(format!("{p:.0} %"))
-                                .fill(theme::ACCENT_DARK),
-                        );
-                    }
-                    ui.horizontal(|ui| {
-                        let can = s.connected && s.busy.is_none();
-                        let can_again =
-                            can && !st.state.is_active() && self.again_target().is_some();
-                        if ui
-                            .add_enabled(can_again, egui::Button::new("Print again"))
-                            .on_hover_text("Print the last job again")
-                            .clicked()
-                        {
-                            ask_again = true;
-                        }
-                        match st.state {
-                            JobState::Paused => {
-                                if ui.add_enabled(can, egui::Button::new("Resume")).clicked() {
-                                    cmd = Some(Command::Resume);
-                                }
-                            }
-                            _ => {
-                                let printing = st.state == JobState::Printing;
-                                if ui
-                                    .add_enabled(can && printing, egui::Button::new("Pause"))
-                                    .clicked()
-                                {
-                                    cmd = Some(Command::Pause);
-                                }
-                            }
-                        }
-                        let stop = egui::Button::new(RichText::new("Stop").color(Color32::WHITE))
-                            .fill(Color32::from_rgb(150, 50, 50));
-                        if ui.add_enabled(can && st.state.is_active(), stop).clicked() {
-                            self.pending = Some(Pending::Stop);
-                        }
-                    });
-                });
-            });
-            if let Some(b) = &s.busy {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(b);
-                });
+            .map(|(_, t)| t.id())
+    }
+
+    /// File name, time printing, layer, state with the estimated finish, and progress.
+    fn job_details(&self, ui: &mut Ui, s: &LinkState) {
+        let st = &s.status;
+        let file = st
+            .file
+            .clone()
+            .or_else(|| self.seen_file.as_ref().map(|f| f.0.clone()));
+        ui.label(
+            RichText::new(file.unwrap_or_else(|| "No print".into()))
+                .size(16.0)
+                .strong(),
+        );
+        if let Some(e) = st.elapsed_s {
+            ui.label(
+                RichText::new(format!("Printing for {}", hours_minutes(e))).color(theme::TEXT_DIM),
+            );
+        }
+        if let Some(l) = st.layer {
+            // Some printers report 0 layers; use the count from the job sent from here.
+            let known = self
+                .last_job
+                .as_ref()
+                .filter(|j| {
+                    st.file
+                        .as_deref()
+                        .is_none_or(|f| f.ends_with(j.name.as_str()))
+                })
+                .map(|j| j.layers as u32);
+            let text = match st.total_layers.filter(|t| *t > 0).or(known) {
+                Some(t) => format!("Layer {l} of {t}"),
+                None => format!("Layer {l}"),
+            };
+            ui.label(RichText::new(text).color(theme::TEXT_DIM));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(st.state.label())
+                    .color(theme::ACCENT)
+                    .strong(),
+            );
+            if let Some(r) = st.remaining_s.filter(|_| st.state.is_active()) {
+                ui.label(format!("Estimated completion time: {}", completion_time(r)))
+                    .on_hover_text(format!("Your local time ({})", utc_offset_label()));
+                ui.label(
+                    RichText::new(format!("({} left)", hours_minutes(r))).color(theme::TEXT_DIM),
+                );
             }
         });
-        if let Some(c) = cmd {
-            self.send(c);
+        if let Some(p) = st.progress {
+            ui.add(
+                egui::ProgressBar::new(p / 100.0)
+                    .text(format!("{p:.0} %"))
+                    .fill(theme::ACCENT_DARK),
+            );
         }
-        if ask_again {
-            self.again = self.again_target();
-        }
+    }
+
+    /// Print again, Pause or Resume, and Stop. Stop asks first (sets `pending`); returns
+    /// the Pause/Resume command to send and whether Print again was clicked.
+    fn job_buttons(&mut self, ui: &mut Ui, s: &LinkState) -> (Option<Command>, bool) {
+        let st = &s.status;
+        let mut cmd = None;
+        let mut ask_again = false;
+        ui.horizontal(|ui| {
+            let can = s.connected && s.busy.is_none();
+            let can_again = can && !st.state.is_active() && self.again_target().is_some();
+            if ui
+                .add_enabled(can_again, egui::Button::new("Print again"))
+                .on_hover_text("Print the last job again")
+                .clicked()
+            {
+                ask_again = true;
+            }
+            match st.state {
+                JobState::Paused => {
+                    if ui.add_enabled(can, egui::Button::new("Resume")).clicked() {
+                        cmd = Some(Command::Resume);
+                    }
+                }
+                _ => {
+                    let printing = st.state == JobState::Printing;
+                    if ui
+                        .add_enabled(can && printing, egui::Button::new("Pause"))
+                        .clicked()
+                    {
+                        cmd = Some(Command::Pause);
+                    }
+                }
+            }
+            let stop = egui::Button::new(RichText::new("Stop").color(Color32::WHITE))
+                .fill(Color32::from_rgb(150, 50, 50));
+            if ui.add_enabled(can && st.state.is_active(), stop).clicked() {
+                self.pending = Some(Pending::Stop);
+            }
+        });
+        (cmd, ask_again)
     }
 
     fn send_card(&mut self, ui: &mut Ui, s: &LinkState, job: Option<PrintJob>) {
@@ -1153,7 +1175,7 @@ impl DevicePage {
         });
     }
 
-    /// Temperatures, model fan and printing speed.
+    /// Calibration, temperatures, model fan and printing speed.
     fn settings_card(&mut self, ui: &mut Ui, s: &LinkState) {
         let st = s.status.clone();
         let controls = self.api().is_some_and(|a| a.abilities().controls) && s.connected;
@@ -1161,126 +1183,17 @@ impl DevicePage {
         let self_levelling = levels_itself(self.api());
         let mut calibration_changed = false;
         card(ui, "Print settings", |ui| {
-            // Device details: whether the printer calibrates (levels the bed) before printing.
-            egui::Frame::new()
-                .fill(theme::PANEL)
-                .corner_radius(8)
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        calibration_changed =
-                            calibration_checkbox(ui, &mut self.calibrate, self_levelling).changed();
-                        ui.add_space(12.0);
-                        let note = match (self_levelling, st.printer_calibration) {
-                            (true, Some(true)) => "The printer reports: calibration on".to_string(),
-                            (true, Some(false)) => {
-                                "The printer reports: calibration off".to_string()
-                            }
-                            (true, None) => "Sent to the printer with each print".to_string(),
-                            (false, _) if self.calibrate => {
-                                "The app adds a levelling step to each print".to_string()
-                            }
-                            (false, _) => "No levelling step is added".to_string(),
-                        };
-                        ui.label(RichText::new(note).color(theme::TEXT_DIM));
-                    });
-                });
+            calibration_changed = self.calibration_details(ui, &st, self_levelling);
             ui.add_space(6.0);
             if !controls {
                 ui.label(RichText::new("These controls aren't available for this printer's connection (PrusaLink). Use the printer's screen.").color(theme::TEXT_DIM));
             }
             ui.add_enabled_ui(controls, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if let Some(v) = temp_tile(
-                        ui,
-                        "Nozzle Temp",
-                        st.nozzle,
-                        st.nozzle_target,
-                        300.0,
-                        &mut self.nozzle_edit,
-                    ) {
-                        cmds.push(Command::SetNozzle(v));
-                    }
-                    if let Some(v) = temp_tile(
-                        ui,
-                        "Bed Temp",
-                        st.bed,
-                        st.bed_target,
-                        120.0,
-                        &mut self.bed_edit,
-                    ) {
-                        cmds.push(Command::SetBed(v));
-                    }
-                });
+                self.temperature_tiles(ui, &st, &mut cmds);
                 ui.add_space(6.0);
-                tile(ui, 300.0, |ui| {
-                    let shown = self.fan_edit.or(st.fan_percent).unwrap_or(0.0);
-                    if shown > 0.0 {
-                        self.last_fan = shown;
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("Model fan").size(15.0));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let mut on = shown > 0.0;
-                            if toggle(ui, &mut on).clicked() {
-                                let p = if on { self.last_fan.max(10.0) } else { 0.0 };
-                                cmds.push(Command::SetFan(p));
-                                self.fan_edit = Some(p);
-                            }
-                        });
-                    });
-                    let mut v = shown;
-                    ui.label(format!("Wind speed: {v:.0}%"));
-                    ui.spacing_mut().slider_width = ui.available_width();
-                    let r = ui.add(egui::Slider::new(&mut v, 0.0..=100.0).show_value(false));
-                    if r.changed() {
-                        self.fan_edit = Some(v);
-                    }
-                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                        cmds.push(Command::SetFan(v));
-                    }
-                    // Once the printer reports the new value, follow it again.
-                    if !r.dragged()
-                        && self
-                            .fan_edit
-                            .is_some_and(|f| st.fan_percent.is_some_and(|p| (p - f).abs() < 1.5))
-                    {
-                        self.fan_edit = None;
-                    }
-                });
+                self.model_fan_tile(ui, &st, &mut cmds);
                 ui.add_space(6.0);
-                tile(ui, ui.available_width(), |ui| {
-                    ui.label(RichText::new("Printing speed").size(15.0));
-                    ui.add_space(4.0);
-                    let current = self.speed_mode.or_else(|| {
-                        let p = st.speed_percent?.round() as u32;
-                        SPEED_MODES.iter().rposition(|(_, v)| *v == p)
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        for (i, (label, pct)) in SPEED_MODES.iter().enumerate() {
-                            let r = ui.add(
-                                egui::Button::selectable(
-                                    current == Some(i),
-                                    RichText::new(*label).size(15.0),
-                                )
-                                .min_size(egui::vec2(120.0, 34.0)),
-                            );
-                            if r.on_hover_text(format!("{pct}% of the sliced speed"))
-                                .clicked()
-                            {
-                                self.speed_mode = Some(i);
-                                cmds.push(Command::SetSpeed(*pct));
-                            }
-                        }
-                    });
-                    if let Some(p) = st.speed_percent {
-                        ui.label(
-                            RichText::new(format!("The printer reports {p:.0}% speed."))
-                                .color(theme::TEXT_DIM)
-                                .small(),
-                        );
-                    }
-                });
+                self.printing_speed_tile(ui, &st, &mut cmds);
             });
         });
         // A printer with its own calibration setting is told straight away.
@@ -1292,158 +1205,349 @@ impl DevicePage {
         }
     }
 
-    fn tabs_card(&mut self, ui: &mut Ui, s: &LinkState) {
-        let abilities = self.api().map(|a| a.abilities());
-        let mut cmds = Vec::new();
-        egui::Frame::new().fill(theme::CARD).corner_radius(8).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
+    /// Device details: whether the printer calibrates (levels the bed) before printing,
+    /// with a note on what that means for this printer. Returns whether the box changed.
+    fn calibration_details(
+        &mut self,
+        ui: &mut Ui,
+        st: &PrinterStatus,
+        self_levelling: bool,
+    ) -> bool {
+        let mut changed = false;
+        egui::Frame::new()
+            .fill(theme::PANEL)
+            .corner_radius(8)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    changed =
+                        calibration_checkbox(ui, &mut self.calibrate, self_levelling).changed();
+                    ui.add_space(12.0);
+                    let note = match (self_levelling, st.printer_calibration) {
+                        (true, Some(true)) => "The printer reports: calibration on".to_string(),
+                        (true, Some(false)) => "The printer reports: calibration off".to_string(),
+                        (true, None) => "Sent to the printer with each print".to_string(),
+                        (false, _) if self.calibrate => {
+                            "The app adds a levelling step to each print".to_string()
+                        }
+                        (false, _) => "No levelling step is added".to_string(),
+                    };
+                    ui.label(RichText::new(note).color(theme::TEXT_DIM));
+                });
+            });
+        changed
+    }
+
+    /// The Nozzle Temp and Bed Temp tiles side by side.
+    fn temperature_tiles(&mut self, ui: &mut Ui, st: &PrinterStatus, cmds: &mut Vec<Command>) {
+        ui.horizontal_wrapped(|ui| {
+            if let Some(v) = temp_tile(
+                ui,
+                "Nozzle Temp",
+                st.nozzle,
+                st.nozzle_target,
+                300.0,
+                &mut self.nozzle_edit,
+            ) {
+                cmds.push(Command::SetNozzle(v));
+            }
+            if let Some(v) = temp_tile(
+                ui,
+                "Bed Temp",
+                st.bed,
+                st.bed_target,
+                120.0,
+                &mut self.bed_edit,
+            ) {
+                cmds.push(Command::SetBed(v));
+            }
+        });
+    }
+
+    /// The Model fan tile: an on/off toggle and a wind speed slider.
+    fn model_fan_tile(&mut self, ui: &mut Ui, st: &PrinterStatus, cmds: &mut Vec<Command>) {
+        tile(ui, 300.0, |ui| {
+            let shown = self.fan_edit.or(st.fan_percent).unwrap_or(0.0);
+            if shown > 0.0 {
+                self.last_fan = shown;
+            }
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 18.0;
-                for (t, label) in [(Tab::Xyz, "XYZ Control"), (Tab::Files, "Local Files"), (Tab::Records, "Records"), (Tab::Timelapse, "Timelapse Video")] {
-                    let text = RichText::new(label).size(15.0);
-                    let text = if self.tab == t { text.color(theme::ACCENT).strong() } else { text };
-                    if ui.add(egui::Button::new(text).frame(false)).clicked() {
-                        self.tab = t;
+                ui.label(RichText::new("Model fan").size(15.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut on = shown > 0.0;
+                    if toggle(ui, &mut on).clicked() {
+                        let p = if on { self.last_fan.max(10.0) } else { 0.0 };
+                        cmds.push(Command::SetFan(p));
+                        self.fan_edit = Some(p);
+                    }
+                });
+            });
+            let mut v = shown;
+            ui.label(format!("Wind speed: {v:.0}%"));
+            ui.spacing_mut().slider_width = ui.available_width();
+            let r = ui.add(egui::Slider::new(&mut v, 0.0..=100.0).show_value(false));
+            if r.changed() {
+                self.fan_edit = Some(v);
+            }
+            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                cmds.push(Command::SetFan(v));
+            }
+            // Once the printer reports the new value, follow it again.
+            if !r.dragged()
+                && self
+                    .fan_edit
+                    .is_some_and(|f| st.fan_percent.is_some_and(|p| (p - f).abs() < 1.5))
+            {
+                self.fan_edit = None;
+            }
+        });
+    }
+
+    /// The Printing speed tile: one button per speed mode, and the speed the printer
+    /// reports.
+    fn printing_speed_tile(&mut self, ui: &mut Ui, st: &PrinterStatus, cmds: &mut Vec<Command>) {
+        tile(ui, ui.available_width(), |ui| {
+            ui.label(RichText::new("Printing speed").size(15.0));
+            ui.add_space(4.0);
+            let current = self.speed_mode.or_else(|| {
+                let p = st.speed_percent?.round() as u32;
+                SPEED_MODES.iter().rposition(|(_, v)| *v == p)
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (i, (label, pct)) in SPEED_MODES.iter().enumerate() {
+                    let r = ui.add(
+                        egui::Button::selectable(
+                            current == Some(i),
+                            RichText::new(*label).size(15.0),
+                        )
+                        .min_size(egui::vec2(120.0, 34.0)),
+                    );
+                    if r.on_hover_text(format!("{pct}% of the sliced speed"))
+                        .clicked()
+                    {
+                        self.speed_mode = Some(i);
+                        cmds.push(Command::SetSpeed(*pct));
                     }
                 }
             });
-            ui.separator();
-            match self.tab {
-                Tab::Xyz => {
-                    let can = abilities.as_ref().is_some_and(|a| a.controls) && s.connected && !s.status.state.is_active();
-                    if !can {
-                        let why = if s.status.state.is_active() { "Moving the print head is locked while printing." } else { "Not available for this connection." };
-                        ui.label(RichText::new(why).color(theme::TEXT_DIM));
-                    }
-                    ui.add_enabled_ui(can, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Step");
-                            for step in JOG_STEPS {
-                                if ui.add(egui::Button::selectable(self.jog_step == step, format!("{step:.0} mm")).min_size(egui::vec2(70.0, 30.0))).clicked() {
-                                    self.jog_step = step;
-                                }
-                            }
-                        });
-                        ui.add_space(8.0);
-                        let step = self.jog_step;
-                        let b = |ui: &mut Ui, label: &str, hint: &str| {
-                            ui.add(egui::Button::new(RichText::new(label).size(15.0)).min_size(egui::vec2(64.0, 40.0))).on_hover_text(hint).clicked()
-                        };
-                        egui::Grid::new("jog_grid").spacing([8.0, 8.0]).show(ui, |ui| {
-                            ui.label("");
-                            if b(ui, "Y+", "Move towards the back") {
-                                cmds.push(Command::Jog { axis: 'Y', mm: step });
-                            }
-                            ui.label("      ");
-                            if b(ui, "Z+", "Move the nozzle up (or the bed down)") {
-                                cmds.push(Command::Jog { axis: 'Z', mm: step });
-                            }
-                            ui.end_row();
-                            if b(ui, "X−", "Move left") {
-                                cmds.push(Command::Jog { axis: 'X', mm: -step });
-                            }
-                            if b(ui, "Home", "Send every axis home (G28)") {
-                                cmds.push(Command::Home);
-                            }
-                            if b(ui, "X+", "Move right") {
-                                cmds.push(Command::Jog { axis: 'X', mm: step });
-                            }
-                            ui.label("");
-                            ui.label("");
-                            ui.end_row();
-                            ui.label("");
-                            if b(ui, "Y−", "Move towards the front") {
-                                cmds.push(Command::Jog { axis: 'Y', mm: -step });
-                            }
-                            ui.label("");
-                            ui.label("");
-                            if b(ui, "Z−", "Move the nozzle down (or the bed up)") {
-                                cmds.push(Command::Jog { axis: 'Z', mm: -step });
-                            }
-                            ui.end_row();
-                        });
-                        ui.label(RichText::new("Home the printer first after it has been switched on.").color(theme::TEXT_DIM).small());
-                    });
+            if let Some(p) = st.speed_percent {
+                ui.label(
+                    RichText::new(format!("The printer reports {p:.0}% speed."))
+                        .color(theme::TEXT_DIM)
+                        .small(),
+                );
+            }
+        });
+    }
+
+    /// The tabbed card under the printer: XYZ Control, Local Files, Records and
+    /// Timelapse Video.
+    fn tabs_card(&mut self, ui: &mut Ui, s: &LinkState) {
+        let abilities = self.api().map(|a| a.abilities());
+        let controls = abilities.as_ref().is_some_and(|a| a.controls);
+        let files = abilities.as_ref().is_some_and(|a| a.files);
+        let history = abilities.as_ref().is_some_and(|a| a.history);
+        let mut cmds = Vec::new();
+        egui::Frame::new()
+            .fill(theme::CARD)
+            .corner_radius(8)
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                self.tab_strip(ui);
+                ui.separator();
+                match self.tab {
+                    Tab::Xyz => self.xyz_control_tab(ui, s, controls, &mut cmds),
+                    Tab::Files => self.local_files_tab(ui, s, files, &mut cmds),
+                    Tab::Records => self.records_tab(ui, s, history, &mut cmds),
+                    Tab::Timelapse => timelapse_tab(ui),
                 }
-                Tab::Files => {
-                    if !abilities.as_ref().is_some_and(|a| a.files) {
-                        ui.label(RichText::new("A printer on a USB cable has no file list. Send a sliced plate instead.").color(theme::TEXT_DIM));
-                    } else {
-                        if !self.asked_files && s.connected {
-                            self.asked_files = true;
-                            cmds.push(Command::RefreshFiles);
-                        }
-                        if ui.button("Refresh").clicked() {
-                            cmds.push(Command::RefreshFiles);
-                        }
-                        match &s.files {
-                            None => {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label("Asking the printer for its files…");
-                                });
-                            }
-                            Some(files) if files.is_empty() => {
-                                ui.label(RichText::new("No print files on the printer.").color(theme::TEXT_DIM));
-                            }
-                            Some(files) => {
-                                let busy = s.status.state.is_active() || s.busy.is_some() || !s.connected;
-                                egui::Grid::new("files_grid").striped(true).num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
-                                    for f in files.iter().take(200) {
-                                        ui.label(&f.name);
-                                        ui.label(RichText::new(f.size.map(file_size).unwrap_or_default()).color(theme::TEXT_DIM));
-                                        ui.label(RichText::new(f.modified.map(date_time).unwrap_or_default()).color(theme::TEXT_DIM));
-                                        if ui.add_enabled(!busy, egui::Button::new("Print")).clicked() {
-                                            self.pending = Some(Pending::PrintFile { name: f.name.clone(), path: f.path.clone() });
-                                        }
-                                        ui.end_row();
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-                Tab::Records => {
-                    let from_printer = abilities.as_ref().is_some_and(|a| a.history);
-                    if from_printer {
-                        if !self.asked_history && s.connected {
-                            self.asked_history = true;
-                            cmds.push(Command::RefreshHistory);
-                        }
-                        if ui.button("Refresh").clicked() {
-                            cmds.push(Command::RefreshHistory);
-                        }
-                    }
-                    let rows = merge_records(&self.records, s.history.as_deref().unwrap_or(&[]));
-                    if rows.is_empty() {
-                        let text = if from_printer && s.history.is_none() {
-                            "Asking the printer for its records…"
-                        } else {
-                            "No records yet. Prints that finish while this app is connected are listed here."
-                        };
-                        ui.label(RichText::new(text).color(theme::TEXT_DIM));
-                    } else {
-                        egui::Grid::new("records_grid").striped(true).num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
-                            for r in rows.iter().take(100) {
-                                ui.label(&r.name);
-                                ui.label(RichText::new(&r.outcome).color(theme::TEXT_DIM));
-                                ui.label(RichText::new(r.ended.map(date_time).unwrap_or_default()).color(theme::TEXT_DIM));
-                                ui.label(RichText::new(r.duration_s.map(hours_minutes).unwrap_or_default()).color(theme::TEXT_DIM));
-                                ui.end_row();
-                            }
-                        });
-                    }
-                }
-                Tab::Timelapse => {
-                    ui.label(
-                        RichText::new("Timelapse videos stay on the printer for now: how the printer shares them isn't publicly documented, so this app can't list or download them yet. You can still watch the live camera on the left.")
-                            .color(theme::TEXT_DIM),
-                    );
+            });
+        for c in cmds {
+            self.send(c);
+        }
+    }
+
+    /// The row of tab names; the open one is highlighted.
+    fn tab_strip(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 18.0;
+            for (t, label) in [
+                (Tab::Xyz, "XYZ Control"),
+                (Tab::Files, "Local Files"),
+                (Tab::Records, "Records"),
+                (Tab::Timelapse, "Timelapse Video"),
+            ] {
+                let text = RichText::new(label).size(15.0);
+                let text = if self.tab == t {
+                    text.color(theme::ACCENT).strong()
+                } else {
+                    text
+                };
+                if ui.add(egui::Button::new(text).frame(false)).clicked() {
+                    self.tab = t;
                 }
             }
         });
-        for c in cmds {
-            self.send(c);
+    }
+
+    /// XYZ Control: the jog step, the jog pad and a reminder to home first. Locked while
+    /// printing or when the connection has no controls.
+    fn xyz_control_tab(
+        &mut self,
+        ui: &mut Ui,
+        s: &LinkState,
+        controls: bool,
+        cmds: &mut Vec<Command>,
+    ) {
+        let can = controls && s.connected && !s.status.state.is_active();
+        if !can {
+            let why = if s.status.state.is_active() {
+                "Moving the print head is locked while printing."
+            } else {
+                "Not available for this connection."
+            };
+            ui.label(RichText::new(why).color(theme::TEXT_DIM));
+        }
+        ui.add_enabled_ui(can, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Step");
+                for step in JOG_STEPS {
+                    if ui
+                        .add(
+                            egui::Button::selectable(
+                                self.jog_step == step,
+                                format!("{step:.0} mm"),
+                            )
+                            .min_size(egui::vec2(70.0, 30.0)),
+                        )
+                        .clicked()
+                    {
+                        self.jog_step = step;
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            jog_pad(ui, self.jog_step, cmds);
+            ui.label(
+                RichText::new("Home the printer first after it has been switched on.")
+                    .color(theme::TEXT_DIM)
+                    .small(),
+            );
+        });
+    }
+
+    /// Local Files: the files stored on the printer, each with a Print button (which asks
+    /// first). Asks the printer for the list the first time the tab is shown.
+    fn local_files_tab(
+        &mut self,
+        ui: &mut Ui,
+        s: &LinkState,
+        files: bool,
+        cmds: &mut Vec<Command>,
+    ) {
+        if !files {
+            ui.label(
+                RichText::new(
+                    "A printer on a USB cable has no file list. Send a sliced plate instead.",
+                )
+                .color(theme::TEXT_DIM),
+            );
+            return;
+        }
+        if !self.asked_files && s.connected {
+            self.asked_files = true;
+            cmds.push(Command::RefreshFiles);
+        }
+        if ui.button("Refresh").clicked() {
+            cmds.push(Command::RefreshFiles);
+        }
+        match &s.files {
+            None => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Asking the printer for its files…");
+                });
+            }
+            Some(files) if files.is_empty() => {
+                ui.label(RichText::new("No print files on the printer.").color(theme::TEXT_DIM));
+            }
+            Some(files) => {
+                let busy = s.status.state.is_active() || s.busy.is_some() || !s.connected;
+                egui::Grid::new("files_grid")
+                    .striped(true)
+                    .num_columns(4)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        for f in files.iter().take(200) {
+                            ui.label(&f.name);
+                            ui.label(
+                                RichText::new(f.size.map(file_size).unwrap_or_default())
+                                    .color(theme::TEXT_DIM),
+                            );
+                            ui.label(
+                                RichText::new(f.modified.map(date_time).unwrap_or_default())
+                                    .color(theme::TEXT_DIM),
+                            );
+                            if ui.add_enabled(!busy, egui::Button::new("Print")).clicked() {
+                                self.pending = Some(Pending::PrintFile {
+                                    name: f.name.clone(),
+                                    path: f.path.clone(),
+                                });
+                            }
+                            ui.end_row();
+                        }
+                    });
+            }
+        }
+    }
+
+    /// Records: prints this app saw finish, plus the printer's own history when it keeps
+    /// one, newest first.
+    fn records_tab(
+        &mut self,
+        ui: &mut Ui,
+        s: &LinkState,
+        from_printer: bool,
+        cmds: &mut Vec<Command>,
+    ) {
+        if from_printer {
+            if !self.asked_history && s.connected {
+                self.asked_history = true;
+                cmds.push(Command::RefreshHistory);
+            }
+            if ui.button("Refresh").clicked() {
+                cmds.push(Command::RefreshHistory);
+            }
+        }
+        let rows = merge_records(&self.records, s.history.as_deref().unwrap_or(&[]));
+        if rows.is_empty() {
+            let text = if from_printer && s.history.is_none() {
+                "Asking the printer for its records…"
+            } else {
+                "No records yet. Prints that finish while this app is connected are listed here."
+            };
+            ui.label(RichText::new(text).color(theme::TEXT_DIM));
+        } else {
+            egui::Grid::new("records_grid")
+                .striped(true)
+                .num_columns(4)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    for r in rows.iter().take(100) {
+                        ui.label(&r.name);
+                        ui.label(RichText::new(&r.outcome).color(theme::TEXT_DIM));
+                        ui.label(
+                            RichText::new(r.ended.map(date_time).unwrap_or_default())
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.label(
+                            RichText::new(r.duration_s.map(hours_minutes).unwrap_or_default())
+                                .color(theme::TEXT_DIM),
+                        );
+                        ui.end_row();
+                    }
+                });
         }
     }
 
@@ -1721,6 +1825,97 @@ fn thumbnail(ui: &mut Ui, size: egui::Vec2) {
     p.line_segment(
         [c, c + egui::vec2(-r * 0.87, r * 0.5)],
         egui::Stroke::new(1.5, Color32::from_rgb(40, 110, 160)),
+    );
+}
+
+/// The picture beside the current job: the part's own picture on a blue tile when
+/// there is one, otherwise the plain placeholder.
+fn job_picture_tile(ui: &mut Ui, picture: Option<egui::TextureId>) {
+    match picture {
+        Some(id) => {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(150.0, 120.0), Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 6.0, Color32::from_rgb(28, 62, 92));
+            let img = egui::Rect::from_center_size(rect.center(), egui::vec2(116.0, 116.0));
+            ui.painter().image(
+                id,
+                img,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+        None => thumbnail(ui, egui::vec2(150.0, 120.0)),
+    }
+}
+
+/// The jog pad: Y+/Y− and X−/Home/X+ in a cross, with Z+ and Z− to the right. Each
+/// click queues a move of `step` mm (or Home).
+fn jog_pad(ui: &mut Ui, step: f32, cmds: &mut Vec<Command>) {
+    let b = |ui: &mut Ui, label: &str, hint: &str| {
+        ui.add(egui::Button::new(RichText::new(label).size(15.0)).min_size(egui::vec2(64.0, 40.0)))
+            .on_hover_text(hint)
+            .clicked()
+    };
+    egui::Grid::new("jog_grid")
+        .spacing([8.0, 8.0])
+        .show(ui, |ui| {
+            ui.label("");
+            if b(ui, "Y+", "Move towards the back") {
+                cmds.push(Command::Jog {
+                    axis: 'Y',
+                    mm: step,
+                });
+            }
+            ui.label("      ");
+            if b(ui, "Z+", "Move the nozzle up (or the bed down)") {
+                cmds.push(Command::Jog {
+                    axis: 'Z',
+                    mm: step,
+                });
+            }
+            ui.end_row();
+            if b(ui, "X−", "Move left") {
+                cmds.push(Command::Jog {
+                    axis: 'X',
+                    mm: -step,
+                });
+            }
+            if b(ui, "Home", "Send every axis home (G28)") {
+                cmds.push(Command::Home);
+            }
+            if b(ui, "X+", "Move right") {
+                cmds.push(Command::Jog {
+                    axis: 'X',
+                    mm: step,
+                });
+            }
+            ui.label("");
+            ui.label("");
+            ui.end_row();
+            ui.label("");
+            if b(ui, "Y−", "Move towards the front") {
+                cmds.push(Command::Jog {
+                    axis: 'Y',
+                    mm: -step,
+                });
+            }
+            ui.label("");
+            ui.label("");
+            if b(ui, "Z−", "Move the nozzle down (or the bed up)") {
+                cmds.push(Command::Jog {
+                    axis: 'Z',
+                    mm: -step,
+                });
+            }
+            ui.end_row();
+        });
+}
+
+/// Timelapse Video: a note that the videos can't be listed yet.
+fn timelapse_tab(ui: &mut Ui) {
+    ui.label(
+        RichText::new("Timelapse videos stay on the printer for now: how the printer shares them isn't publicly documented, so this app can't list or download them yet. You can still watch the live camera on the left.")
+            .color(theme::TEXT_DIM),
     );
 }
 

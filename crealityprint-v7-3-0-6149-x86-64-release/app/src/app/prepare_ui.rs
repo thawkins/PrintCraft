@@ -424,7 +424,38 @@ impl PrintCraftApp {
 
     /// Global process settings, grouped like the original's Process panel.
     fn process_settings(&mut self, ui: &mut Ui) {
-        // The profile: one of the quality presets, or "Custom" once edited.
+        self.process_profile_picker(ui);
+        ui.add_space(6.0);
+        let before = self.settings.clone();
+        let advanced = self.advanced;
+        let s = &mut self.settings;
+
+        layer_height_group(ui, s, advanced);
+        seam_group(ui, s);
+        walls_and_surfaces_group(ui, s, advanced);
+        infill_group(ui, s);
+        support_group(ui, s);
+        adhesion_group(ui, s);
+        speed_group(ui, s, advanced);
+        if advanced {
+            cooling_and_travel_group(ui, s);
+            special_mode_group(ui, s);
+        } else {
+            ui.label(
+                RichText::new(
+                    "Turn on Advanced for speeds, cooling, z-hop, fuzzy skin and spiral vase.",
+                )
+                .color(theme::TEXT_DIM)
+                .small(),
+            );
+        }
+        if self.settings != before {
+            self.quality = Quality::ALL.into_iter().find(|q| q.matches(&self.settings));
+        }
+    }
+
+    /// The profile: one of the quality presets, or "Custom" once edited.
+    fn process_profile_picker(&mut self, ui: &mut Ui) {
         let shown = match self.quality {
             Some(q) => q.label().to_string(),
             None => "Custom".to_string(),
@@ -443,190 +474,208 @@ impl PrintCraftApp {
                     }
                 }
             });
-        ui.add_space(6.0);
-        let before = self.settings.clone();
-        let advanced = self.advanced;
-        let s = &mut self.settings;
+    }
+}
 
-        group(ui, "Layer height", |ui| {
+/// Layer height, plus the first layer's height in Advanced.
+fn layer_height_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
+    group(ui, "Layer height", |ui| {
+        row(
+            ui,
+            "Layer height",
+            mm(&mut s.layer_height, limits::LAYER_HEIGHT, 0.01),
+        );
+        if advanced {
             row(
                 ui,
-                "Layer height",
-                mm(&mut s.layer_height, limits::LAYER_HEIGHT, 0.01),
+                "First layer height",
+                mm(&mut s.first_layer_height, limits::FIRST_LAYER_HEIGHT, 0.01),
             );
-            if advanced {
-                row(
-                    ui,
-                    "First layer height",
-                    mm(&mut s.first_layer_height, limits::FIRST_LAYER_HEIGHT, 0.01),
-                );
-            }
-        });
-        group(ui, "Seam", |ui| {
-            ui.label("Seam position");
-            egui::ComboBox::from_id_salt("seam")
-                .selected_text(s.seam.label())
-                .show_ui(ui, |ui| {
-                    for p in SeamPosition::ALL {
-                        ui.selectable_value(&mut s.seam, p, p.label());
-                    }
-                });
-            ui.end_row();
-        });
-        group(ui, "Walls and surfaces", |ui| {
+        }
+    });
+}
+
+/// Where each layer's outer wall starts and ends.
+fn seam_group(ui: &mut Ui, s: &mut PrintSettings) {
+    group(ui, "Seam", |ui| {
+        ui.label("Seam position");
+        egui::ComboBox::from_id_salt("seam")
+            .selected_text(s.seam.label())
+            .show_ui(ui, |ui| {
+                for p in SeamPosition::ALL {
+                    ui.selectable_value(&mut s.seam, p, p.label());
+                }
+            });
+        ui.end_row();
+    });
+}
+
+/// Wall and top/bottom layer counts, ironing, fuzzy top and (Advanced) fuzzy skin.
+fn walls_and_surfaces_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
+    group(ui, "Walls and surfaces", |ui| {
+        row(
+            ui,
+            "Walls",
+            egui::DragValue::new(&mut s.walls).range(limits::WALLS),
+        );
+        row(
+            ui,
+            "Top layers",
+            egui::DragValue::new(&mut s.top_layers).range(limits::SOLID_LAYERS),
+        );
+        row(
+            ui,
+            "Bottom layers",
+            egui::DragValue::new(&mut s.bottom_layers).range(limits::SOLID_LAYERS),
+        );
+        row(
+            ui,
+            "Ironing (smooth tops)",
+            egui::Checkbox::without_text(&mut s.ironing),
+        );
+        ui.label("Fuzzy top (textured top)").on_hover_text(
+            "While laying the visible top surface, the nozzle randomly lifts by up to the amount below, for a textured, matte top. Ironing is skipped while this is on.",
+        );
+        ui.checkbox(&mut s.fuzzy_top, "");
+        ui.end_row();
+        if s.fuzzy_top {
             row(
                 ui,
-                "Walls",
-                egui::DragValue::new(&mut s.walls).range(limits::WALLS),
+                "Fuzzy top amount",
+                mm(&mut s.fuzzy_top_mm, limits::FUZZY_TOP_MM, 0.01),
             );
+        }
+        if advanced {
             row(
                 ui,
-                "Top layers",
-                egui::DragValue::new(&mut s.top_layers).range(limits::SOLID_LAYERS),
+                "Fuzzy skin",
+                egui::Checkbox::without_text(&mut s.fuzzy_skin),
             );
+        }
+    });
+}
+
+/// Infill density and pattern.
+fn infill_group(ui: &mut Ui, s: &mut PrintSettings) {
+    group(ui, "Infill", |ui| {
+        row(
+            ui,
+            "Density",
+            egui::DragValue::new(&mut s.infill_percent)
+                .range(limits::INFILL_PERCENT)
+                .speed(1.0)
+                .fixed_decimals(0)
+                .suffix(" %"),
+        );
+        ui.label("Pattern");
+        egui::ComboBox::from_id_salt("infill_pattern")
+            .selected_text(s.infill_pattern.label())
+            .show_ui(ui, |ui| {
+                for p in InfillPattern::ALL {
+                    ui.selectable_value(&mut s.infill_pattern, p, p.label());
+                }
+            });
+        ui.end_row();
+    });
+}
+
+/// The support switch, and its overhang angle and placement once it is on.
+fn support_group(ui: &mut Ui, s: &mut PrintSettings) {
+    group(ui, "Support", |ui| {
+        row(
+            ui,
+            "Enable support",
+            egui::Checkbox::without_text(&mut s.supports),
+        );
+        if s.supports {
             row(
                 ui,
-                "Bottom layers",
-                egui::DragValue::new(&mut s.bottom_layers).range(limits::SOLID_LAYERS),
-            );
-            row(
-                ui,
-                "Ironing (smooth tops)",
-                egui::Checkbox::without_text(&mut s.ironing),
-            );
-            ui.label("Fuzzy top (textured top)").on_hover_text(
-                "While laying the visible top surface, the nozzle randomly lifts by up to the amount below, for a textured, matte top. Ironing is skipped while this is on.",
-            );
-            ui.checkbox(&mut s.fuzzy_top, "");
-            ui.end_row();
-            if s.fuzzy_top {
-                row(
-                    ui,
-                    "Fuzzy top amount",
-                    mm(&mut s.fuzzy_top_mm, limits::FUZZY_TOP_MM, 0.01),
-                );
-            }
-            if advanced {
-                row(
-                    ui,
-                    "Fuzzy skin",
-                    egui::Checkbox::without_text(&mut s.fuzzy_skin),
-                );
-            }
-        });
-        group(ui, "Infill", |ui| {
-            row(
-                ui,
-                "Density",
-                egui::DragValue::new(&mut s.infill_percent)
-                    .range(limits::INFILL_PERCENT)
+                "Overhang angle",
+                egui::DragValue::new(&mut s.support_angle)
+                    .range(limits::SUPPORT_ANGLE)
                     .speed(1.0)
-                    .fixed_decimals(0)
-                    .suffix(" %"),
+                    .suffix("°"),
             );
-            ui.label("Pattern");
-            egui::ComboBox::from_id_salt("infill_pattern")
-                .selected_text(s.infill_pattern.label())
-                .show_ui(ui, |ui| {
-                    for p in InfillPattern::ALL {
-                        ui.selectable_value(&mut s.infill_pattern, p, p.label());
-                    }
-                });
-            ui.end_row();
-        });
-        group(ui, "Support", |ui| {
             row(
                 ui,
-                "Enable support",
-                egui::Checkbox::without_text(&mut s.supports),
+                "On build plate only",
+                egui::Checkbox::without_text(&mut s.supports_on_plate_only),
             );
-            if s.supports {
-                row(
-                    ui,
-                    "Overhang angle",
-                    egui::DragValue::new(&mut s.support_angle)
-                        .range(limits::SUPPORT_ANGLE)
-                        .speed(1.0)
-                        .suffix("°"),
-                );
-                row(
-                    ui,
-                    "On build plate only",
-                    egui::Checkbox::without_text(&mut s.supports_on_plate_only),
-                );
-            }
-        });
-        group(ui, "Adhesion", |ui| {
-            ui.label("Type");
-            egui::ComboBox::from_id_salt("adhesion")
-                .selected_text(s.adhesion.label())
-                .show_ui(ui, |ui| {
-                    for a in Adhesion::ALL {
-                        ui.selectable_value(&mut s.adhesion, a, a.label());
-                    }
-                });
-            ui.end_row();
-        });
-        group(ui, "Speed", |ui| {
+        }
+    });
+}
+
+/// Skirt, brim or nothing around the first layer.
+fn adhesion_group(ui: &mut Ui, s: &mut PrintSettings) {
+    group(ui, "Adhesion", |ui| {
+        ui.label("Type");
+        egui::ComboBox::from_id_salt("adhesion")
+            .selected_text(s.adhesion.label())
+            .show_ui(ui, |ui| {
+                for a in Adhesion::ALL {
+                    ui.selectable_value(&mut s.adhesion, a, a.label());
+                }
+            });
+        ui.end_row();
+    });
+}
+
+/// Print speed, plus first layer and travel speeds in Advanced.
+fn speed_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
+    group(ui, "Speed", |ui| {
+        row(
+            ui,
+            "Print speed",
+            egui::DragValue::new(&mut s.print_speed)
+                .range(limits::PRINT_SPEED)
+                .speed(1.0)
+                .suffix(" mm/s"),
+        );
+        if advanced {
             row(
                 ui,
-                "Print speed",
-                egui::DragValue::new(&mut s.print_speed)
-                    .range(limits::PRINT_SPEED)
+                "First layer speed",
+                egui::DragValue::new(&mut s.first_layer_speed)
+                    .range(limits::FIRST_LAYER_SPEED)
                     .speed(1.0)
                     .suffix(" mm/s"),
             );
-            if advanced {
-                row(
-                    ui,
-                    "First layer speed",
-                    egui::DragValue::new(&mut s.first_layer_speed)
-                        .range(limits::FIRST_LAYER_SPEED)
-                        .speed(1.0)
-                        .suffix(" mm/s"),
-                );
-                row(
-                    ui,
-                    "Travel speed",
-                    egui::DragValue::new(&mut s.travel_speed)
-                        .range(limits::TRAVEL_SPEED)
-                        .speed(1.0)
-                        .suffix(" mm/s"),
-                );
-            }
-        });
-        if advanced {
-            group(ui, "Cooling and travel", |ui| {
-                row(
-                    ui,
-                    "Minimum layer time",
-                    egui::DragValue::new(&mut s.min_layer_time)
-                        .range(limits::MIN_LAYER_TIME)
-                        .speed(0.5)
-                        .suffix(" s"),
-                );
-                row(ui, "Z-hop", mm(&mut s.z_hop, limits::Z_HOP, 0.05));
-            });
-            group(ui, "Special mode", |ui| {
-                row(
-                    ui,
-                    "Spiral vase",
-                    egui::Checkbox::without_text(&mut s.vase_mode),
-                );
-            });
-        } else {
-            ui.label(
-                RichText::new(
-                    "Turn on Advanced for speeds, cooling, z-hop, fuzzy skin and spiral vase.",
-                )
-                .color(theme::TEXT_DIM)
-                .small(),
+            row(
+                ui,
+                "Travel speed",
+                egui::DragValue::new(&mut s.travel_speed)
+                    .range(limits::TRAVEL_SPEED)
+                    .speed(1.0)
+                    .suffix(" mm/s"),
             );
         }
-        if self.settings != before {
-            self.quality = Quality::ALL.into_iter().find(|q| q.matches(&self.settings));
-        }
-    }
+    });
+}
+
+/// Minimum layer time and z-hop (Advanced only).
+fn cooling_and_travel_group(ui: &mut Ui, s: &mut PrintSettings) {
+    group(ui, "Cooling and travel", |ui| {
+        row(
+            ui,
+            "Minimum layer time",
+            egui::DragValue::new(&mut s.min_layer_time)
+                .range(limits::MIN_LAYER_TIME)
+                .speed(0.5)
+                .suffix(" s"),
+        );
+        row(ui, "Z-hop", mm(&mut s.z_hop, limits::Z_HOP, 0.05));
+    });
+}
+
+/// Spiral vase mode (Advanced only).
+fn special_mode_group(ui: &mut Ui, s: &mut PrintSettings) {
+    group(ui, "Special mode", |ui| {
+        row(
+            ui,
+            "Spiral vase",
+            egui::Checkbox::without_text(&mut s.vase_mode),
+        );
+    });
 }
 
 /// A titled group with an accent bar, then label / value rows.
