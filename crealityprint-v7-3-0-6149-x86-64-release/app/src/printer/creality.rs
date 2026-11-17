@@ -14,7 +14,7 @@ use super::{
 };
 use serde_json::{json, Value};
 use std::io::ErrorKind;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use tungstenite::{Message, WebSocket};
 
@@ -125,13 +125,7 @@ pub fn apply_message(s: &mut PrinterStatus, v: &Value) {
 }
 
 fn open(host: &str) -> Result<WebSocket<TcpStream>, String> {
-    let addr = (host, WS_PORT)
-        .to_socket_addrs()
-        .map_err(|e| e.to_string())?
-        .next()
-        .ok_or("no address")?;
-    let stream =
-        TcpStream::connect_timeout(&addr, Duration::from_secs(4)).map_err(|e| e.to_string())?;
+    let stream = super::link::connect(host, WS_PORT, Duration::from_secs(4))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
@@ -196,6 +190,9 @@ pub fn upload(host: &str, name: &str, data: &[u8]) -> Result<(), String> {
 }
 
 pub fn run(w: &Worker) {
+    // A print start that could not be sent because the socket broke (typically after a
+    // long upload); it goes out first on the next connection rather than being lost.
+    let mut pending_start: Option<String> = None;
     while !w.stopped() {
         match open(&w.host) {
             Ok(mut ws) => {
@@ -203,7 +200,7 @@ pub fn run(w: &Worker) {
                     s.connected = true;
                     s.note("Connected.");
                 });
-                session(w, &mut ws);
+                session(w, &mut ws, &mut pending_start);
                 let _ = ws.close(None);
             }
             Err(e) => w.update(|s| s.note(format!("Could not connect: {e}"))),
@@ -216,9 +213,14 @@ pub fn run(w: &Worker) {
     }
 }
 
-fn session(w: &Worker, ws: &mut WebSocket<TcpStream>) {
+fn session(w: &Worker, ws: &mut WebSocket<TcpStream>, pending_start: &mut Option<String>) {
     let mut last_beat = Instant::now() - HEARTBEAT_EVERY;
     let mut last_heard = Instant::now();
+    if let Some(start) = pending_start.take() {
+        if !send_start(w, ws, start, pending_start) {
+            return;
+        }
+    }
     loop {
         if w.stopped() {
             return;
@@ -233,8 +235,19 @@ fn session(w: &Worker, ws: &mut WebSocket<TcpStream>) {
             return;
         }
         while let Ok(cmd) = w.rx.try_recv() {
-            if !run_command(w, ws, cmd) {
+            let began = Instant::now();
+            let ok = match run_command(w, cmd) {
+                Outgoing::Nothing => true,
+                Outgoing::Message(text) => ws.send(Message::text(text)).is_ok(),
+                Outgoing::Start(text) => send_start(w, ws, text, pending_start),
+            };
+            if !ok {
                 return;
+            }
+            // An upload blocks this loop for as long as it takes; the printer was not
+            // silent in that time, we just weren't listening.
+            if began.elapsed() > HEARTBEAT_EVERY {
+                last_heard = Instant::now();
             }
         }
         match ws.read() {
@@ -268,8 +281,32 @@ fn session(w: &Worker, ws: &mut WebSocket<TcpStream>) {
     }
 }
 
+/// What a command leaves to send over the socket.
+enum Outgoing {
+    Nothing,
+    Message(String),
+    /// Starts a print: must not be lost if the socket breaks.
+    Start(String),
+}
+
+/// Sends a print start; when the socket is broken it is kept for the next connection.
 /// Returns false when the socket broke.
-fn run_command(w: &Worker, ws: &mut WebSocket<TcpStream>, cmd: Command) -> bool {
+fn send_start(
+    w: &Worker,
+    ws: &mut WebSocket<TcpStream>,
+    text: String,
+    pending_start: &mut Option<String>,
+) -> bool {
+    if ws.send(Message::text(text.as_str())).is_ok() {
+        w.update(|s| s.note("Starting the print."));
+        true
+    } else {
+        *pending_start = Some(text);
+        false
+    }
+}
+
+fn run_command(w: &Worker, cmd: Command) -> Outgoing {
     let text = match cmd {
         Command::UploadAndPrint { name, gcode } => {
             w.update(|s| s.busy = Some(format!("Sending {name} to the printer…")));
@@ -277,14 +314,17 @@ fn run_command(w: &Worker, ws: &mut WebSocket<TcpStream>, cmd: Command) -> bool 
             w.update(|s| {
                 s.busy = None;
                 match &sent {
-                    Ok(()) => s.note(format!("Sent {name}. Starting the print.")),
+                    Ok(()) => s.note(format!("Sent {name}.")),
                     Err(e) => s.note(format!("Sending {name} failed: {e}")),
                 }
             });
             if sent.is_err() {
-                return true;
+                return Outgoing::Nothing;
             }
-            start_message(&format!("{GCODE_DIR}{name}"), calibration_choice(w))
+            return Outgoing::Start(start_message(
+                &format!("{GCODE_DIR}{name}"),
+                calibration_choice(w),
+            ));
         }
         Command::PrintFile(path) => print_path_message_with(&path, calibration_choice(w)),
         Command::SetCalibration(on) => {
@@ -319,7 +359,7 @@ fn run_command(w: &Worker, ws: &mut WebSocket<TcpStream>, cmd: Command) -> bool 
             json!({"method": "get", "params": {"reqHistory": 1}}).to_string()
         }
     };
-    ws.send(Message::text(text)).is_ok()
+    Outgoing::Message(text)
 }
 
 /// Runs G-code on the printer through the service's `gcodeCmd` setting.

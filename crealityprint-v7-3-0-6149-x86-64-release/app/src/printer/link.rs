@@ -141,14 +141,23 @@ impl Drop for PrinterLink {
     }
 }
 
+/// Connects to `host:port`, trying every address the name resolves to (a name such as
+/// "localhost" can give IPv6 first while the printer only listens on IPv4).
+pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, String> {
+    let addrs = (host, port).to_socket_addrs().map_err(|e| e.to_string())?;
+    let mut last = "no address".to_string();
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(last)
+}
+
 /// True when something accepts a TCP connection on `port` within `timeout`.
 pub fn port_open(host: &str, port: u16, timeout: Duration) -> bool {
-    let Ok(mut addrs) = (host, port).to_socket_addrs() else {
-        return false;
-    };
-    addrs
-        .next()
-        .is_some_and(|a| TcpStream::connect_timeout(&a, timeout).is_ok())
+    connect(host, port, timeout).is_ok()
 }
 
 /// Which protocol a printer speaks, judged by the ports it has open.
@@ -162,5 +171,19 @@ pub fn detect_api(host: &str) -> Option<Api> {
         Some(Api::PrusaLink)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connects_by_name_when_only_a_later_address_listens() {
+        // IPv4 only; "localhost" commonly resolves to ::1 first.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(connect("localhost", port, Duration::from_secs(2)).is_ok());
+        assert!(port_open("localhost", port, Duration::from_secs(2)));
     }
 }

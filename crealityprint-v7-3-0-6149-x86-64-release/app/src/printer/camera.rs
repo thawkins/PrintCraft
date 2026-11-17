@@ -5,7 +5,7 @@
 use super::Wake;
 use eframe::egui::ColorImage;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -87,13 +87,7 @@ fn set(state: &Mutex<CameraState>, s: CameraState) {
 /// Sends a GET and checks for a 200 multipart answer. Returns the socket and any body
 /// bytes that arrived with the headers.
 fn open_stream(host: &str, port: u16, path: &str) -> Result<(TcpStream, Vec<u8>), String> {
-    let addr = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| e.to_string())?
-        .next()
-        .ok_or("no address")?;
-    let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(1500))
-        .map_err(|e| e.to_string())?;
+    let mut s = super::link::connect(host, port, Duration::from_millis(1500))?;
     s.set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
     write!(s, "GET {path} HTTP/1.0\r\nHost: {host}:{port}\r\nUser-Agent: PrintCraft\r\nAccept: */*\r\n\r\n")

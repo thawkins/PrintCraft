@@ -2,8 +2,9 @@
 //! (and the MK3S with a Raspberry Pi). Prusa publishes it as an OpenAPI description.
 //!
 //! * Sign-in: HTTP Digest, user "maker" and the password shown on the printer's screen
-//!   (Settings → Network → PrusaLink). Older set-ups use an `X-Api-Key` instead; a
-//!   password that looks like a key is also sent that way.
+//!   (Settings → Network → PrusaLink). Older set-ups use an `X-Api-Key` instead: when
+//!   the printer refuses without offering Digest, a password that looks like a key is
+//!   sent that way. A Digest password is never sent in the clear.
 //! * Status: `GET /api/v1/status` (printer temperatures and state, job progress and times).
 //! * Job: `GET /api/v1/job` (file name), `PUT /api/v1/job/{id}/pause|resume`,
 //!   `DELETE /api/v1/job/{id}` to stop.
@@ -17,6 +18,8 @@ use std::time::Duration;
 
 pub const PORT: u16 = 80;
 const POLL_SECONDS: f32 = 2.0;
+/// A whole G-code file over the printer's (often slow) network link.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 pub const DEFAULT_USER: &str = "maker";
 
 /// An HTTP client that signs in when asked to.
@@ -25,6 +28,8 @@ pub struct Client {
     login: Option<(String, String)>,
     challenge: Option<Challenge>,
     nc: u32,
+    /// The printer refused without a Digest challenge: send the password as an API key.
+    api_key: bool,
     agent: ureq::Agent,
 }
 
@@ -40,6 +45,7 @@ impl Client {
             login,
             challenge: None,
             nc: 0,
+            api_key: false,
             agent: ureq::AgentBuilder::new()
                 .timeout_connect(Duration::from_secs(4))
                 .timeout(Duration::from_secs(timeout_s))
@@ -56,8 +62,7 @@ impl Client {
             let cnonce = format!("{:08x}{:08x}", self.nc, std::process::id());
             let auth = digest::authorization(c, user, pass, method, path, self.nc, &cnonce);
             req.set("Authorization", &auth)
-        } else if !pass.is_empty() && !pass.contains(' ') && pass.len() >= 16 {
-            // Looks like an API key from an older PrusaLink.
+        } else if self.api_key {
             req.set("X-Api-Key", pass)
         } else {
             req
@@ -72,9 +77,25 @@ impl Client {
         headers: &[(&str, &str)],
         body: Option<&[u8]>,
     ) -> Result<Reply, String> {
+        self.call_within(method, path, headers, body, None)
+    }
+
+    /// `call` with its own time limit, for requests slower than the client's usual one
+    /// (uploads). Uses the same sign-in, so a Digest nonce is never reused.
+    pub fn call_within(
+        &mut self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+        timeout: Option<Duration>,
+    ) -> Result<Reply, String> {
         for attempt in 0..2 {
             let url = format!("http://{}{}", self.host, path);
             let mut req = self.agent.request(method, &url);
+            if let Some(t) = timeout {
+                req = req.timeout(t);
+            }
             for (k, v) in headers {
                 req = req.set(k, v);
             }
@@ -102,7 +123,12 @@ impl Client {
                     self.challenge = digest::parse_challenge(&header);
                     self.nc = 0;
                     if self.challenge.is_none() {
-                        return Err("The printer refused the password.".into());
+                        // No Digest offered: an older PrusaLink may take the key instead.
+                        let key = self.login.as_ref().map_or("", |l| l.1.as_str());
+                        if self.api_key || !looks_like_api_key(key) {
+                            return Err("The printer refused the password.".into());
+                        }
+                        self.api_key = true;
                     }
                 }
                 Err(ureq::Error::Status(401, _)) => return Err("Wrong PrusaLink password.".into()),
@@ -114,6 +140,11 @@ impl Client {
         }
         Err("Wrong PrusaLink password.".into())
     }
+}
+
+/// Older PrusaLink API keys are one long word.
+fn looks_like_api_key(pass: &str) -> bool {
+    !pass.is_empty() && !pass.contains(' ') && pass.len() >= 16
 }
 
 /// Does this address look like a PrusaLink printer? A PrusaLink answers /api/version,
@@ -269,12 +300,10 @@ pub fn run(w: &Worker) {
             let result = match cmd {
                 Command::UploadAndPrint { name, gcode } => {
                     w.update(|s| s.busy = Some(format!("Sending {name} to the printer…")));
-                    let mut uploader = Client::new(&w.host, client.login.clone(), 600);
-                    uploader.challenge = client.challenge.clone();
-                    let store = storage(&mut uploader);
+                    let store = storage(&mut client);
                     let path = format!("/api/v1/files/{store}/{name}");
-                    let r = uploader
-                        .call(
+                    let r = client
+                        .call_within(
                             "PUT",
                             &path,
                             &[
@@ -283,6 +312,7 @@ pub fn run(w: &Worker) {
                                 ("Overwrite", "?1"),
                             ],
                             Some(gcode.as_bytes()),
+                            Some(UPLOAD_TIMEOUT),
                         )
                         .map(|_| ());
                     w.update(|s| {
@@ -404,6 +434,67 @@ pub fn run(w: &Worker) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// A pretend printer: answers each request with `respond(request head)`, and sends
+    /// every request head back down the channel.
+    fn pretend_printer(
+        respond: fn(&str) -> &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for conn in listener.incoming().take(10) {
+                let Ok(mut s) = conn else { continue };
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                let reply = respond(&head);
+                let _ = tx.send(head);
+                let _ = s.write_all(reply.as_bytes());
+            }
+        });
+        (host, rx)
+    }
+
+    const LONG_PASSWORD: &str = "abcdefghijklmnopqrstuvwxyz";
+
+    #[test]
+    fn a_digest_password_is_never_sent_as_an_api_key() {
+        let (host, rx) = pretend_printer(|_| {
+            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest realm=\"Printer API\", nonce=\"n\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        });
+        let mut c = Client::new(&host, Some(("maker".into(), LONG_PASSWORD.into())), 5);
+        let _ = c.call("GET", "/api/v1/status", &[], None);
+        let heads: Vec<String> = rx.try_iter().collect();
+        assert!(!heads.is_empty());
+        for h in &heads {
+            assert!(
+                !h.contains(LONG_PASSWORD),
+                "password sent in the clear:\n{h}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_api_key_is_sent_only_when_the_printer_offers_no_digest() {
+        let (host, rx) = pretend_printer(|head| {
+            if head
+                .to_ascii_lowercase()
+                .contains("x-api-key: abcdefghijklmnopqrstuvwxyz")
+            {
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+            } else {
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            }
+        });
+        let mut c = Client::new(&host, Some(("maker".into(), LONG_PASSWORD.into())), 5);
+        assert!(c.call("GET", "/api/version", &[], None).is_ok());
+        let heads: Vec<String> = rx.try_iter().collect();
+        assert!(!heads[0].contains(LONG_PASSWORD), "first try is unsigned");
+    }
 
     #[test]
     fn reads_prusalink_status() {

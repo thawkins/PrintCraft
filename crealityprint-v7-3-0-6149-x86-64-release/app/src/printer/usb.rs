@@ -140,6 +140,10 @@ impl Streamer {
         self.printing = false;
         self.paused = false;
         self.job.clear();
+        // Forget the job's numbered history too: a "Resend:" arriving around Stop must
+        // not replay motion lines after the print was stopped.
+        self.resend_from = None;
+        self.sent = vec![String::new()];
         for c in ["M104 S0", "M140 S0", "M107", "M84"] {
             self.urgent.push(c.into());
         }
@@ -482,6 +486,30 @@ mod tests {
             after.push(l);
             st.on_line("ok");
         }
+        assert_eq!(after, vec!["M104 S0", "M140 S0", "M107", "M84"]);
+    }
+
+    #[test]
+    fn a_resend_around_stop_does_not_replay_the_job() {
+        let mut st = Streamer::default();
+        st.start("G1 X1\nG1 X2\nG1 X3\n");
+        let mut job_lines = 0;
+        while let Some(l) = st.next_out(false) {
+            st.on_line("ok");
+            job_lines += l.starts_with('N') as usize;
+            if job_lines == 2 {
+                break;
+            }
+        }
+        st.on_line("Resend: 1");
+        st.stop();
+        st.on_line("Resend: 1");
+        let mut after = Vec::new();
+        while let Some(l) = st.next_out(false) {
+            after.push(l);
+            st.on_line("ok");
+        }
+        assert!(after.iter().all(|l| !l.contains("G1")), "{after:?}");
         assert_eq!(after, vec!["M104 S0", "M140 S0", "M107", "M84"]);
     }
 }
