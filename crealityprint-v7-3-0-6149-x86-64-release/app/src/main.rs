@@ -23,9 +23,11 @@ mod pipeline;
 mod printer;
 mod profiles;
 mod project;
+mod recent;
 mod slicer;
 mod theme;
 mod thumbnail;
+mod tool_icons;
 mod view3d;
 mod widgets;
 
@@ -42,6 +44,7 @@ Usage:
   printcraft --connect ADDRESS                open the Device page and connect to a printer
   printcraft --device                         open on the Device page (known printers)
   printcraft --tool move|scale|rotate MODEL   start with this selection tool
+  printcraft --file-menu                      open with the File menu showing
   printcraft --screenshot OUT.png [MODEL.stl ...]
   printcraft --slice MODEL.stl [MODEL.stl ...] --output OUT.gcode [options]
 
@@ -52,8 +55,11 @@ Slicing options:
                                   1-4 generic, 5 Prusa MK4S, 6 Prusa Core One,
                                   7 Prusa MK3S+, 8 Prusa MINI+, 9 Prusa XL,
                                   10 Creality Ender-3 V3 KE
-  --supports                      add supports under overhangs
+  --supports                      add supports under overhangs (where they reach the
+                                  plate they stand on a small raft)
+  --no-support-raft               no raft under supports
   --brim                          print a brim instead of a skirt
+  --raft                          print the model on a raft
   --infill-pattern lines|grid|triangles
   --seam aligned|nearest|rear|random
   --ironing                       smooth top surfaces with an ironing pass
@@ -73,12 +79,15 @@ struct Args {
     connect: Option<String>,
     device: bool,
     tool: Option<String>,
+    file_menu: bool,
     output: Option<PathBuf>,
     quality: Option<String>,
     filament: Option<String>,
     printer: Option<usize>,
     supports: bool,
     brim: bool,
+    raft: bool,
+    no_support_raft: bool,
     ironing: bool,
     vase: bool,
     fuzzy: bool,
@@ -108,6 +117,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--connect" => a.connect = Some(value("--connect")?),
             "--device" => a.device = true,
             "--tool" => a.tool = Some(value("--tool")?),
+            "--file-menu" => a.file_menu = true,
             "-o" | "--output" => a.output = Some(PathBuf::from(value("--output")?)),
             "--quality" => a.quality = Some(value("--quality")?),
             "--filament" => a.filament = Some(value("--filament")?),
@@ -120,6 +130,8 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             }
             "--supports" => a.supports = true,
             "--brim" => a.brim = true,
+            "--raft" => a.raft = true,
+            "--no-support-raft" => a.no_support_raft = true,
             "--ironing" => a.ironing = true,
             "--vase" => a.vase = true,
             "--fuzzy" => a.fuzzy = true,
@@ -188,6 +200,7 @@ fn run_window(args: Args) -> ExitCode {
         connect: args.connect,
         device_page: args.device,
         tool: args.tool.clone(),
+        file_menu: args.file_menu,
     };
     match eframe::run_native(
         "PrintCraft",
@@ -253,6 +266,10 @@ fn slice_without_window(args: &Args) -> ExitCode {
     if args.brim {
         settings.adhesion = Adhesion::Brim;
     }
+    if args.raft {
+        settings.adhesion = Adhesion::Raft;
+    }
+    settings.support_raft = !args.no_support_raft;
     settings.ironing = args.ironing;
     settings.vase_mode = args.vase;
     settings.fuzzy_skin = args.fuzzy;

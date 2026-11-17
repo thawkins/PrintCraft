@@ -15,7 +15,7 @@ pub(super) enum ProjectAction {
 impl PrintCraftApp {
     /// The File menu at the left of the top bar, as in the original's window.
     pub(super) fn file_menu(&mut self, ui: &mut Ui) {
-        ui.menu_button(RichText::new("File").size(15.0), |ui| {
+        let menu = ui.menu_button(RichText::new("File").size(15.0), |ui| {
             ui.set_min_width(220.0);
             if ui.button("New project").clicked() {
                 self.request(ProjectAction::New);
@@ -34,6 +34,8 @@ impl PrintCraftApp {
                 ui.close();
             }
             ui.separator();
+            self.recent_projects_menu(ui);
+            ui.separator();
             if ui.button("Add model (STL, OBJ, 3MF)…   Ctrl+O").clicked() {
                 self.open_dialog();
                 ui.close();
@@ -47,6 +49,54 @@ impl PrintCraftApp {
                 ui.close();
             }
         });
+        if std::mem::take(&mut self.open_file_menu) {
+            egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&menu.response));
+        }
+    }
+
+    /// The newest projects, numbered, each opening with one click. A file that has been
+    /// moved or deleted is shown greyed out.
+    fn recent_projects_menu(&mut self, ui: &mut Ui) {
+        ui.label(
+            RichText::new("Recent projects")
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        if self.recent.list.is_empty() {
+            ui.add_enabled(false, egui::Button::new("No recent projects"));
+            return;
+        }
+        let mut open = None;
+        for (i, path) in self.recent.list.iter().enumerate() {
+            let exists = path.is_file();
+            let text = format!("{}   {}", i + 1, display_name(path));
+            let hint = if exists {
+                path.display().to_string()
+            } else {
+                format!("Not found: {}", path.display())
+            };
+            let b = ui
+                .add_enabled(exists, egui::Button::new(text))
+                .on_hover_text(&hint)
+                .on_disabled_hover_text(&hint);
+            if b.clicked() {
+                open = Some(path.clone());
+                ui.close();
+            }
+        }
+        if ui
+            .add(egui::Button::new(
+                RichText::new("Clear recent projects")
+                    .small()
+                    .color(theme::TEXT_DIM),
+            ))
+            .clicked()
+        {
+            self.recent.clear();
+        }
+        if let Some(path) = open {
+            self.request(ProjectAction::Open(Some(path)));
+        }
     }
 
     /// True when the plate or settings changed since the project was last saved or opened.
@@ -107,6 +157,10 @@ impl PrintCraftApp {
         let opened = match project::open(path) {
             Ok(o) => o,
             Err(e) => {
+                // A project that is gone no longer belongs in the recent list.
+                if !path.exists() {
+                    self.recent.remove(path);
+                }
                 self.device.show_alert(
                     "Could not open the project",
                     format!("{}\n\n{e}", display_name(path)),
@@ -114,6 +168,7 @@ impl PrintCraftApp {
                 return;
             }
         };
+        self.recent.add(path);
         let newer = opened
             .is_from_newer_version()
             .then_some(opened.file_version);
@@ -195,6 +250,7 @@ impl PrintCraftApp {
     pub(super) fn save_to(&mut self, path: &Path) {
         match project::save(path, &self.current_project()) {
             Ok(()) => {
+                self.recent.add(path);
                 self.project_path = Some(path.to_path_buf());
                 self.saved_fingerprint = self.fingerprint();
                 self.status = format!("Saved {}.", display_name(path));

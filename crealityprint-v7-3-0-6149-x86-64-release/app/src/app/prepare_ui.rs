@@ -601,6 +601,21 @@ fn support_group(ui: &mut Ui, s: &mut PrintSettings) {
                 "On build plate only",
                 egui::Checkbox::without_text(&mut s.supports_on_plate_only),
             );
+            // With a full raft the supports already stand on it.
+            let full_raft = s.adhesion == Adhesion::Raft;
+            let hint = if full_raft {
+                "Adhesion is set to Raft, which already covers the supports"
+            } else {
+                "Supports that reach the bed stand on a small raft of their own, so they stick"
+            };
+            ui.label("Raft under support").on_hover_text(hint);
+            ui.add_enabled(
+                !full_raft,
+                egui::Checkbox::without_text(&mut s.support_raft),
+            )
+            .on_hover_text(hint)
+            .on_disabled_hover_text(hint);
+            ui.end_row();
         }
     });
 }

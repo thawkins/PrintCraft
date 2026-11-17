@@ -45,7 +45,7 @@ All are 1.75 mm filament.
 | First layer | 0.20 | 0.20 | 0.28 |
 | Walls | 3 | 2 | 2 |
 | Top / bottom layers | 6 / 5 | 4 / 3 | 3 / 3 |
-| Infill | 15 % | 15 % | 10 % |
+| Infill | 25 % | 25 % (person's request) | 10 % |
 | Print speed (mm/s) | 50 | 60 | 80 |
 
 These apply to all three presets: first-layer speed 25 mm/s, travel 150 mm/s, support
@@ -83,6 +83,14 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
 7. **Infill lines.** Straight parallel lines at 45° on even layers and 135° on odd layers,
    on a fixed grid so they stack. Solid areas use a spacing of `line_width`. Sparse
    areas use a spacing of `line_width × 100 / infill %`.
+7a. **Line order** (`order_open_paths`, person's request). Infill, ironing, support and
+   vase-bottom lines are not printed row by row. The next line is always the one whose
+   nearer end is closest to the nozzle, and it is printed starting from that end. So
+   where a hole or recess splits the rows, one side is filled completely before the
+   nozzle moves to the other side, instead of jumping over the gap on every row.
+   Ordering starts where the walls ended. Each sparse-infill direction (Grid,
+   Triangles) is ordered on its own. End points are looked up in 3 mm buckets, so this
+   stays fast. Estimated.
 8. **Supports.** A face needs support when it faces down more steeply than the overhang
    angle: −normal.z > sin(angle). A support column starts at least one layer (≥ 0.15 mm)
    under the overhang. It goes down until it reaches the plate or the model. It keeps a
@@ -92,6 +100,24 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
    cell (`Grid::supports`, `first_model`).
 9. **Skirt.** 2 loops around the convex hull of the first layer, 5 mm away. **Brim.** 8 loops
    outwards from each outer outline on the first layer.
+9a. **Raft** (person's request; `raft_paths`, `raft_height`). There are 3 raft layers.
+   * The bottom layer has lines along X, 1 mm apart, so it grips the bed. The two layers
+     above are solid, at one line width spacing, the first along Y and the second along X.
+   * Raft area is worked out on the 1 mm grid, so its edge steps in 1 mm.
+   * Raft lines are tagged `;TYPE:SUPPORT` in the print file and grey in the preview.
+   * **Adhesion "Raft".** The model is lifted by the raft's thickness: the first layer
+     plus 2 normal layers. The raft covers the model's first layer and every support
+     column that reaches the plate, plus 3 mm all round. The model's first layer is laid
+     0.15 mm higher than its normal height (an air gap), so the raft peels off. The
+     model's bottom layers stay solid.
+   * **Raft under support** (Support section, on by default; person's request). With
+     this on, supports on, and any adhesion except Raft, every support column that
+     reaches the plate stands on its own raft. With it off, the support lines go all the
+     way down to the plate. The setting is greyed out when Adhesion is Raft, because the
+     full raft already covers the supports. The raft fills the
+     column's cells plus 2 mm all round, on the bottom 3 layers. It keeps a 1-cell (1 mm)
+     gap from the model on each of those layers. The model still sits directly on the
+     plate. Columns that stand on the model get no raft.
 10. **Infill patterns** (`infill_angles`). With base spacing `s = line_width × 100 / infill %`:
     * **Lines:** one set at 45°/135°, alternating each layer, spacing *s*.
     * **Grid:** 45° and 135° on every layer, spacing 2*s*.

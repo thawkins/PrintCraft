@@ -20,10 +20,12 @@ pub enum PathKind {
     Ironing,
     /// Solid lines of the visible top surface (the last layer under open air).
     TopSurface,
+    /// Lines of a raft under the print or under supports.
+    Raft,
 }
 
 impl PathKind {
-    pub const ALL: [PathKind; 9] = [
+    pub const ALL: [PathKind; 10] = [
         Self::OuterWall,
         Self::InnerWall,
         Self::TopSurface,
@@ -33,6 +35,7 @@ impl PathKind {
         Self::Support,
         Self::Skirt,
         Self::Brim,
+        Self::Raft,
     ];
 
     pub fn label(self) -> &'static str {
@@ -46,6 +49,7 @@ impl PathKind {
             Self::Support => "Support",
             Self::Ironing => "Ironing",
             Self::TopSurface => "Top surface",
+            Self::Raft => "Raft",
         }
     }
 
@@ -59,6 +63,8 @@ impl PathKind {
             Self::Support => "SUPPORT",
             Self::Ironing => "IRONING",
             Self::TopSurface => "TOP-SURFACE",
+            // Printer screens and other slicers treat a raft as support.
+            Self::Raft => "SUPPORT",
         }
     }
 }
@@ -94,6 +100,13 @@ const BRIM_LINES: usize = 8;
 /// Infill line ends reach this share of a line width into the innermost wall's band
 /// (so the infill bead overlaps that wall by about 0.65 of a line width).
 const INFILL_OVERLAP: f32 = 0.15;
+/// Raft: layers, how far it reaches past the print (cells of 1 mm), the base layer's line
+/// spacing, and the gap left between a full raft and the model.
+pub const RAFT_LAYERS: usize = 3;
+const RAFT_MARGIN_CELLS: usize = 3;
+const SUPPORT_RAFT_MARGIN_CELLS: usize = 2;
+const RAFT_BASE_SPACING_MM: f32 = 1.0;
+const RAFT_AIR_GAP_MM: f32 = 0.15;
 /// Gap between ironing passes.
 const IRONING_SPACING_MM: f32 = 0.2;
 /// Fuzzy skin: distance between wobble points and how far each may move.
@@ -107,16 +120,35 @@ pub fn slice(
     line_width: f32,
     progress: &dyn Fn(f32),
 ) -> SliceResult {
-    let bounds = Bounds::of(triangles.iter().flatten().copied());
-    if !bounds.is_valid() || bounds.max.z <= 0.0 {
+    let raw_bounds = Bounds::of(triangles.iter().flatten().copied());
+    if !raw_bounds.is_valid() || raw_bounds.max.z <= 0.0 {
         return SliceResult {
             layers: Vec::new(),
             line_width,
         };
     }
 
-    let heights = layer_heights(bounds.max.z, settings);
+    // A full raft: the model is lifted onto `raft_n` layers of raft lines.
+    let full_raft = settings.adhesion == Adhesion::Raft;
+    let raft_n = if full_raft { RAFT_LAYERS } else { 0 };
+    let lifted: Vec<Triangle>;
+    let triangles = if full_raft {
+        let up = Vec3::new(0.0, 0.0, raft_height(settings));
+        lifted = triangles.iter().map(|t| t.map(|v| v + up)).collect();
+        &lifted[..]
+    } else {
+        triangles
+    };
+    let bounds = Bounds::of(triangles.iter().flatten().copied());
+
+    let mut heights = layer_heights(bounds.max.z, settings);
     let n = heights.len();
+    if raft_n >= n {
+        return SliceResult {
+            layers: Vec::new(),
+            line_width,
+        };
+    }
 
     // 1. Outlines of every layer.
     let outlines = all_outlines(triangles, &heights, progress);
@@ -124,18 +156,58 @@ pub fn slice(
     // 2. Coarse grid masks, used to find top/bottom surfaces and support areas.
     let grid = Grid::new(&bounds);
     let masks: Vec<Vec<bool>> = outlines.iter().map(|o| grid.rasterize(o)).collect();
-    let mut supports = if settings.supports {
+    let (mut supports, plate_cells) = if settings.supports {
         grid.supports(
             triangles,
             &masks,
             &heights,
-            settings.support_angle,
+            heights[raft_n].0,
             settings.supports_on_plate_only,
+            settings.support_angle,
             line_width,
         )
     } else {
-        vec![Vec::new(); n]
+        (vec![Vec::new(); n], vec![false; grid.cells()])
     };
+
+    // Rafts. A full raft spreads under the first model layer and every support column
+    // that reaches the plate. Without one, supports that reach the plate still stand on
+    // a small raft of their own so they stick to the bed, when "Raft under support" is on
+    // (the default); the model itself sits on the plate as usual, with a one-cell gap
+    // from those support rafts.
+    let has_support_raft = settings.support_raft && plate_cells.iter().any(|c| *c);
+    let raft_areas: Vec<Vec<bool>> = if full_raft {
+        let under: Vec<bool> = masks[raft_n]
+            .iter()
+            .zip(&plate_cells)
+            .map(|(m, s)| *m || *s)
+            .collect();
+        vec![grid.dilate(&under, RAFT_MARGIN_CELLS); raft_n]
+    } else if has_support_raft {
+        let spread = grid.dilate(&plate_cells, SUPPORT_RAFT_MARGIN_CELLS);
+        (0..RAFT_LAYERS.min(n))
+            .map(|i| {
+                let near_model = grid.dilate(&masks[i], 1);
+                spread
+                    .iter()
+                    .zip(&near_model)
+                    .map(|(s, m)| *s && !*m)
+                    .collect()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    // The raft replaces the bottom of the support columns.
+    for s in supports.iter_mut().take(raft_areas.len()) {
+        s.clear();
+    }
+    // A small air gap between a full raft and the model makes them easy to part.
+    if full_raft {
+        for hz in heights.iter_mut().skip(raft_n) {
+            hz.0 += RAFT_AIR_GAP_MM;
+        }
+    }
 
     // 3. Toolpaths per layer.
     let vase = settings.vase_mode;
@@ -148,9 +220,18 @@ pub fn slice(
         if i == 0 {
             paths.extend(adhesion_paths(&outlines[0], settings.adhesion, line_width));
         }
+        if let Some(area) = raft_areas.get(i) {
+            let from = last_point(&paths);
+            paths.extend(order_open_paths(
+                raft_paths(&grid, area, i, line_width),
+                from,
+            ));
+        }
+        // Counted from the model's own first layer (above a full raft).
+        let model_layer = i.saturating_sub(raft_n);
         paths.extend(wall_paths(
             &outlines[i],
-            i,
+            model_layer,
             wall_count,
             line_width,
             settings,
@@ -159,29 +240,40 @@ pub fn slice(
         let region = infill_region(&outlines[i], wall_count, line_width);
         if !region.is_empty() && vase {
             // Vase mode: a solid bottom, then nothing but the spiral wall.
-            if i < settings.bottom_layers as usize {
-                paths.extend(vase_bottom_paths(&region, i, line_width));
+            if model_layer < settings.bottom_layers as usize {
+                let lines = vase_bottom_paths(&region, i, line_width);
+                let from = last_point(&paths);
+                paths.extend(order_open_paths(lines, from));
             }
         } else if !region.is_empty() {
             let exposed = exposed_cells(&masks, i, settings);
             let top = top_cells(&grid, &masks, i);
             let angle = if i % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
-            paths.extend(solid_infill_paths(
-                &region, &grid, &exposed, &top, angle, line_width,
-            ));
+            let solid = solid_infill_paths(&region, &grid, &exposed, &top, angle, line_width);
+            let from = last_point(&paths);
+            paths.extend(order_open_paths(solid, from));
             if settings.infill_percent > 0.5 {
+                let from = last_point(&paths);
                 paths.extend(sparse_infill_paths(
-                    &region, &grid, &exposed, i, line_width, settings,
+                    &region, &grid, &exposed, i, line_width, settings, from,
                 ));
             }
             // Only the very top layer of each surface is ironed. Fuzzy top wins: ironing
             // would flatten its texture.
             if settings.ironing && !settings.fuzzy_top && top.iter().any(|t| *t) {
-                paths.extend(ironing_paths(&region, &grid, &top, angle));
+                let ironing = ironing_paths(&region, &grid, &top, angle);
+                let from = last_point(&paths);
+                paths.extend(order_open_paths(ironing, from));
             }
         }
 
-        paths.append(&mut supports[i]);
+        let support = std::mem::take(&mut supports[i]);
+        if support.iter().all(|p| !p.closed) {
+            let from = last_point(&paths);
+            paths.extend(order_open_paths(support, from));
+        } else {
+            paths.extend(support);
+        }
 
         layers.push(Layer {
             z,
@@ -320,18 +412,24 @@ fn sparse_infill_paths(
     layer: usize,
     line_width: f32,
     settings: &PrintSettings,
+    from: Option<Point2>,
 ) -> Vec<ToolPath> {
-    let mut paths = Vec::new();
+    let mut paths: Vec<ToolPath> = Vec::new();
     let base = line_width * 100.0 / settings.infill_percent.min(100.0);
     let (angles, spacing) = infill_angles(settings.infill_pattern, layer, base);
+    // Each direction is ordered on its own, so one set of lines is laid before the next
+    // crosses it, starting where the previous set ended.
     for angle in angles {
+        let mut set = Vec::new();
         for seg in scan_fill(region, spacing, angle.to_radians()) {
             for piece in split_by(&seg, |p| exposed[grid.index_of(p)]) {
                 if !piece.1 {
-                    paths.push(open_path(PathKind::SparseInfill, piece.0));
+                    set.push(open_path(PathKind::SparseInfill, piece.0));
                 }
             }
         }
+        let from = last_point(&paths).or(from);
+        paths.extend(order_open_paths(set, from));
     }
     paths
 }
@@ -357,6 +455,93 @@ fn open_path(kind: PathKind, points: Vec<Point2>) -> ToolPath {
         points,
         closed: false,
     }
+}
+
+/// Where the nozzle ends up after the last of `paths`.
+fn last_point(paths: &[ToolPath]) -> Option<Point2> {
+    let p = paths.last()?;
+    if p.closed {
+        p.points.first().copied()
+    } else {
+        p.points.last().copied()
+    }
+}
+
+/// Bucket size for finding the nearest line end quickly.
+const ORDER_CELL_MM: f32 = 3.0;
+
+/// Puts open lines in printing order: each next line is the one whose nearer end is
+/// closest to where the nozzle is, and it is flipped to start at that end. Lines split by
+/// a hole or recess are therefore finished on one side before the nozzle moves to the
+/// other side, instead of hopping over the gap on every row. `from` is where the nozzle is
+/// before the first line.
+pub fn order_open_paths(mut paths: Vec<ToolPath>, from: Option<Point2>) -> Vec<ToolPath> {
+    paths.retain(|p| !p.points.is_empty());
+    if paths.len() < 2 {
+        return paths;
+    }
+    let cell = |p: Point2| {
+        (
+            (p.x / ORDER_CELL_MM).floor() as i32,
+            (p.y / ORDER_CELL_MM).floor() as i32,
+        )
+    };
+    let mut buckets: HashMap<(i32, i32), Vec<(usize, bool)>> = HashMap::new();
+    let (mut lo, mut hi) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+    for (i, p) in paths.iter().enumerate() {
+        let ends = [p.points[0], p.points[p.points.len() - 1]];
+        for (k, e) in ends.into_iter().enumerate() {
+            let c = cell(e);
+            lo = (lo.0.min(c.0), lo.1.min(c.1));
+            hi = (hi.0.max(c.0), hi.1.max(c.1));
+            buckets.entry(c).or_default().push((i, k == 1));
+        }
+    }
+    let max_ring = (hi.0 - lo.0).max(hi.1 - lo.1) + 1;
+    let mut used = vec![false; paths.len()];
+    let mut slots: Vec<Option<ToolPath>> = paths.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(slots.len());
+    let mut at = from.unwrap_or_else(|| slots[0].as_ref().unwrap().points[0]);
+    for _ in 0..slots.len() {
+        let c = cell(at);
+        let mut best: Option<(f32, usize, bool)> = None;
+        for r in 0..=max_ring {
+            // Everything in ring r is at least (r - 1) cells away.
+            if best.is_some_and(|(d, _, _)| d <= (r - 1).max(0) as f32 * ORDER_CELL_MM) {
+                break;
+            }
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    if dx.abs() != r && dy.abs() != r {
+                        continue;
+                    }
+                    let Some(list) = buckets.get(&(c.0 + dx, c.1 + dy)) else {
+                        continue;
+                    };
+                    for &(i, is_end) in list {
+                        if used[i] {
+                            continue;
+                        }
+                        let pts = &slots[i].as_ref().unwrap().points;
+                        let e = if is_end { pts[pts.len() - 1] } else { pts[0] };
+                        let d = e.distance(at);
+                        if best.is_none_or(|(bd, bi, _)| d < bd || (d == bd && i < bi)) {
+                            best = Some((d, i, is_end));
+                        }
+                    }
+                }
+            }
+        }
+        let Some((_, i, is_end)) = best else { break };
+        used[i] = true;
+        let mut p = slots[i].take().unwrap();
+        if is_end {
+            p.points.reverse();
+        }
+        at = p.points[p.points.len() - 1];
+        out.push(p);
+    }
+    out
 }
 
 /// Line directions (degrees) and spacing for sparse infill. `base` is the spacing a
@@ -740,10 +925,39 @@ fn exposed_cells(masks: &[Vec<bool>], i: usize, settings: &PrintSettings) -> Vec
     exposed
 }
 
+/// Total thickness of a full raft: the first layer plus `RAFT_LAYERS - 1` normal layers,
+/// matching `layer_heights` so the raft ends exactly on a layer boundary.
+pub fn raft_height(s: &PrintSettings) -> f32 {
+    s.first_layer_height.max(0.05) + (RAFT_LAYERS - 1) as f32 * s.layer_height.max(0.04)
+}
+
+/// Raft lines over the `area` cells on raft layer `layer`. The bottom layer is open
+/// (lines `RAFT_BASE_SPACING_MM` apart) to grip the bed; the layers above are solid and
+/// cross each other, giving a flat top for what stands on it.
+fn raft_paths(grid: &Grid, area: &[bool], layer: usize, lw: f32) -> Vec<ToolPath> {
+    let (spacing, angle) = if layer == 0 {
+        (RAFT_BASE_SPACING_MM, 0.0)
+    } else if layer % 2 == 1 {
+        (lw, std::f32::consts::FRAC_PI_2)
+    } else {
+        (lw, 0.0)
+    };
+    let mut out = Vec::new();
+    for seg in scan_fill(&[grid.outline()], spacing, angle) {
+        for (points, inside) in split_by(&seg, |p| area[grid.index_of(p)]) {
+            if inside {
+                out.push(open_path(PathKind::Raft, points));
+            }
+        }
+    }
+    out
+}
+
 fn adhesion_paths(first: &[Polygon], adhesion: Adhesion, lw: f32) -> Vec<ToolPath> {
     let mut out = Vec::new();
     match adhesion {
-        Adhesion::None => {}
+        // The raft is laid separately (`raft_paths`).
+        Adhesion::None | Adhesion::Raft => {}
         Adhesion::Skirt => {
             let pts: Vec<Point2> = first.iter().flatten().copied().collect();
             let hull = convex_hull(pts);
@@ -813,10 +1027,12 @@ struct Grid {
 
 impl Grid {
     fn new(b: &Bounds) -> Self {
-        let x0 = b.min.x - 2.0;
-        let y0 = b.min.y - 2.0;
-        let w = ((b.size().x + 4.0) / CELL_MM).ceil() as usize + 1;
-        let h = ((b.size().y + 4.0) / CELL_MM).ceil() as usize + 1;
+        // Room around the models for a raft's margin.
+        let pad = CELL_MM * (RAFT_MARGIN_CELLS as f32 + 2.0);
+        let x0 = b.min.x - pad;
+        let y0 = b.min.y - pad;
+        let w = ((b.size().x + 2.0 * pad) / CELL_MM).ceil() as usize + 1;
+        let h = ((b.size().y + 2.0 * pad) / CELL_MM).ceil() as usize + 1;
         Self { x0, y0, w, h }
     }
 
@@ -915,15 +1131,19 @@ impl Grid {
     /// Support lines for every layer. Worked out from the top down: a column starts just
     /// under each overhang and goes down until it lands on the plate or on the model.
     /// With `plate_only`, columns that would land on the model aren't made at all.
+    /// Also returns the cells whose columns reach the plate. Faces whose lowest point is
+    /// at or below `floor_z` rest on the plate (or raft) and need nothing under them.
+    #[allow(clippy::too_many_arguments)]
     fn supports(
         &self,
         triangles: &[Triangle],
         masks: &[Vec<bool>],
         heights: &[(f32, f32)],
-        angle_deg: f32,
+        floor_z: f32,
         plate_only: bool,
+        angle_deg: f32,
         lw: f32,
-    ) -> Vec<Vec<ToolPath>> {
+    ) -> (Vec<Vec<ToolPath>>, Vec<bool>) {
         let n = heights.len();
         // Lowest layer with model in each cell (n when there is none).
         let mut first_model = vec![n; self.cells()];
@@ -935,7 +1155,7 @@ impl Grid {
             }
         }
         let mut starts: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for (cell, h) in self.overhangs(triangles, angle_deg, heights[0].0) {
+        for (cell, h) in self.overhangs(triangles, angle_deg, floor_z) {
             // Highest layer that stays at least one layer below the overhang.
             let k = heights.partition_point(|(z, lh)| z + lh.max(0.15) < h);
             if k > 0 && (!plate_only || first_model[cell] >= k) {
@@ -955,7 +1175,40 @@ impl Grid {
             }
             out[i] = self.support_lines(&masks[i], &active, lw);
         }
+        // After the bottom layer, the cells still active are the columns on the plate.
+        (out, active)
+    }
+
+    /// `mask` grown by `r` cells in every direction (a square around each cell).
+    fn dilate(&self, mask: &[bool], r: usize) -> Vec<bool> {
+        let mut out = vec![false; mask.len()];
+        for cy in 0..self.h {
+            for cx in 0..self.w {
+                if !mask[cy * self.w + cx] {
+                    continue;
+                }
+                for y in cy.saturating_sub(r)..=(cy + r).min(self.h - 1) {
+                    for x in cx.saturating_sub(r)..=(cx + r).min(self.w - 1) {
+                        out[y * self.w + x] = true;
+                    }
+                }
+            }
+        }
         out
+    }
+
+    /// The whole grid as one rectangle.
+    fn outline(&self) -> Polygon {
+        let (x1, y1) = (
+            self.x0 + self.w as f32 * CELL_MM,
+            self.y0 + self.h as f32 * CELL_MM,
+        );
+        vec![
+            Point2::new(self.x0, self.y0),
+            Point2::new(x1, self.y0),
+            Point2::new(x1, y1),
+            Point2::new(self.x0, y1),
+        ]
     }
 
     /// Lines along X through the active cells of every other row, keeping a one-cell
@@ -1110,6 +1363,113 @@ mod tests {
         assert!(!top.paths.iter().any(|p| p.kind == PathKind::Support));
     }
 
+    fn slab_on_post() -> Vec<Triangle> {
+        let mut tris =
+            PlacedObject::new("slab", Mesh::cube(Vec3::new(30.0, 30.0, 3.0))).world_triangles();
+        tris.iter_mut().flatten().for_each(|v| v.z += 10.0);
+        tris.extend(
+            PlacedObject::new("post", Mesh::cube(Vec3::new(4.0, 4.0, 10.0))).world_triangles(),
+        );
+        tris
+    }
+
+    fn kinds(layer: &Layer) -> Vec<PathKind> {
+        let mut k: Vec<PathKind> = layer.paths.iter().map(|p| p.kind).collect();
+        k.dedup();
+        k
+    }
+
+    #[test]
+    fn supports_always_stand_on_a_raft() {
+        let s = PrintSettings {
+            supports: true,
+            ..PrintSettings::default()
+        };
+        assert_eq!(s.adhesion, Adhesion::Skirt);
+        let r = slice(&slab_on_post(), &s, 0.42, &|_| {});
+        for (i, layer) in r.layers.iter().enumerate().take(RAFT_LAYERS) {
+            let k = kinds(layer);
+            assert!(k.contains(&PathKind::Raft), "layer {i}: {k:?}");
+            assert!(!k.contains(&PathKind::Support), "layer {i}: {k:?}");
+            // The post still stands on the plate, beside the support raft.
+            assert!(k.contains(&PathKind::OuterWall), "layer {i}: {k:?}");
+        }
+        assert!(kinds(&r.layers[RAFT_LAYERS]).contains(&PathKind::Support));
+        assert!(!kinds(&r.layers[RAFT_LAYERS]).contains(&PathKind::Raft));
+        // The support raft keeps clear of the post.
+        let post = |p: &Point2| p.x.abs() < 2.5 && p.y.abs() < 2.5;
+        assert!(r.layers[0]
+            .paths
+            .iter()
+            .filter(|p| p.kind == PathKind::Raft)
+            .all(|p| !p.points.iter().any(post)));
+        // No supports, no raft.
+        let plain = slice(&slab_on_post(), &PrintSettings::default(), 0.42, &|_| {});
+        assert!(plain
+            .layers
+            .iter()
+            .all(|l| !kinds(l).contains(&PathKind::Raft)));
+    }
+
+    #[test]
+    fn raft_under_support_can_be_turned_off() {
+        let s = PrintSettings {
+            supports: true,
+            support_raft: false,
+            ..PrintSettings::default()
+        };
+        assert!(PrintSettings::default().support_raft, "on by default");
+        let r = slice(&slab_on_post(), &s, 0.42, &|_| {});
+        assert!(r.layers.iter().all(|l| !kinds(l).contains(&PathKind::Raft)));
+        // The supports go all the way down to the plate instead.
+        assert!(kinds(&r.layers[0]).contains(&PathKind::Support));
+        // A full raft still covers the supports whatever the switch says.
+        let full = PrintSettings {
+            adhesion: Adhesion::Raft,
+            ..s
+        };
+        let r = slice(&slab_on_post(), &full, 0.42, &|_| {});
+        assert_eq!(kinds(&r.layers[0]), vec![PathKind::Raft]);
+    }
+
+    #[test]
+    fn a_raft_lifts_the_model() {
+        let cube =
+            PlacedObject::new("c", Mesh::cube(Vec3::new(20.0, 20.0, 10.0))).world_triangles();
+        let plain = slice(&cube, &PrintSettings::default(), 0.42, &|_| {});
+        let s = PrintSettings {
+            adhesion: Adhesion::Raft,
+            ..PrintSettings::default()
+        };
+        let r = slice(&cube, &s, 0.42, &|_| {});
+        assert_eq!(r.layers.len(), plain.layers.len() + RAFT_LAYERS);
+        for (i, layer) in r.layers.iter().enumerate().take(RAFT_LAYERS) {
+            assert_eq!(kinds(layer), vec![PathKind::Raft], "layer {i}");
+        }
+        let first = &r.layers[RAFT_LAYERS];
+        assert!(kinds(first).contains(&PathKind::OuterWall));
+        let expected = raft_height(&s) + s.layer_height + RAFT_AIR_GAP_MM;
+        assert!(
+            (first.z - expected).abs() < 1e-4,
+            "{} vs {expected}",
+            first.z
+        );
+        // The raft reaches about 3 mm past the 20 mm cube.
+        let reach = r.layers[0]
+            .paths
+            .iter()
+            .flat_map(|p| &p.points)
+            .fold(0f32, |m, p| m.max(p.x.abs()));
+        assert!((12.0..14.5).contains(&reach), "{reach}");
+        // The bottom of the cube is solid, as on the plate.
+        assert!(kinds(first).contains(&PathKind::SolidInfill));
+    }
+
+    #[test]
+    fn default_infill_is_25_percent() {
+        assert_eq!(PrintSettings::default().infill_percent, 25.0);
+    }
+
     #[test]
     fn support_can_stand_on_the_model() {
         // A wide base, and a slab hovering 10 mm above it, held by a post.
@@ -1158,6 +1518,46 @@ mod tests {
             .paths
             .iter()
             .any(|p| p.kind == PathKind::Support));
+    }
+
+    /// Travel moves longer than `limit` between consecutive lines.
+    fn long_hops(paths: &[ToolPath], limit: f32) -> usize {
+        paths
+            .windows(2)
+            .filter(|w| w[0].points.last().unwrap().distance(w[1].points[0]) > limit)
+            .count()
+    }
+
+    #[test]
+    fn infill_finishes_one_side_of_a_hole_before_the_other() {
+        let square = |c: f32, h: f32| {
+            vec![
+                Point2::new(c - h, c - h),
+                Point2::new(c + h, c - h),
+                Point2::new(c + h, c + h),
+                Point2::new(c - h, c + h),
+            ]
+        };
+        // A 40 mm square with a 12 mm hole in the middle.
+        let mut hole = square(0.0, 6.0);
+        hole.reverse();
+        let region = vec![square(0.0, 20.0), hole];
+        let lines: Vec<ToolPath> = scan_fill(&region, 0.5, 0.0)
+            .into_iter()
+            .map(|s| open_path(PathKind::SolidInfill, s.to_vec()))
+            .collect();
+        // Straight row by row, the nozzle hops over the hole on all 24 rows it cuts.
+        assert!(long_hops(&lines, 3.0) >= 20);
+        let ordered = order_open_paths(lines.clone(), None);
+        assert_eq!(ordered.len(), lines.len());
+        assert!(
+            long_hops(&ordered, 3.0) <= 3,
+            "{}",
+            long_hops(&ordered, 3.0)
+        );
+        let total =
+            |p: &[ToolPath]| -> f32 { p.iter().map(|t| t.points[0].distance(t.points[1])).sum() };
+        assert!((total(&ordered) - total(&lines)).abs() < 1e-2);
     }
 
     #[test]

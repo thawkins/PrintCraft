@@ -112,6 +112,7 @@ pub fn to_json(p: &Project) -> String {
             "supports": s.supports,
             "support_angle": s.support_angle,
             "supports_on_plate_only": s.supports_on_plate_only,
+            "support_raft": s.support_raft,
             "adhesion": s.adhesion.label(),
             "infill_pattern": s.infill_pattern.label(),
             "seam": s.seam.label(),
@@ -237,6 +238,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
         supports: flag(st, "supports", d.supports),
         support_angle: num_in(st, "support_angle", d.support_angle, limits::SUPPORT_ANGLE),
         supports_on_plate_only: flag(st, "supports_on_plate_only", d.supports_on_plate_only),
+        support_raft: flag(st, "support_raft", d.support_raft),
         adhesion: Adhesion::ALL
             .into_iter()
             .find(|a| a.label() == pick("adhesion"))

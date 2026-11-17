@@ -26,7 +26,7 @@
     {"name": "walls", "group": "quality", "value": 2, "estimated": true},
     {"name": "top layers", "group": "quality", "value": 4, "estimated": true},
     {"name": "bottom layers", "group": "quality", "value": 3, "estimated": true},
-    {"name": "infill density", "group": "quality", "value": 15, "unit": "%", "estimated": true},
+    {"name": "infill density", "group": "quality", "value": 25, "unit": "%", "source": "person's request"},
     {"name": "infill pattern", "group": "quality", "value": "lines at 45 and 135 degrees, alternating by layer", "estimated": true},
     {"name": "infill overlap with walls", "group": "quality", "value": 15, "unit": "% of line width", "estimated": true},
     {"name": "print speed", "group": "speed", "value": 60, "unit": "mm/s", "estimated": true},
@@ -123,6 +123,14 @@
     {"name": "minimum arrow length on screen", "group": "controls", "value": 90, "unit": "px", "estimated": true},
     {"name": "minimum ring radius on screen", "group": "controls", "value": 75, "unit": "px", "estimated": true},
     {"name": "scale handle range", "group": "controls", "value": "1-2000", "unit": "%", "estimated": true},
-    {"name": "rotate handle rounding", "group": "controls", "value": 0.1, "unit": "deg", "estimated": true}
+    {"name": "rotate handle rounding", "group": "controls", "value": 0.1, "unit": "deg", "estimated": true},
+    {"name": "infill line order", "group": "slicing", "value": "nearest line end next (finish each area before crossing a hole)", "source": "person's request"},
+    {"name": "line order lookup bucket", "group": "slicing", "value": 3, "unit": "mm", "estimated": true},
+    {"name": "raft under supports that reach the plate", "group": "adhesion", "value": "when 'Raft under support' is on (default on)", "source": "person's request"},
+    {"name": "raft layers", "group": "adhesion", "value": 3, "estimated": true},
+    {"name": "raft base line spacing", "group": "adhesion", "value": 1.0, "unit": "mm", "estimated": true},
+    {"name": "raft margin around the print", "group": "adhesion", "value": 3, "unit": "mm", "estimated": true},
+    {"name": "support raft margin", "group": "adhesion", "value": 2, "unit": "mm", "estimated": true},
+    {"name": "raft air gap", "group": "adhesion", "value": 0.15, "unit": "mm", "estimated": true}
   ]
 }

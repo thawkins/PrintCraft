@@ -119,16 +119,19 @@ pub enum Adhesion {
     None,
     Skirt,
     Brim,
+    /// A few layers of lines under the whole print; the model sits on top of them.
+    Raft,
 }
 
 impl Adhesion {
-    pub const ALL: [Adhesion; 3] = [Self::None, Self::Skirt, Self::Brim];
+    pub const ALL: [Adhesion; 4] = [Self::None, Self::Skirt, Self::Brim, Self::Raft];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "None",
             Self::Skirt => "Skirt",
             Self::Brim => "Brim",
+            Self::Raft => "Raft",
         }
     }
 }
@@ -197,6 +200,9 @@ pub struct PrintSettings {
     pub support_angle: f32,
     /// Supports only stand on the plate, never on the model.
     pub supports_on_plate_only: bool,
+    /// Support columns that reach the plate stand on a small raft of their own, so they
+    /// stick to the bed (not needed with a full raft, which already covers them).
+    pub support_raft: bool,
     pub adhesion: Adhesion,
     pub infill_pattern: InfillPattern,
     pub seam: SeamPosition,
@@ -270,13 +276,15 @@ impl Quality {
             walls: 2,
             top_layers: 4,
             bottom_layers: 3,
-            infill_percent: 15.0,
+            // The person asked for 25 % as the default density.
+            infill_percent: 25.0,
             print_speed: 60.0,
             first_layer_speed: 25.0,
             travel_speed: 150.0,
             supports: false,
             support_angle: 50.0,
             supports_on_plate_only: false,
+            support_raft: true,
             adhesion: Adhesion::Skirt,
             infill_pattern: InfillPattern::Grid,
             // The original's main window shows "Seam position: Aligned" (reference/picture-2.png).

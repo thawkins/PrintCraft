@@ -3,6 +3,22 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// This user's PrintCraft settings folder: Linux `$XDG_CONFIG_HOME/printcraft` (or
+/// `~/.config/printcraft`), macOS `~/Library/Application Support/printcraft`, Windows
+/// `%APPDATA%\printcraft`. None when no home folder can be found.
+pub fn settings_dir() -> Option<PathBuf> {
+    let base = if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+    }?;
+    Some(base.join("printcraft"))
+}
+
 /// Writes `data` to a temporary file beside `path`, flushes it to disk, then renames it
 /// over `path`. The folder is created if needed; the temporary file never outlives a
 /// failure.

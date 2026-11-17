@@ -45,7 +45,13 @@ answers it is connected and selected. If not, **no printer is selected and a "Pr
 found" alert** says which printer couldn't be located. A project without a printer leaves
 none selected. New and Open ask "Save changes?" first when the plate has unsaved changes.
 Projects can also be opened by dropping them on the window or naming them on the
-command line, and the window title shows the project's name. Missing or unknown values in
+command line, and the window title shows the project's name.
+**Recent projects** (person's request, `src/recent.rs`): the File menu lists the 5
+projects opened or saved most recently, newest first and numbered, so one click opens
+them. Hovering shows the full path. A project that was moved or deleted is greyed out,
+and is dropped from the list if opening it fails. "Clear recent projects" empties the
+list. The list is kept in `recent_projects.json` in the settings folder, beside the saved
+printers. Missing or unknown values in
 a project file fall back to defaults, so older and newer files still open.
 
 ## Slicing
@@ -65,6 +71,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Supports "on build plate only" | **Yes (new)** |
 | Organic (tree) supports, support enforcers/blockers | Not yet |
 | Skirt and brim | Yes |
+| Raft | **Yes (new)**. Adhesion "Raft" puts 3 raft layers under the whole print, reaching 3 mm past it, with a 0.15 mm gap to the model. With supports on, support columns that reach the bed stand on their own small raft, even without the Raft option. A "Raft under support" switch in the Support section (on by default) turns this off. |
 | Retraction | Yes |
 | Z-hop (lift on retraction) | **Yes (new)** |
 | Cooling: slow down short layers (minimum layer time) | **Yes (new)**: default 15 s, never below 15 mm/s |

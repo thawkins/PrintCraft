@@ -38,6 +38,8 @@ pub struct StartOptions {
     pub device_page: bool,
     /// Start with this selection tool ("move", "scale" or "rotate").
     pub tool: Option<String>,
+    /// Show the File menu open (for checking pictures).
+    pub file_menu: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -145,6 +147,10 @@ pub struct PrintCraftApp {
     /// The selection tool: move arrows, scale corners or rotate rings.
     tool: gizmo::Tool,
     gizmo_hover: Option<gizmo::Handle>,
+    /// The last few projects opened or saved, listed in the File menu.
+    recent: crate::recent::RecentProjects,
+    /// Open the File menu on the first frame (`--file-menu`, for checking pictures).
+    open_file_menu: bool,
 }
 
 impl PrintCraftApp {
@@ -193,6 +199,16 @@ impl PrintCraftApp {
             egui_ctx: cc.egui_ctx.clone(),
             tool: gizmo::Tool::Move,
             gizmo_hover: None,
+            // Taking a check picture never changes the person's recent projects either.
+            recent: {
+                let path = crate::recent::RecentProjects::default_path();
+                if capturing {
+                    crate::recent::RecentProjects::load_read_only(path)
+                } else {
+                    crate::recent::RecentProjects::load(path)
+                }
+            },
+            open_file_menu: start.file_menu,
         };
         app.saved_fingerprint = app.fingerprint();
         app.load_paths(&start.models);
@@ -814,9 +830,10 @@ impl PrintCraftApp {
 
     /// The Move / Scale / Rotate buttons at the left of the 3D view.
     fn tool_bar(&mut self, ui: &mut Ui, rect: egui::Rect) {
+        const BUTTON: f32 = 44.0;
         let area = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + 10.0, rect.center().y - 70.0),
-            egui::vec2(96.0, 140.0),
+            egui::pos2(rect.left() + 10.0, rect.center().y - 80.0),
+            egui::vec2(BUTTON + 12.0, 3.0 * BUTTON + 24.0),
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
             egui::Frame::new()
@@ -826,9 +843,9 @@ impl PrintCraftApp {
                 .show(ui, |ui| {
                     ui.vertical(|ui| {
                         for t in gizmo::Tool::ALL {
-                            let text = RichText::new(format!("{}  {}", t.label(), t.key()));
-                            let b = egui::Button::selectable(self.tool == t, text)
-                                .min_size(egui::vec2(84.0, 30.0));
+                            let selected = self.tool == t;
+                            let b = egui::Button::selectable(selected, "")
+                                .min_size(egui::vec2(BUTTON, BUTTON));
                             let hint = match t {
                                 gizmo::Tool::Move => {
                                     "Drag the red or green arrow to slide the selected model"
@@ -840,7 +857,30 @@ impl PrintCraftApp {
                                     "Drag a red, green or blue ring to turn the selected model"
                                 }
                             };
-                            if ui.add(b).on_hover_text(hint).clicked() {
+                            let response = ui.add(b);
+                            let painter = ui.painter();
+                            let r = response.rect;
+                            let color = if selected || response.hovered() {
+                                Color32::WHITE
+                            } else {
+                                theme::TEXT
+                            };
+                            crate::tool_icons::draw(
+                                painter,
+                                r.shrink(5.0).translate(egui::vec2(-1.0, -1.0)),
+                                t,
+                                color,
+                            );
+                            // The keyboard shortcut, small in the corner.
+                            painter.text(
+                                r.right_bottom() + egui::vec2(-4.0, -2.0),
+                                egui::Align2::RIGHT_BOTTOM,
+                                t.key(),
+                                egui::FontId::proportional(10.0),
+                                theme::TEXT_DIM,
+                            );
+                            let tip = format!("{} ({})\n{hint}", t.label(), t.key());
+                            if response.on_hover_text(tip).clicked() {
                                 self.tool = t;
                             }
                         }
