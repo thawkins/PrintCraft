@@ -59,3 +59,23 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_byte_value_round_trips() {
+        let all: Vec<u8> = (0..=255).collect();
+        for len in [0, 1, 2, 3, 254, 255, 256] {
+            assert_eq!(base64_decode(&base64(&all[..len])).unwrap(), &all[..len]);
+        }
+    }
+
+    #[test]
+    fn line_breaks_in_the_text_are_ignored() {
+        assert_eq!(base64_decode("Zm9v\nYmFy\r\n").unwrap(), b"foobar");
+        assert_eq!(base64_decode("Zm9v YmFy").unwrap(), b"foobar");
+        assert_eq!(base64_decode("Zm9v!mFy"), None);
+    }
+}

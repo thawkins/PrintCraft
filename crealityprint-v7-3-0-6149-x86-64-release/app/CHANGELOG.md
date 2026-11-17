@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 18 more tests (139 in all), covering geometry, presets, saved printers, the slicing
+  pipeline, Klipper status, USB parsing, camera frames, the 3D view and base64.
+- Tests run with cargo-nextest (`cargo nextest run`), configured in
+  `.config/nextest.toml`, with a `ci` profile that retries once and writes JUnit.
 - Opening a project saved by a newer PrintCraft warns that it may use features this
   version doesn't support, and that saving it here drops them.
 - 3MF files in inches, centimetres, metres, feet or microns now load at the right size

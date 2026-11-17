@@ -248,6 +248,45 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn maps_every_klipper_print_state() {
+        for (klipper, ours) in [
+            ("standby", JobState::Idle),
+            ("printing", JobState::Printing),
+            ("paused", JobState::Paused),
+            ("complete", JobState::Finished),
+            ("error", JobState::Failed),
+            ("cancelled", JobState::Stopped),
+        ] {
+            let mut s = PrinterStatus::default();
+            apply_status(&mut s, &json!({"print_stats": {"state": klipper}}));
+            assert_eq!(s.state, ours, "{klipper}");
+        }
+        let mut s = PrinterStatus {
+            state: JobState::Printing,
+            ..PrinterStatus::default()
+        };
+        apply_status(&mut s, &json!({"print_stats": {"state": "something new"}}));
+        assert_eq!(
+            s.state,
+            JobState::Printing,
+            "an unknown state keeps the last one"
+        );
+    }
+
+    #[test]
+    fn reads_fan_speed_factor_and_an_empty_file_name() {
+        let mut s = PrinterStatus::default();
+        apply_status(
+            &mut s,
+            &json!({"fan": {"speed": 0.5}, "gcode_move": {"speed_factor": 1.25},
+                    "print_stats": {"filename": ""}}),
+        );
+        assert_eq!(s.fan_percent, Some(50.0));
+        assert_eq!(s.speed_percent, Some(125.0));
+        assert_eq!(s.file, None);
+    }
+
+    #[test]
     fn reads_klipper_status() {
         let mut s = PrinterStatus::default();
         apply_status(

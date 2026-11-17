@@ -55,6 +55,32 @@ pub fn slice_plate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slicing_a_plate_gives_layers_g_code_and_a_picture() {
+        use crate::model::{Mesh, PlacedObject};
+        let printer = Printer::presets().remove(0);
+        let tris =
+            PlacedObject::new("cube", Mesh::cube(Vec3::new(10.0, 10.0, 2.0))).world_triangles();
+        let out = slice_plate(
+            &tris,
+            &printer,
+            &Filament::presets()[0],
+            &PrintSettings::default(),
+            &|_| {},
+        );
+        assert_eq!(out.result.layers.len(), 10);
+        assert!((out.result.line_width - line_width(&printer)).abs() < 1e-6);
+        assert!(out.gcode.text.contains("; thumbnail begin"));
+        assert!(out.picture.is_some());
+    }
+
+    #[test]
+    fn line_width_is_a_little_wider_than_the_nozzle() {
+        let mut printer = Printer::presets().remove(0);
+        printer.nozzle_diameter = 0.4;
+        assert!((line_width(&printer) - 0.42).abs() < 1e-6);
+    }
     use crate::geometry::Vec3;
 
     #[test]

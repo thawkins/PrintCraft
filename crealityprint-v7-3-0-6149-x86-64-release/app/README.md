@@ -65,9 +65,16 @@ seam, ironing, vase mode, fuzzy skin and more).
 
 ## Development
 
+Tests run with [cargo-nextest](https://nexte.st), which runs each test in its own
+process. Install it once with `cargo install cargo-nextest --locked`, then:
+
 ```bash
-cargo test
+cargo nextest run
 ```
+
+Settings are in `.config/nextest.toml`; `cargo nextest run --profile ci` also retries a
+failure once and writes a JUnit report to `target/nextest/ci/junit.xml`. For line
+coverage, `cargo llvm-cov nextest` works with the same tests.
 
 ```bash
 cargo fmt --check

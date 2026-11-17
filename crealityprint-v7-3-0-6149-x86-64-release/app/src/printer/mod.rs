@@ -368,6 +368,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_connection_kind_round_trips_through_its_saved_name() {
+        for api in [Api::CrealityLan, Api::Moonraker, Api::PrusaLink, Api::Usb] {
+            assert_eq!(Api::from_key(api.key()), Some(api));
+        }
+        assert_eq!(Api::from_key("octoprint"), None);
+    }
+
+    #[test]
+    fn a_saved_printer_round_trips_without_its_password() {
+        let p = FoundPrinter {
+            host: "192.168.1.20".into(),
+            name: "Workshop".into(),
+            model: "Prusa printer (PrusaLink)".into(),
+            api: Some(Api::PrusaLink),
+            login: Some(("maker".into(), "secret".into())),
+            baud: None,
+        };
+        let v = p.to_json();
+        assert!(!v.to_string().contains("secret"));
+        let back = FoundPrinter::from_json(&v).unwrap();
+        assert_eq!(back, FoundPrinter { login: None, ..p });
+        assert_eq!(
+            FoundPrinter::from_json(&serde_json::json!({"name": "x"})),
+            None
+        );
+    }
+
+    #[test]
     fn numbers_may_be_text() {
         assert_eq!(json_number(&serde_json::json!("25.5")), Some(25.5));
         assert_eq!(json_number(&serde_json::json!(60)), Some(60.0));

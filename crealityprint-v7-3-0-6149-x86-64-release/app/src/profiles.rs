@@ -317,3 +317,64 @@ impl Default for PrintSettings {
         Quality::Standard.settings()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_quality_preset_is_recognised_after_applying_it() {
+        for q in Quality::ALL {
+            let mut s = PrintSettings {
+                seam: SeamPosition::Random,
+                ..PrintSettings::default()
+            };
+            q.apply(&mut s);
+            assert!(q.matches(&s), "{q:?}");
+            assert_eq!(s.seam, SeamPosition::Random, "other choices are kept");
+            let word = q.label().split_whitespace().next().unwrap();
+            assert_eq!(Quality::parse(word), Some(q));
+        }
+        assert_eq!(Quality::parse("ultra"), None);
+    }
+
+    #[test]
+    fn presets_have_unique_names_and_stay_within_the_panel_limits() {
+        let names = |v: Vec<String>| {
+            let mut sorted = v.clone();
+            sorted.sort();
+            sorted.dedup();
+            sorted.len() == v.len()
+        };
+        assert!(names(
+            Printer::presets().into_iter().map(|p| p.name).collect()
+        ));
+        assert!(names(
+            Filament::presets().into_iter().map(|f| f.name).collect()
+        ));
+        for p in Printer::presets() {
+            assert!(limits::PLATE_MM.contains(&p.bed_x) && limits::PLATE_MM.contains(&p.bed_y));
+            assert!(limits::PLATE_MM.contains(&p.max_z), "{}", p.name);
+        }
+        for f in Filament::presets() {
+            assert!(limits::NOZZLE_TEMP.contains(&f.nozzle_temp), "{}", f.name);
+            assert!(limits::BED_TEMP.contains(&f.bed_temp), "{}", f.name);
+        }
+        for s in Quality::ALL.map(Quality::settings) {
+            assert!(limits::LAYER_HEIGHT.contains(&s.layer_height));
+            assert!(limits::PRINT_SPEED.contains(&s.print_speed));
+            assert!(limits::FIRST_LAYER_SPEED.contains(&s.first_layer_speed));
+            assert!(limits::WALLS.contains(&s.walls));
+        }
+    }
+
+    #[test]
+    fn only_the_klipper_printer_preset_is_marked_klipper() {
+        let klipper: Vec<String> = Printer::presets()
+            .into_iter()
+            .filter(|p| p.klipper)
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(klipper, ["Creality Ender-3 V3 KE"]);
+    }
+}

@@ -10,7 +10,7 @@ Do not inspect, mount, extract, decompile, or otherwise read `/home/thawkins/bin
 
 ## Build, Test, and Development Commands
 
-No build manifest or runnable source exists yet, so there are currently no project build, run, or test commands. Once a Cargo project is added, document and use its actual commands; conventional starting points are `cargo run`, `cargo test`, and `cargo fmt --check`. Do not report these as passing until they have been run against the project.
+The Cargo project is in `crealityprint-v7-3-0-6149-x86-64-release/app/`; run commands from there: `cargo run`, `cargo nextest run` (tests; settings in `.config/nextest.toml`), `cargo fmt --check` and `cargo clippy --all-targets`. Do not report these as passing until they have been run against the project.
 
 ## Coding Style & Naming
 
@@ -18,7 +18,7 @@ Use Rust formatting from `rustfmt` with standard four-space indentation. Follow 
 
 ## Testing Guidelines
 
-Add focused unit tests for behavior and integration tests for user-visible workflows as features are implemented. Use descriptive Rust test names, such as `loads_saved_profile` or `rejects_invalid_settings`, and run them with `cargo test`. No coverage threshold or test framework configuration is established yet.
+Add focused unit tests for behavior and integration tests for user-visible workflows as features are implemented. Use descriptive Rust test names, such as `loads_saved_profile` or `rejects_invalid_settings`, and run them with `cargo nextest run` (each test runs in its own process). No coverage threshold is established yet; `cargo llvm-cov nextest` measures line coverage.
 
 ## Commits and Pull Requests
 

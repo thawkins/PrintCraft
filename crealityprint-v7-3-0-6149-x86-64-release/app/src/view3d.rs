@@ -342,6 +342,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_plate_centre_projects_into_the_view_and_back() {
+        let cam = Camera::for_plate(220.0, 220.0);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let (screen, depth) = cam.project(Vec3::default(), rect).unwrap();
+        assert!(rect.contains(screen) && depth > 0.0);
+        let back = cam.plate_point(screen, rect).unwrap();
+        assert!(back.length() < 1e-2, "{back:?}");
+    }
+
+    #[test]
+    fn a_point_behind_the_camera_is_not_drawn() {
+        let cam = Camera::for_plate(220.0, 220.0);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let behind = cam.toward_eye() * 1.0e6;
+        assert!(cam.project(behind, rect).is_none());
+    }
+
+    #[test]
     fn a_triangle_squashed_to_a_point_covers_nothing() {
         let a = Pos2::new(5.0, 5.0);
         assert!(!inside_triangle(Pos2::new(100.0, 40.0), a, a, a));

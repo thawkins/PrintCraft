@@ -125,3 +125,27 @@ impl Bounds {
         (self.min + self.max) * 0.5
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounds_span_their_points_and_none_is_invalid() {
+        assert!(!Bounds::of([]).is_valid());
+        let b = Bounds::of([Vec3::new(1.0, -2.0, 3.0), Vec3::new(-1.0, 4.0, 0.0)]);
+        assert!(b.is_valid());
+        assert_eq!(b.size(), Vec3::new(2.0, 6.0, 3.0));
+        assert_eq!(b.center(), Vec3::new(0.0, 1.0, 1.5));
+    }
+
+    #[test]
+    fn vector_maths_follows_the_right_hand_rule() {
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        assert_eq!(x.cross(y), Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(x.dot(y), 0.0);
+        assert!((Vec3::new(3.0, 4.0, 0.0).normalized().length() - 1.0).abs() < 1e-6);
+        // A zero vector has no direction; it falls back to straight up, never NaN.
+        assert_eq!(Vec3::default().normalized(), Vec3::new(0.0, 0.0, 1.0));
+    }
+}

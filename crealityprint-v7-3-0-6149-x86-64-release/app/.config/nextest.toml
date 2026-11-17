@@ -1,0 +1,18 @@
+# cargo-nextest settings: https://nexte.st/docs/configuration/
+# Run the suite with `cargo nextest run` (each test in its own process, so tests that
+# change process-wide state such as the TZ variable can't affect one another).
+
+[profile.default]
+# The pretend-printer tests wait for real sockets; flag anything much slower.
+slow-timeout = { period = "15s", terminate-after = 4 }
+# Show every failure, not only the first.
+fail-fast = false
+
+[profile.ci]
+# For automated runs: retry once to tell a flaky network test from a real failure,
+# and write a JUnit report to target/nextest/ci/junit.xml.
+retries = 1
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"

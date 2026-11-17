@@ -164,6 +164,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_picture_still_arriving_is_left_in_the_buffer() {
+        let mut buf = vec![0x00, 0xFF, 0xD8, 0x01, 0x02];
+        assert_eq!(take_jpeg(&mut buf), None);
+        assert_eq!(buf.len(), 5, "nothing is thrown away while waiting");
+        buf.extend_from_slice(&[0xFF, 0xD9, 0x07]);
+        assert_eq!(
+            take_jpeg(&mut buf),
+            Some(vec![0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9])
+        );
+        assert_eq!(buf, [0x07]);
+    }
+
+    #[test]
     fn splits_mjpeg_stream_into_pictures() {
         let mut buf = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n".to_vec();
         buf.extend_from_slice(&[0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9]);

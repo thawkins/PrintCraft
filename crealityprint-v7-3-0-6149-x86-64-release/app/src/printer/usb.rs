@@ -429,6 +429,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lines_without_temperatures_change_nothing() {
+        let mut s = PrinterStatus::default();
+        assert!(!parse_temps("ok", &mut s));
+        assert!(!parse_temps("echo:busy: processing", &mut s));
+        assert!(!parse_temps("T:abc B:", &mut s));
+        assert_eq!((s.nozzle, s.bed), (None, None));
+        // A report without targets keeps the targets already known.
+        s.nozzle_target = Some(215.0);
+        assert!(parse_temps("T:200.5 B:59.0", &mut s));
+        assert_eq!((s.nozzle, s.nozzle_target), (Some(200.5), Some(215.0)));
+    }
+
+    #[test]
+    fn comments_and_blank_lines_are_not_sent() {
+        let (cmds, layers, total) = prepare("; header\n\nG28 ; home\n;LAYER:0\nG1 X1\n   \n");
+        assert_eq!(cmds, ["G28", "G1 X1"]);
+        assert_eq!(layers, [0, 1]);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
     fn checksums_match_the_reprap_rule() {
         // XOR of every byte of "N1 G28" = 18 (checked by hand: N=78,1=49,space=32,G=71,2=50,8=56).
         assert_eq!(numbered(1, "G28"), "N1 G28*18");
