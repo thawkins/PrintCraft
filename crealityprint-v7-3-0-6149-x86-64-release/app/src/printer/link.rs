@@ -1,7 +1,9 @@
 //! A live connection to one printer, run on a background thread. The window reads a
 //! snapshot each frame and sends commands through a channel.
 
-use super::{creality, moonraker, prusalink, usb, Api, Command, FoundPrinter, PrinterStatus, Wake};
+use super::{
+    creality, moonraker, prusalink, sailfish, usb, Api, Command, FoundPrinter, PrinterStatus, Wake,
+};
 use std::collections::VecDeque;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -187,6 +189,7 @@ impl PrinterLink {
                 Api::Moonraker => moonraker::run(&worker),
                 Api::PrusaLink => prusalink::run(&worker),
                 Api::Usb => usb::run(&worker),
+                Api::Sailfish => sailfish::run(&worker),
             }
         });
         Self {

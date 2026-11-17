@@ -12,6 +12,9 @@
 //! 14:02:07.530  +2.022s  <<< FIRMWARE_NAME:Repetier_1.0.3 ...
 //! ```
 //!
+//! A MakerBot / Sailfish printer speaks binary packets; those lines show the packet's
+//! bytes in hex followed by what it means (`>>> D5 03 0A 00 02 …  (tool 0: temperature?)`).
+//!
 //! The file stops growing at [`LIMIT_BYTES`]; a print's start is where problems show.
 //! Nothing secret goes over a serial port (only G-code and the printer's replies).
 
@@ -83,6 +86,16 @@ impl SerialLog {
         self.line("---", msg);
     }
 
+    /// A binary packet the app sent (MakerBot S3G): its bytes in hex, then what it means.
+    pub fn sent_packet(&mut self, bytes: &[u8], meaning: &str) {
+        self.line(">>>", &packet_text(bytes, meaning));
+    }
+
+    /// A binary packet the printer sent.
+    pub fn received_packet(&mut self, bytes: &[u8], meaning: &str) {
+        self.line("<<<", &packet_text(bytes, meaning));
+    }
+
     fn line(&mut self, mark: &str, text: &str) {
         let text = text.trim_end_matches(['\r', '\n']);
         let entry = format!(
@@ -106,6 +119,14 @@ impl SerialLog {
             return;
         }
         self.written += text.len() as u64;
+    }
+}
+
+fn packet_text(bytes: &[u8], meaning: &str) -> String {
+    if meaning.is_empty() {
+        crate::x3g::hex(bytes)
+    } else {
+        format!("{}  ({meaning})", crate::x3g::hex(bytes))
     }
 }
 
@@ -139,6 +160,21 @@ mod tests {
         );
         assert!(lines[3].ends_with("--- printer restarted"), "{text}");
         assert!(lines[1].contains("  +0."), "seconds since opening: {text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn records_binary_packets_as_hex_with_their_meaning() {
+        let dir = temp_dir("packets");
+        let mut log = SerialLog::open(&dir, "/dev/ttyACM0", 115_200, LIMIT_BYTES).unwrap();
+        log.sent_packet(&[0xD5, 0x01, 0x17, 0x4A], "motherboard status?");
+        log.received_packet(&[0xD5, 0x02, 0x81, 0x00, 0x1F], "");
+        let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(
+            text.contains(">>> D5 01 17 4A  (motherboard status?)"),
+            "{text}"
+        );
+        assert!(text.contains("<<< D5 02 81 00 1F\n"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

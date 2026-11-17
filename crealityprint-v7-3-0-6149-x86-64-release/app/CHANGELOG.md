@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- MakerBot-protocol (Sailfish) printers over USB, read-only. Under USB, choose the
+  protocol "MakerBot / Sailfish" to connect to a FlashForge Creator Pro, early Creator
+  Pro 2, Replicator or a clone. The app shows:
+  * the firmware, with a "MakerBot protocol · Sailfish x.y" badge;
+  * temperatures for both nozzles and the bed;
+  * a print running from the printer's SD card.
+
+  It reads the machine's settings from its EEPROM (steps per mm, axis lengths, nozzle
+  count, Ditto printing) and saves a copy as `sailfish-eeprom.bin`. Every packet goes
+  into `usb-serial.log` in hex, with its meaning. Nothing that moves, heats or writes is
+  sent yet. Not yet confirmed on a real printer. (uncommitted)
+- makerbot.md: the plan for X3G export, MakerBot/Sailfish printing, FlashForge printers
+  and configurable dual extruders, with the protocol facts checked against the published
+  sources. (uncommitted)
+
 ## [0.0.3] - 2026-11-18
 
 ### Added

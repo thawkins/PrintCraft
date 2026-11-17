@@ -208,6 +208,52 @@ Sources: the RepRap wiki pages "Repetier-Firmware" and "G-code", read for this.
 * **Heat waits.** `M109 S` and `M190 S` wait only while heating, as in Marlin, so print
   files need no change.
 
+## 3d. MakerBot protocol / Sailfish over USB (src/printer/sailfish.rs, src/x3g) — documented, read-only, unverified on a real printer
+
+For Sailfish and MakerBot firmware: the FlashForge Creator Pro and early Creator Pro 2,
+Replicator 1/2/2X and their clones. The plan and the sources are in makerbot.md.
+
+Sources:
+* MakerBot's protocol specification (`doc/s3gProtocol.md` in the `makerbot/s3g`
+  repository);
+* the Sailfish 7.8 source (`Packet.hh`, `Packet.cc`, `Commands.hh`, `Host.cc`,
+  `EepromMap.hh`, `Configuration.hh`).
+
+* **Choosing it.** Under USB, set **Protocol** to "MakerBot / Sailfish (read-only)". It
+  isn't detected by itself yet. The choice is saved with the printer (`"api": "sailfish"`).
+* **Packets.** Each packet is:
+  * `0xD5`;
+  * the length;
+  * the payload (at most 32 bytes);
+  * an iButton/Maxim CRC-8 of the payload.
+
+  One question is in flight at a time. A damaged, missing or "send again" answer
+  (`0x80`, `0x82`, `0x83`, `0x88`, `0x8C`) is asked again, up to 5 times. Any other error
+  code is final for that question.
+* **What it asks, all questions that change nothing:**
+  * version (0) and advanced version (27);
+  * a copy of the whole 4 KB EEPROM (12, 31 bytes at a time);
+  * position (21);
+  * then every 2 s: nozzle and target temperatures for each nozzle, and bed and target
+    temperatures (10 with subcommands 2, 32, 30, 33);
+  * motherboard status (23) and build statistics (24);
+  * the build name (20) while a build runs.
+* **Never sent:** anything that moves, heats or writes. Also never sent: 3 (clear buffer)
+  and 7 (abort), which make Sailfish restart the board. A test checks this.
+* **Shown to the person:**
+  * a "MakerBot protocol · Sailfish 7.8" badge, from the variant byte: 0x80 is Sailfish
+    (the specification and `Configuration.hh`), and 2 is accepted too;
+  * the machine's settings, read from the EEPROM copy: its name, nozzle count, heated
+    bed, Ditto printing, and for each axis the steps per mm, length, maximum speed and
+    home direction;
+  * temperatures (right and left nozzle on two-nozzle machines, with tool 0 as the
+    right one);
+  * a print started from the printer's own SD card, with its name and running time.
+* **Controls** (temperatures, moves, starting a print) are refused with a note. They
+  come with the next stages.
+* **Records.** The packets go into `usb-serial.log` as hex, with what each one means. The
+  EEPROM copy is saved as `sailfish-eeprom.bin` beside it.
+
 ## 4. Progress and monitoring (src/device_ui.rs)
 
 The Printer page shows:
@@ -449,3 +495,8 @@ and shows the newest one. If no camera is found, the page says so and offers
   * whether its screen shows the `M531` name and `M532` progress;
   * whether `G32` suits its probe setup.
   Repetier-Server (network) is not supported.
+* MakerBot protocol / Sailfish: a real printer. Still to confirm:
+  * that the board answers at 115200 baud after the 2 s start-up wait;
+  * the variant byte it actually sends;
+  * whether the EEPROM layout of an early Creator Pro 2 matches Sailfish 7.8's
+    `EepromMap.hh`.

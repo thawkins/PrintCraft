@@ -9,6 +9,8 @@
 //!   Prusa's documented local HTTP API, protected by a password.
 //! * A USB cable: G-code is streamed line by line over the serial port (Marlin and Prusa
 //!   firmware).
+//! * A USB cable to a MakerBot-protocol printer (Sailfish: FlashForge Creator Pro and early
+//!   Creator Pro 2, Replicator 1/2/2X): binary S3G packets. Read-only for now.
 
 pub mod calibration;
 pub mod camera;
@@ -23,6 +25,7 @@ pub mod layer_info;
 pub mod link;
 pub mod moonraker;
 pub mod prusalink;
+pub mod sailfish;
 pub mod serial_log;
 pub mod usb;
 
@@ -34,6 +37,8 @@ pub enum Api {
     Moonraker,
     PrusaLink,
     Usb,
+    /// The MakerBot S3G protocol over USB (Sailfish firmware).
+    Sailfish,
 }
 
 impl Api {
@@ -43,12 +48,18 @@ impl Api {
             Self::Moonraker => "Klipper (Moonraker)",
             Self::PrusaLink => "PrusaLink",
             Self::Usb => "USB cable",
+            Self::Sailfish => "USB cable, MakerBot protocol",
         }
     }
 
     /// Printers running Klipper understand Klipper's own commands.
     pub fn is_klipper(self) -> bool {
         matches!(self, Self::CrealityLan | Self::Moonraker)
+    }
+
+    /// Connected by a cable to a serial port rather than over the network.
+    pub fn is_serial(self) -> bool {
+        matches!(self, Self::Usb | Self::Sailfish)
     }
 }
 
@@ -60,6 +71,7 @@ impl Api {
             Self::Moonraker => "moonraker",
             Self::PrusaLink => "prusalink",
             Self::Usb => "usb",
+            Self::Sailfish => "sailfish",
         }
     }
 
@@ -69,6 +81,7 @@ impl Api {
             Self::Moonraker,
             Self::PrusaLink,
             Self::Usb,
+            Self::Sailfish,
         ]
         .into_iter()
         .find(|a| a.key() == key)
@@ -151,6 +164,9 @@ pub struct PrinterStatus {
     pub state: JobState,
     pub nozzle: Option<f32>,
     pub nozzle_target: Option<f32>,
+    /// The second nozzle (tool 1) on a two-nozzle printer; None on one-nozzle printers.
+    pub nozzle2: Option<f32>,
+    pub nozzle2_target: Option<f32>,
     pub bed: Option<f32>,
     pub bed_target: Option<f32>,
     /// 0-100.
@@ -343,6 +359,12 @@ impl Api {
                 files: false,
                 history: false,
             },
+            // Read-only for now (makerbot.md, step 3a).
+            Self::Sailfish => Abilities {
+                controls: false,
+                files: false,
+                history: false,
+            },
         }
     }
 }
@@ -462,7 +484,13 @@ mod tests {
 
     #[test]
     fn every_connection_kind_round_trips_through_its_saved_name() {
-        for api in [Api::CrealityLan, Api::Moonraker, Api::PrusaLink, Api::Usb] {
+        for api in [
+            Api::CrealityLan,
+            Api::Moonraker,
+            Api::PrusaLink,
+            Api::Usb,
+            Api::Sailfish,
+        ] {
             assert_eq!(Api::from_key(api.key()), Some(api));
         }
         assert_eq!(Api::from_key("octoprint"), None);

@@ -94,6 +94,9 @@ pub struct DevicePage {
     usb_ports: Vec<String>,
     usb_port: String,
     usb_baud: u32,
+    /// Which protocol the USB printer speaks: G-code lines (`Api::Usb`) or MakerBot S3G
+    /// packets (`Api::Sailfish`).
+    usb_api: Api,
     /// The last plate sent from here, kept so it can be printed again.
     last_job: Option<PrintJob>,
     /// Name and printer path of the file seen printing most recently.
@@ -155,6 +158,7 @@ impl Default for DevicePage {
             usb_ports: Vec::new(),
             usb_port: String::new(),
             usb_baud: usb::DEFAULT_BAUD,
+            usb_api: Api::Usb,
             last_job: None,
             seen_file: None,
             prev_state: JobState::Unknown,
@@ -250,7 +254,7 @@ impl DevicePage {
         let search = self.search_hosts;
         std::thread::spawn(move || {
             let found = match p.api {
-                Some(Api::Usb) | None => device_is_present(&p).then(|| p.clone()),
+                Some(Api::Usb | Api::Sailfish) | None => device_is_present(&p).then(|| p.clone()),
                 Some(_) => discovery::relocate(&p, &search()),
             };
             let _ = tx.send(found);
@@ -295,7 +299,7 @@ impl DevicePage {
                         }
                     }
                     None => {
-                        let usb = printer.api == Some(Api::Usb);
+                        let usb = printer.api.is_some_and(Api::is_serial);
                         let place = if usb { "on USB port" } else { "at" };
                         let searched = if usb {
                             ""
@@ -419,7 +423,7 @@ impl DevicePage {
             name: format!("USB printer ({})", self.usb_port),
             model: "USB".into(),
             host: self.usb_port.clone(),
-            api: Some(Api::Usb),
+            api: Some(self.usb_api),
             baud: Some(self.usb_baud),
             ..Default::default()
         };
@@ -427,7 +431,7 @@ impl DevicePage {
     }
 
     fn connect(&mut self, mut printer: FoundPrinter, ctx: &egui::Context) {
-        if printer.api != Some(Api::Usb) && !self.prusa_password.trim().is_empty() {
+        if !printer.api.is_some_and(Api::is_serial) && !self.prusa_password.trim().is_empty() {
             printer.login = Some((
                 prusalink::DEFAULT_USER.into(),
                 self.prusa_password.trim().to_string(),
@@ -435,7 +439,7 @@ impl DevicePage {
         }
         let wake = waker(ctx);
         // A USB printer has no network camera.
-        self.camera = (printer.api != Some(Api::Usb))
+        self.camera = (!printer.api.is_some_and(Api::is_serial))
             .then(|| CameraFeed::start(printer.host.clone(), wake.clone()));
         self.camera_texture = None;
         self.camera_frame = 0;
@@ -739,9 +743,10 @@ impl DevicePage {
             let _ = self.known.save();
         }
         if let Some(p) = connect {
-            if p.api == Some(Api::Usb) {
+            if let Some(api) = p.api.filter(|a| a.is_serial()) {
                 self.usb_port = p.host.clone();
                 self.usb_baud = p.baud.unwrap_or(usb::DEFAULT_BAUD);
+                self.usb_api = api;
                 self.connect(p, &ctx);
             } else {
                 // Its address may have changed since: check, and search if it's not there.
@@ -889,9 +894,19 @@ impl DevicePage {
         let mut go = false;
         card(ui, "Printer on a USB cable", |ui| {
             ui.label(
-                RichText::new("For printers running Marlin, Prusa or Repetier firmware. The app sends the print line by line, so keep this computer awake until it finishes.")
+                RichText::new("For printers running Marlin, Prusa or Repetier firmware. The app sends the print line by line, so keep this computer awake until it finishes. MakerBot-protocol printers (Sailfish: FlashForge Creator Pro, Replicator) can be connected to read their temperatures, state and settings.")
                     .color(theme::TEXT_DIM),
             );
+            ui.horizontal(|ui| {
+                ui.label("Protocol");
+                egui::ComboBox::from_id_salt("usb_protocol")
+                    .selected_text(usb_protocol_name(self.usb_api))
+                    .show_ui(ui, |ui| {
+                        for api in [Api::Usb, Api::Sailfish] {
+                            ui.selectable_value(&mut self.usb_api, api, usb_protocol_name(api));
+                        }
+                    });
+            });
             if self.usb_ports.is_empty() && ui.ctx().cumulative_frame_nr() % 300 == 1 {
                 self.usb_ports = usb::list_ports();
             }
@@ -945,7 +960,7 @@ impl DevicePage {
         let Some(link) = &self.link else { return };
         // "name_address" like the printer screen; just the address until the printer says its name.
         let label = match (&s.status.hostname, link.printer.api) {
-            (_, Some(Api::Usb)) => link.printer.name.clone(),
+            (_, Some(a)) if a.is_serial() => link.printer.name.clone(),
             (Some(h), _) if !h.is_empty() => format!("{h}_{}", link.printer.host),
             _ if link.printer.name.starts_with("Printer at ") => link.printer.host.clone(),
             _ => format!("{}_{}", link.printer.name, link.printer.host),
@@ -972,7 +987,7 @@ impl DevicePage {
                     });
                 });
             let api = s.api.map(|a| a.label()).unwrap_or("Connecting…");
-            let usb = link.printer.api == Some(Api::Usb);
+            let usb = link.printer.api.is_some_and(Api::is_serial);
             // A USB printer's "model" is its firmware name, shown in the protocol badge.
             let model = s
                 .status
@@ -983,7 +998,7 @@ impl DevicePage {
                 .unwrap_or_default();
             ui.label(RichText::new(format!("{api}{model}")).color(theme::TEXT_DIM));
             if usb && s.connected {
-                protocol_badge(ui, s.status.firmware.as_deref());
+                protocol_badge(ui, link.printer.api, s.status.firmware.as_deref());
             }
         });
         if close {
@@ -1022,7 +1037,7 @@ impl DevicePage {
 
     fn restart_camera(&mut self, ctx: &egui::Context) {
         if let Some(link) = &self.link {
-            if link.printer.api != Some(Api::Usb) {
+            if !link.printer.api.is_some_and(Api::is_serial) {
                 self.camera = Some(CameraFeed::start(link.printer.host.clone(), waker(ctx)));
                 self.camera_texture = None;
                 self.camera_frame = 0;
@@ -1373,7 +1388,11 @@ impl DevicePage {
             calibration_changed = self.calibration_details(ui, &st, self_levelling);
             ui.add_space(6.0);
             if !controls {
-                ui.label(RichText::new("These controls aren't available for this printer's connection (PrusaLink). Use the printer's screen.").color(theme::TEXT_DIM));
+                let why = match self.api() {
+                    Some(Api::Sailfish) => "The MakerBot-protocol connection only reads from the printer for now. Use the printer's screen.",
+                    _ => "These controls aren't available for this printer's connection (PrusaLink). Use the printer's screen.",
+                };
+                ui.label(RichText::new(why).color(theme::TEXT_DIM));
             }
             ui.add_enabled_ui(controls, |ui| {
                 self.temperature_tiles(ui, &st, &mut cmds);
@@ -1427,16 +1446,30 @@ impl DevicePage {
 
     /// The Nozzle Temp and Bed Temp tiles side by side.
     fn temperature_tiles(&mut self, ui: &mut Ui, st: &PrinterStatus, cmds: &mut Vec<Command>) {
+        // On a two-nozzle printer tool 0 is the right nozzle (Replicator Dual and its clones).
+        let two = st.nozzle2.is_some();
         ui.horizontal_wrapped(|ui| {
             if let Some(v) = temp_tile(
                 ui,
-                "Nozzle Temp",
+                if two { "Right Nozzle" } else { "Nozzle Temp" },
                 st.nozzle,
                 st.nozzle_target,
                 300.0,
                 &mut self.nozzle_edit,
             ) {
                 cmds.push(Command::SetNozzle(v));
+            }
+            if two {
+                // Shown only: no command sets the second nozzle yet, so an edit is dropped.
+                let mut edit = None;
+                let _ = temp_tile(
+                    ui,
+                    "Left Nozzle",
+                    st.nozzle2,
+                    st.nozzle2_target,
+                    300.0,
+                    &mut edit,
+                );
             }
             if let Some(v) = temp_tile(
                 ui,
@@ -1867,7 +1900,7 @@ pub fn device_is_present(p: &FoundPrinter) -> bool {
     use crate::printer::{creality, link, moonraker};
     let t = std::time::Duration::from_millis(1500);
     match p.api {
-        Some(Api::Usb) => usb::list_ports().contains(&p.host),
+        Some(Api::Usb | Api::Sailfish) => usb::list_ports().contains(&p.host),
         Some(Api::CrealityLan) => link::port_open(&p.host, creality::WS_PORT, t),
         Some(Api::Moonraker) => link::port_open(&p.host, moonraker::PORT, t),
         Some(Api::PrusaLink) => link::port_open(&p.host, prusalink::PORT, t),
@@ -2008,9 +2041,24 @@ fn temp_tile(
 /// The protocol a USB printer is driven with, as a badge beside the connection: Repetier's
 /// in the accent colour with its version, Marlin-style dimmed, and a note while the
 /// printer hasn't named its firmware yet.
-fn protocol_badge(ui: &mut Ui, firmware: Option<&str>) {
-    let (text, color, hover) = match firmware {
-        Some(name) => {
+fn protocol_badge(ui: &mut Ui, api: Option<Api>, firmware: Option<&str>) {
+    let (text, color, hover) = match (api, firmware) {
+        (Some(Api::Sailfish), Some(name)) => (
+            format!("MakerBot protocol · {name}"),
+            theme::ACCENT,
+            format!(
+                "The printer answered the MakerBot (S3G) version questions: {name}. \
+                 Read-only for now: temperatures, state and settings."
+            ),
+        ),
+        (Some(Api::Sailfish), None) => (
+            "MakerBot protocol: waiting for the version".to_string(),
+            theme::WARNING,
+            "The app asked the printer for its firmware version in the MakerBot protocol and \
+             is waiting for the answer."
+                .to_string(),
+        ),
+        (_, Some(name)) => {
             let text = match crate::printer::repetier_version(name) {
                 Some(v) => format!("Repetier-Firmware v{v}"),
                 None if Firmware::from_name(name) == Firmware::Repetier => {
@@ -2029,7 +2077,7 @@ fn protocol_badge(ui: &mut Ui, firmware: Option<&str>) {
             );
             (text, color, hover)
         }
-        None => (
+        (_, None) => (
             "Protocol: waiting for the firmware's name".to_string(),
             theme::WARNING,
             "The app asked the printer for its firmware (M115) and is waiting for the answer. \
@@ -2046,6 +2094,14 @@ fn protocol_badge(ui: &mut Ui, firmware: Option<&str>) {
         })
         .response
         .on_hover_text(hover);
+}
+
+/// The protocol choices for a printer on a USB cable.
+fn usb_protocol_name(api: Api) -> &'static str {
+    match api {
+        Api::Sailfish => "MakerBot / Sailfish (read-only)",
+        _ => "G-code (Marlin, Prusa, Repetier)",
+    }
 }
 
 /// A serial port name (`/dev/ttyUSB0`, `COM3`) rather than a network address.

@@ -93,7 +93,7 @@ fn api_port(api: Api) -> Option<u16> {
         Api::CrealityLan => Some(creality::WS_PORT),
         Api::Moonraker => Some(moonraker::PORT),
         Api::PrusaLink => Some(prusalink::PORT),
-        Api::Usb => None,
+        Api::Usb | Api::Sailfish => None,
     }
 }
 
@@ -102,7 +102,7 @@ fn identify_as(api: Api, host: &str) -> Option<FoundPrinter> {
         Api::CrealityLan => creality::identify(host),
         Api::Moonraker => moonraker::identify(host),
         Api::PrusaLink => prusalink::identify(host),
-        Api::Usb => None,
+        Api::Usb | Api::Sailfish => None,
     }
 }
 

@@ -30,6 +30,7 @@ mod thumbnail;
 mod tool_icons;
 mod view3d;
 mod widgets;
+mod x3g;
 
 use eframe::egui;
 use std::path::PathBuf;

@@ -35,6 +35,10 @@ printer or slicer maker.
   resend. The printer page shows which protocol is in use ("Repetier-Firmware v1" or
   "v2", or "Marlin-style protocol"), and every line sent and received is recorded in
   `usb-serial.log` in the settings folder's `logs` folder, for diagnosing a printer.
+- MakerBot-protocol printers over USB (Sailfish: FlashForge Creator Pro, early Creator
+  Pro 2, Replicator), read-only for now: firmware, temperatures, the printer's own SD
+  prints and its machine settings. Printing to them and X3G export are planned in
+  makerbot.md.
 - Finds printers on the local network and remembers known ones, and finds a known
   printer again when it has moved to a new address.
 - Live status, temperatures, pause / resume / stop, camera view (Creality and Klipper
