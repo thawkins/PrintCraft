@@ -22,14 +22,16 @@ printer or slicer maker.
 - Fine / Standard / Draft quality presets, plus layer height, walls, top and bottom
   layers, infill density and speeds.
 - Infill patterns: lines, grid, triangles. Seam position: aligned, nearest, rear, random.
-- Supports (optionally only on the plate), skirt, brim or raft, retraction, z-hop.
+- Supports (optionally only on the plate), skirt, brim or raft, z-hop, and retraction
+  with a settable travel threshold, an optional retraction on layer changes, and wipe.
 - Ironing, fuzzy skin, a textured top surface and spiral vase mode.
 - Cooling slowdown for short layers and fan control.
 - Time, filament, weight and cost estimates, and a thumbnail picture in the G-code.
 
 **Printers**
 - Printer presets: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool), Creality
-  Ender-3 V3 KE, and four generic plate sizes.
+  Ender-3 V3 KE, FlashForge Creator Pro (Sailfish, two nozzles), and four generic plate
+  sizes.
 - Network printing to Creality's network service, Klipper (Moonraker) and PrusaLink.
 - USB printing to Marlin, Prusa and Repetier firmware, with line numbers, checksums and
   resend. The printer page shows which protocol is in use ("Repetier-Firmware v1" or
@@ -39,8 +41,16 @@ printer or slicer maker.
   Pro 2, Replicator): printing as X3G, with pause, stop, the controls and the SD card's
   files. X3G export saves files for the card (preset "FlashForge Creator Pro
   (Sailfish)").
-- Two-nozzle printers: a nozzle for each part, a support nozzle, a second filament and
-  Ditto printing.
+- Two-nozzle printers (two nozzles on one carriage):
+  * a nozzle for each part, a support nozzle and a second filament;
+  * a settable primary nozzle (right, T0, by default) and nozzle spacing;
+  * one tool change per layer, with the idle nozzle pulled back and kept at a standby
+    temperature;
+  * a prime tower (its position can be set) and an optional ooze shield;
+  * per-nozzle filament and cost, and a preview coloured by nozzle;
+  * Ditto printing, with a check that the job leaves room for the copy.
+
+  The plan and the protocol notes are in [makerbot.md](makerbot.md).
 - Finds printers on the local network and remembers known ones, and finds a known
   printer again when it has moved to a new address.
 - Live status, temperatures, pause / resume / stop, camera view (Creality and Klipper
@@ -118,6 +128,12 @@ Further documentation:
   each printer connection works.
 - [docs/REFACTOR_AUDIT.md](docs/REFACTOR_AUDIT.md):
   the latest code audit and its open items.
+- [makerbot.md](makerbot.md): the MakerBot / Sailfish and two-nozzle plan, its sources
+  and what is done.
+- [BUILDSTATS.md](BUILDSTATS.md): measured build times, disk use, line coverage and
+  test totals.
+- [AGENTS.md](AGENTS.md) and [AGENTS-LANGUAGE.md](AGENTS-LANGUAGE.md): instructions for
+  coding agents working in this folder (copied from the ragent project).
 - [CHANGELOG.md](CHANGELOG.md): notable changes.
 
 ## License
