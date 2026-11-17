@@ -142,6 +142,24 @@ fn project(cam: &Camera, rect: Rect, p: Vec3) -> Option<Pos2> {
     cam.project(p, rect).map(|q| q.0)
 }
 
+/// Share of an arrow, from the centre, that is not part of its grab area.
+const SHAFT_START: f32 = 0.3;
+
+/// The on-screen pieces of a 3D polyline: points behind the camera split it, so the gap
+/// is never bridged by a straight line across the view.
+fn visible_runs(cam: &Camera, rect: Rect, points: Vec<Vec3>) -> Vec<Vec<Pos2>> {
+    let mut runs = vec![Vec::new()];
+    for p in points {
+        match project(cam, rect, p) {
+            Some(q) => runs.last_mut().expect("never empty").push(q),
+            None if runs.last().is_some_and(|r| !r.is_empty()) => runs.push(Vec::new()),
+            None => {}
+        }
+    }
+    runs.retain(|r| r.len() > 1);
+    runs
+}
+
 /// The handle under the mouse, nearest first.
 pub fn pick(cam: &Camera, rect: Rect, b: &Bounds, tool: Tool, at: Pos2) -> Option<Handle> {
     let c = project(cam, rect, b.center())?;
@@ -156,9 +174,12 @@ pub fn pick(cam: &Camera, rect: Rect, b: &Bounds, tool: Tool, at: Pos2) -> Optio
         match h {
             Handle::MoveX | Handle::MoveY => {
                 if let Some(t) = project(cam, rect, arrow_tip(b, h, px)) {
-                    // Along the shaft, or a little more generous at the head.
+                    // Along the shaft, or a little more generous at the head. The shaft
+                    // starts clear of the centre, which is over the model: pressing there
+                    // moves the model freely rather than along one axis.
+                    let from = c + (t - c) * SHAFT_START.min(1.0);
                     consider(
-                        dist_to_segment(at, c, t).min((t.distance(at) - 4.0).max(0.0)),
+                        dist_to_segment(at, from, t).min((t.distance(at) - 4.0).max(0.0)),
                         h,
                     );
                 }
@@ -169,12 +190,9 @@ pub fn pick(cam: &Camera, rect: Rect, b: &Bounds, tool: Tool, at: Pos2) -> Optio
                 }
             }
             _ => {
-                let pts: Vec<Pos2> = ring_points(b, h, px)
-                    .into_iter()
-                    .filter_map(|p| project(cam, rect, p))
-                    .collect();
-                let d = pts
-                    .windows(2)
+                let d = visible_runs(cam, rect, ring_points(b, h, px))
+                    .iter()
+                    .flat_map(|run| run.windows(2))
                     .map(|w| dist_to_segment(at, w[0], w[1]))
                     .fold(f32::MAX, f32::min);
                 consider(d, h);
@@ -281,11 +299,9 @@ pub fn draw(
                 );
             }
             _ => {
-                let pts: Vec<Pos2> = ring_points(b, h, px)
-                    .into_iter()
-                    .filter_map(|q| project(cam, rect, q))
-                    .collect();
-                painter.add(Shape::line(pts, Stroke::new(1.6 * e, col)));
+                for run in visible_runs(cam, rect, ring_points(b, h, px)) {
+                    painter.add(Shape::line(run, Stroke::new(1.6 * e, col)));
+                }
             }
         }
     }
@@ -350,6 +366,37 @@ mod tests {
             Camera::for_plate(220.0, 220.0),
             Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 800.0)),
         )
+    }
+
+    #[test]
+    fn pressing_the_centre_moves_freely_not_along_one_axis() {
+        let (cam, rect) = view();
+        let b = cube_bounds();
+        let centre = cam.project(b.center(), rect).unwrap().0;
+        assert_eq!(pick(&cam, rect, &b, Tool::Move, centre), None);
+    }
+
+    #[test]
+    fn a_ring_partly_behind_the_camera_is_not_bridged() {
+        let (cam, rect) = view();
+        // Three points in front, one far behind the camera, three in front again.
+        let eye_side = Vec3::new(0.0, -100_000.0, 100_000.0);
+        let near = |x: f32| Vec3::new(x, 0.0, 0.0);
+        let pts = vec![
+            near(-30.0),
+            near(-20.0),
+            near(-10.0),
+            eye_side,
+            near(10.0),
+            near(20.0),
+            near(30.0),
+        ];
+        let runs = visible_runs(&cam, rect, pts);
+        assert_eq!(
+            runs.iter().map(Vec::len).collect::<Vec<_>>(),
+            [3, 3],
+            "{runs:?}"
+        );
     }
 
     #[test]
