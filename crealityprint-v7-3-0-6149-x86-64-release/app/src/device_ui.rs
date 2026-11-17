@@ -1795,7 +1795,7 @@ fn merge_records(app: &[HistoryEntry], printer: &[HistoryEntry]) -> Vec<HistoryE
     };
     let mut rows: Vec<HistoryEntry> = app.iter().filter(|r| !on_printer(r)).cloned().collect();
     rows.extend(printer.iter().cloned());
-    rows.sort_by(|a, b| b.ended.cmp(&a.ended));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.ended));
     rows
 }
 

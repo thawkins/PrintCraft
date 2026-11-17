@@ -13,13 +13,7 @@ pub struct Mesh {
 
 impl Mesh {
     pub fn bounds(&self) -> Bounds {
-        let mut b = Bounds::empty();
-        for t in &self.triangles {
-            for v in t {
-                b.include(*v);
-            }
-        }
-        b
+        Bounds::of(self.triangles.iter().flatten().copied())
     }
 
     /// Moves the mesh so its footprint is centred on the origin and it rests on z = 0.
@@ -124,11 +118,12 @@ impl Mesh {
                 }
             }
         }
-        let triangles = verts.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        // Every three vertices make a triangle (a trailing partial one is dropped).
+        let triangles = verts.as_chunks::<3>().0.to_vec();
         Ok(Mesh { triangles })
     }
 
-    /// Writes the mesh as a binary STL (used by tests and "save model").
+    /// Writes the mesh as a binary STL (tests only).
     #[cfg(test)]
     pub fn to_binary_stl(&self) -> Vec<u8> {
         let mut out = vec![0u8; 80];
@@ -304,8 +299,7 @@ impl PlacedObject {
             .iter()
             .map(|t| t.map(|v| self.rotate(v * s)))
             .collect();
-        let mut b = Bounds::empty();
-        tris.iter().flatten().for_each(|v| b.include(*v));
+        let b = Bounds::of(tris.iter().flatten().copied());
         if b.is_valid() {
             let c = b.center();
             let shift = Vec3::new(self.x - c.x, self.y - c.y, -b.min.z);
@@ -361,12 +355,7 @@ impl PlacedObject {
     }
 
     pub fn world_bounds(&self) -> Bounds {
-        let mut b = Bounds::empty();
-        self.world_triangles()
-            .iter()
-            .flatten()
-            .for_each(|v| b.include(*v));
-        b
+        Bounds::of(self.world_triangles().iter().flatten().copied())
     }
 }
 

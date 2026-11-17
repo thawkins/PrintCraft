@@ -212,6 +212,11 @@ impl PrintCraftApp {
         self.plate = self.objects.iter().map(|o| o.world_triangles()).collect();
     }
 
+    /// Object `i`'s box on the plate (from its placed triangles).
+    fn object_bounds(&self, i: usize) -> crate::geometry::Bounds {
+        crate::geometry::Bounds::of(self.plate[i].iter().flatten().copied())
+    }
+
     fn refresh_object(&mut self, i: usize) {
         if let Some(o) = self.objects.get(i) {
             self.plate[i] = o.world_triangles();
@@ -324,8 +329,7 @@ impl PrintCraftApp {
     }
 
     fn fits_on_plate(&self, i: usize) -> bool {
-        let mut b = crate::geometry::Bounds::empty();
-        self.plate[i].iter().flatten().for_each(|v| b.include(*v));
+        let b = self.object_bounds(i);
         let (hx, hy) = (
             self.printer.bed_x / 2.0 + 0.01,
             self.printer.bed_y / 2.0 + 0.01,
@@ -533,13 +537,9 @@ impl PrintCraftApp {
         let (ox, oy) = (self.printer.bed_x / 2.0, self.printer.bed_y / 2.0);
         let mut changed = false;
         let mut action = None;
+        let size = self.object_bounds(i).size();
         card(ui, "Selected object", |ui| {
             let o = &mut self.objects[i];
-            let size = {
-                let mut b = crate::geometry::Bounds::empty();
-                self.plate[i].iter().flatten().for_each(|v| b.include(*v));
-                b.size()
-            };
             ui.label(
                 RichText::new(format!(
                     "Size {:.1} × {:.1} × {:.1} mm",
@@ -800,8 +800,7 @@ impl PrintCraftApp {
             return None;
         }
         let i = self.selected.filter(|&i| i < self.plate.len())?;
-        let mut b = crate::geometry::Bounds::empty();
-        self.plate[i].iter().flatten().for_each(|v| b.include(*v));
+        let b = self.object_bounds(i);
         b.is_valid().then_some((i, b))
     }
 

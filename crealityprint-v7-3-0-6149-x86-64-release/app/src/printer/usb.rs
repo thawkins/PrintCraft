@@ -84,12 +84,10 @@ pub fn parse_temps(line: &str, s: &mut PrinterStatus) -> bool {
                     found = true;
                 }
             }
-            "B" => {
-                if now.is_some() {
-                    s.bed = now;
-                    s.bed_target = target.or(s.bed_target);
-                    found = true;
-                }
+            "B" if now.is_some() => {
+                s.bed = now;
+                s.bed_target = target.or(s.bed_target);
+                found = true;
             }
             _ => {}
         }
@@ -385,7 +383,7 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
                 s.status.layer = Some(layer);
                 s.status.elapsed_s = Some(elapsed);
                 s.status.remaining_s = (progress > 0.5)
-                    .then(|| (elapsed as f32 * (100.0 - progress) / progress) as u64);
+                    .then_some((elapsed as f32 * (100.0 - progress) / progress) as u64);
                 if done {
                     s.status.state = JobState::Finished;
                     s.status.progress = Some(100.0);

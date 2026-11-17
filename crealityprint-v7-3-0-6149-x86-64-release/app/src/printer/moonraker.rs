@@ -43,7 +43,7 @@ fn list_files(host: &str) -> Result<Vec<RemoteFile>, String> {
             })
         })
         .collect();
-    files.sort_by(|a, b| b.modified.cmp(&a.modified));
+    files.sort_by_key(|f| std::cmp::Reverse(f.modified));
     Ok(files)
 }
 

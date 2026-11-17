@@ -101,6 +101,13 @@ impl Bounds {
         }
     }
 
+    /// The box around these points (`is_valid` is false when there are none).
+    pub fn of(points: impl IntoIterator<Item = Vec3>) -> Self {
+        let mut b = Self::empty();
+        points.into_iter().for_each(|p| b.include(p));
+        b
+    }
+
     pub fn include(&mut self, p: Vec3) {
         self.min = self.min.min(p);
         self.max = self.max.max(p);

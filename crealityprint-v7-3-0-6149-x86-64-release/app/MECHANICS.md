@@ -53,7 +53,7 @@ overhang angle 50° from vertical, supports off, adhesion = skirt. All are estim
 
 The defaults for the newer options are:
 * infill pattern Grid
-* seam Rear
+* seam Aligned
 * ironing, fuzzy skin and vase mode off
 * z-hop 0 mm
 * minimum layer time 15 s
@@ -75,7 +75,8 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
    Walls print from the inside out, with the outer wall last. Loops that would collapse are
    dropped (`offset_left`).
 5. **Infill area.** The outline moved inwards by `line_width × (walls − 0.15)`, so infill
-   overlaps the innermost wall by 15 %. Estimated.
+   lines end 15 % of a line width inside the innermost wall's band (the infill bead itself
+   overlaps the wall by about 65 % of a line width). Estimated.
 6. **Top/bottom (solid) areas.** The model is drawn onto a 1 mm grid on every layer. A grid
    cell on layer *i* is solid if it is empty on any layer from *i − bottom_layers* to
    *i + top_layers*. Layers near the very bottom or top are solid everywhere.

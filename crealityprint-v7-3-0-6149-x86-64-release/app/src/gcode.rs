@@ -359,7 +359,6 @@ pub fn generate(
     let mut ext = Extruder::default();
     let mut seconds = WARMUP_SECONDS + purge.seconds;
     let mut pos = Point2::new(purge.end.x - ox, purge.end.y - oy);
-    let mut retracted = false;
     let travel_f = s.travel_speed * 60.0;
     // Where the wall loops of the previous layer started (for Aligned seams).
     let mut seams_below: Vec<Point2> = Vec::new();
@@ -415,9 +414,11 @@ pub fn generate(
                 pts.push(pts[0]);
             }
             let travel = pos.distance(pts[0]);
+            // Retracted for this travel only: the path below always starts un-retracted.
+            let mut retracted = false;
             if travel > 0.01 {
                 let retract = travel > RETRACT_MIN_TRAVEL_MM && printer.retract_length > 0.0;
-                if retract && !retracted {
+                if retract {
                     let e = ext.retract(printer.retract_length);
                     let _ = writeln!(g, "G1 E{:.5} F{:.0}", e, printer.retract_speed * 60.0);
                     retracted = true;
@@ -442,7 +443,6 @@ pub fn generate(
                 }
                 let e = ext.unretract(printer.retract_length);
                 let _ = writeln!(g, "G1 E{:.5} F{:.0}", e, printer.retract_speed * 60.0);
-                retracted = false;
             }
             let (flow, speed) = match path.kind {
                 PathKind::Ironing => (IRONING_FLOW, IRONING_SPEED),

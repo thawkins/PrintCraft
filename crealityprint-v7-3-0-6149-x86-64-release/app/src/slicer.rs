@@ -91,7 +91,8 @@ const SUPPORT_ROW_STEP: usize = 2;
 const SKIRT_DISTANCE_MM: f32 = 5.0;
 const SKIRT_LOOPS: usize = 2;
 const BRIM_LINES: usize = 8;
-/// Infill overlaps the innermost wall by this share of a line width.
+/// Infill line ends reach this share of a line width into the innermost wall's band
+/// (so the infill bead overlaps that wall by about 0.65 of a line width).
 const INFILL_OVERLAP: f32 = 0.15;
 /// Gap between ironing passes.
 const IRONING_SPACING_MM: f32 = 0.2;
@@ -106,8 +107,7 @@ pub fn slice(
     line_width: f32,
     progress: &dyn Fn(f32),
 ) -> SliceResult {
-    let mut bounds = Bounds::empty();
-    triangles.iter().flatten().for_each(|v| bounds.include(*v));
+    let bounds = Bounds::of(triangles.iter().flatten().copied());
     if !bounds.is_valid() || bounds.max.z <= 0.0 {
         return SliceResult {
             layers: Vec::new(),
@@ -239,14 +239,12 @@ pub fn slice(
             }
             // Only the very top layer of each surface is ironed. Fuzzy top wins: ironing
             // would flatten its texture.
-            if settings.ironing && !settings.fuzzy_top {
-                if top.iter().any(|t| *t) {
-                    let angle = angle + std::f32::consts::FRAC_PI_2;
-                    for seg in scan_fill(&region, IRONING_SPACING_MM, angle) {
-                        for piece in split_by(&seg, |p| top[grid.index_of(p)]) {
-                            if piece.1 {
-                                paths.push(open_path(PathKind::Ironing, piece.0));
-                            }
+            if settings.ironing && !settings.fuzzy_top && top.iter().any(|t| *t) {
+                let angle = angle + std::f32::consts::FRAC_PI_2;
+                for seg in scan_fill(&region, IRONING_SPACING_MM, angle) {
+                    for piece in split_by(&seg, |p| top[grid.index_of(p)]) {
+                        if piece.1 {
+                            paths.push(open_path(PathKind::Ironing, piece.0));
                         }
                     }
                 }
@@ -338,13 +336,16 @@ pub fn layer_outline(triangles: &[Triangle], zc: f32) -> Vec<Polygon> {
     let zc = zc + 1e-4;
     let mut segments: Vec<(Point2, Point2)> = Vec::new();
     for t in triangles {
-        let mut pts = Vec::with_capacity(2);
+        // A plane crosses a triangle on exactly 0 or 2 of its edges.
+        let mut pts = [Point2::new(0.0, 0.0); 3];
+        let mut cuts = 0;
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
             if (a.z < zc) != (b.z < zc) {
-                pts.push(edge_cut(a, b, zc));
+                pts[cuts] = edge_cut(a, b, zc);
+                cuts += 1;
             }
         }
-        if pts.len() == 2 {
+        if cuts == 2 {
             let n = (t[1] - t[0]).cross(t[2] - t[0]);
             let (p, q) = (pts[0], pts[1]);
             // Outward normal on the right of the direction of travel.
@@ -585,8 +586,9 @@ pub fn scan_fill(region: &[Polygon], spacing: f32, angle: f32) -> Vec<[Point2; 2
             }
         }
         xs.sort_by(|a, b| a.total_cmp(b));
-        let mut pairs: Vec<[Point2; 2]> = xs
-            .chunks_exact(2)
+        let (crossings, _) = xs.as_chunks::<2>();
+        let mut pairs: Vec<[Point2; 2]> = crossings
+            .iter()
             .filter(|p| p[1] - p[0] > spacing.min(0.4) * 0.5)
             .map(|p| {
                 [
@@ -766,7 +768,7 @@ impl Grid {
                 }
             }
             xs.sort_by(|a, b| a.total_cmp(b));
-            for pair in xs.chunks_exact(2) {
+            for pair in xs.as_chunks::<2>().0 {
                 let c0 = ((pair[0] - self.x0) / CELL_MM - 0.5).ceil().max(0.0) as usize;
                 let c1 = ((pair[1] - self.x0) / CELL_MM - 0.5).floor();
                 if c1 < 0.0 {

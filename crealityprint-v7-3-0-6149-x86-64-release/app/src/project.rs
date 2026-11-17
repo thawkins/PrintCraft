@@ -341,13 +341,14 @@ fn mesh_from_bytes(b: &[u8]) -> Option<Vec<Triangle>> {
     if b.len() % 36 != 0 {
         return None;
     }
-    let f = |o: usize| f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+    // Each triangle: three corners of three little-endian f32s (36 bytes).
+    let (triangles, _) = b.as_chunks::<36>();
     Some(
-        b.chunks_exact(36)
-            .enumerate()
-            .map(|(i, _)| {
-                let o = i * 36;
-                let v = |k: usize| Vec3::new(f(o + k * 12), f(o + k * 12 + 4), f(o + k * 12 + 8));
+        triangles
+            .iter()
+            .map(|t| {
+                let f = |o: usize| f32::from_le_bytes([t[o], t[o + 1], t[o + 2], t[o + 3]]);
+                let v = |k: usize| Vec3::new(f(k * 12), f(k * 12 + 4), f(k * 12 + 8));
                 [v(0), v(1), v(2)]
             })
             .collect(),

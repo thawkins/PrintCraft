@@ -32,8 +32,7 @@ pub fn render(tris: &[Triangle], size: u32) -> RgbaImage {
     let big = size * 2;
     let mut img = RgbaImage::new(big, big);
     let mut depth = vec![f32::INFINITY; (big * big) as usize];
-    let mut b = Bounds::empty();
-    tris.iter().flatten().for_each(|v| b.include(*v));
+    let b = Bounds::of(tris.iter().flatten().copied());
     if !b.is_valid() {
         return RgbaImage::new(size, size);
     }
