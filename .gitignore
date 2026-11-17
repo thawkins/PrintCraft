@@ -1,0 +1,4 @@
+# Lock files are not tracked, except Cargo.lock, which pins the exact dependency
+# versions the app is built and audited with.
+*.lock
+!Cargo.lock

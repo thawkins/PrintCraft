@@ -1,0 +1,699 @@
+{
+  "version": 5,
+  "name": "CrealityPrint-V7.3.0.6149-x86_64-Release",
+  "request": "The same app but simpler",
+  "target": {
+    "kind": "local",
+    "path": "/home/thawkins/bin/CrealityPrint-V7.3.0.6149-x86_64-Release.AppImage"
+  },
+  "stack": "Rust (console)",
+  "status": "ready",
+  "note": "Ready: 2 of 3 checks pass; 1 comparison remains unverified. 5 questions about the original are still open.",
+  "created_ms": 1794757102676,
+  "updated_ms": 1794912259197,
+  "checks": [
+    {
+      "round": 1,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794758344467
+    },
+    {
+      "round": 1,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1360×860).",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794758346725
+    },
+    {
+      "round": 1,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 50 values (1 with a source, 49 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794758346728,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 2,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794759581440
+    },
+    {
+      "round": 2,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1360×860).",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794759583515
+    },
+    {
+      "round": 2,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 50 values (1 with a source, 49 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794759583529,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 3,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794760883341
+    },
+    {
+      "round": 3,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1360×860).",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794760885414
+    },
+    {
+      "round": 3,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 50 values (1 with a source, 49 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794760885428,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 4,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794762065793
+    },
+    {
+      "round": 4,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1360×860).",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794762067979
+    },
+    {
+      "round": 4,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 74 values (11 with a source, 63 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794762067993,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 5,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794767833636
+    },
+    {
+      "round": 5,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1360×860). It looks about 43% like reference/picture-1.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794767835796
+    },
+    {
+      "round": 5,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 85 values (19 with a source, 66 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794767835819,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 6,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794768569820
+    },
+    {
+      "round": 6,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 54% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794768571968
+    },
+    {
+      "round": 6,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 92 values (24 with a source, 68 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794768571984,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 7,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794769590652
+    },
+    {
+      "round": 7,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 54% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794769592811
+    },
+    {
+      "round": 7,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 92 values (24 with a source, 68 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794769592815,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 8,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794769915335
+    },
+    {
+      "round": 8,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 54% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794769917531
+    },
+    {
+      "round": 8,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 92 values (24 with a source, 68 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794769917542,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 9,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794772387621
+    },
+    {
+      "round": 9,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 54% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794772389767
+    },
+    {
+      "round": 9,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 102 values (26 with a source, 76 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794772389783,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 10,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794773198752
+    },
+    {
+      "round": 10,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 54% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794773200908
+    },
+    {
+      "round": 10,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 106 values (29 with a source, 77 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794773200922,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 11,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794775153807
+    },
+    {
+      "round": 11,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 54% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794775155953
+    },
+    {
+      "round": 11,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 106 values (29 with a source, 77 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794775155967,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 12,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794775490668
+    },
+    {
+      "round": 12,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 54% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794775492818
+    },
+    {
+      "round": 12,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 106 values (29 with a source, 77 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794775492833,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 13,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794775833046
+    },
+    {
+      "round": 13,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794775835191
+    },
+    {
+      "round": 13,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 111 values (30 with a source, 81 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794775835205,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 14,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794898648514
+    },
+    {
+      "round": 14,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-2.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794898650698
+    },
+    {
+      "round": 14,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 115 values (33 with a source, 82 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794898650700,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 15,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794899635858
+    },
+    {
+      "round": 15,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794899638185
+    },
+    {
+      "round": 15,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 123 values (34 with a source, 89 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794899638199,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 16,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794905517628
+    },
+    {
+      "round": 16,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794905519965
+    },
+    {
+      "round": 16,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 123 values (34 with a source, 89 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794905519980,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 17,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794906504524
+    },
+    {
+      "round": 17,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794906506859
+    },
+    {
+      "round": 17,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 125 values (35 with a source, 90 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794906506873,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 18,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794908372664
+    },
+    {
+      "round": 18,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794908374988
+    },
+    {
+      "round": 18,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 131 values (37 with a source, 94 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794908375002,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 19,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794908674065
+    },
+    {
+      "round": 19,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794908676409
+    },
+    {
+      "round": 19,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 131 values (37 with a source, 94 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794908676423,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 20,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794909771351
+    },
+    {
+      "round": 20,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794909773679
+    },
+    {
+      "round": 20,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 131 values (37 with a source, 94 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794909773693,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 21,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794912232251
+    },
+    {
+      "round": 21,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794912234642
+    },
+    {
+      "round": 21,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 131 values (37 with a source, 94 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794912234657,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    }
+  ],
+  "agent_session": "f1695ce9-5b54-4b25-aa0b-1d2f83a226e7",
+  "agent_session_by": "claude-code",
+  "agent_session_deep": true,
+  "capture_deep": true,
+  "allowed_actions": [
+    "tool:web_site_open",
+    "tool:build_command_run"
+  ],
+  "last_reply": "I decided to keep the clean room, so I haven't opened, decompiled or read the CrealityPrint program, and the build is unchanged. The project's rules forbid reading that program, so everything comes from your requests, the reference pictures and public documentation such as the RepRap wiki. If you want values taken from the original, tell me plainly that the AppImage rule is lifted; otherwise switch Deep mode off in Craft Anything's settings and this request will stop appearing.",
+  "asset_budget_usd": 5.0,
+  "generate_assets": false
+}
