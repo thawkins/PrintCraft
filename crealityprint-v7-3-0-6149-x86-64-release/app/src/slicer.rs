@@ -119,13 +119,7 @@ pub fn slice(
     let n = heights.len();
 
     // 1. Outlines of every layer.
-    let mut outlines: Vec<Vec<Polygon>> = Vec::with_capacity(n);
-    for (i, (z, h)) in heights.iter().enumerate() {
-        outlines.push(layer_outline(triangles, z - h / 2.0));
-        if i % 8 == 0 {
-            progress(0.4 * i as f32 / n as f32);
-        }
-    }
+    let outlines = all_outlines(triangles, &heights, progress);
 
     // 2. Coarse grid masks, used to find top/bottom surfaces and support areas.
     let grid = Grid::new(&bounds);
@@ -154,100 +148,36 @@ pub fn slice(
         if i == 0 {
             paths.extend(adhesion_paths(&outlines[0], settings.adhesion, line_width));
         }
+        paths.extend(wall_paths(
+            &outlines[i],
+            i,
+            wall_count,
+            line_width,
+            settings,
+        ));
 
-        // Walls: inner first, outer last, for a cleaner outside surface.
-        let mut walls: Vec<(PathKind, Polygon)> = Vec::new();
-        for k in 0..wall_count {
-            let d = line_width * (0.5 + k as f32);
-            let kind = if k == 0 {
-                PathKind::OuterWall
-            } else {
-                PathKind::InnerWall
-            };
-            for poly in &outlines[i] {
-                if let Some(mut p) = offset_left(poly, d) {
-                    // Fuzzy skin: skip the first layer so the print still sits flat.
-                    if kind == PathKind::OuterWall && settings.fuzzy_skin && i > 0 {
-                        p = fuzz(&p, i as u64);
-                    }
-                    walls.push((kind, p));
-                }
-            }
-        }
-        walls.reverse();
-        for (kind, points) in walls {
-            paths.push(ToolPath {
-                kind,
-                points,
-                closed: true,
-            });
-        }
-
-        // Infill area: inside the innermost wall.
-        let inset = line_width * (wall_count as f32 - INFILL_OVERLAP).max(0.0);
-        let region: Vec<Polygon> = if inset > 0.0 {
-            outlines[i]
-                .iter()
-                .filter_map(|p| offset_left(p, inset))
-                .collect()
-        } else {
-            outlines[i].clone()
-        };
+        let region = infill_region(&outlines[i], wall_count, line_width);
         if !region.is_empty() && vase {
             // Vase mode: a solid bottom, then nothing but the spiral wall.
             if i < settings.bottom_layers as usize {
-                let angle = if i % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
-                for seg in scan_fill(&region, line_width, angle) {
-                    paths.push(open_path(PathKind::SolidInfill, seg.to_vec()));
-                }
+                paths.extend(vase_bottom_paths(&region, i, line_width));
             }
         } else if !region.is_empty() {
             let exposed = exposed_cells(&masks, i, settings);
-            // The visible top surface: model on this layer with nothing above it.
-            let top: Vec<bool> = (0..grid.cells())
-                .map(|c| masks[i][c] && (i + 1 == n || !masks[i + 1][c]))
-                .collect();
+            let top = top_cells(&grid, &masks, i);
             let angle = if i % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
-            for seg in scan_fill(&region, line_width, angle) {
-                for piece in split_by(&seg, |p| exposed[grid.index_of(p)]) {
-                    if !piece.1 {
-                        continue;
-                    }
-                    let solid = [piece.0[0], piece.0[1]];
-                    for part in split_by(&solid, |p| top[grid.index_of(p)]) {
-                        let kind = if part.1 {
-                            PathKind::TopSurface
-                        } else {
-                            PathKind::SolidInfill
-                        };
-                        paths.push(open_path(kind, part.0));
-                    }
-                }
-            }
+            paths.extend(solid_infill_paths(
+                &region, &grid, &exposed, &top, angle, line_width,
+            ));
             if settings.infill_percent > 0.5 {
-                let base = line_width * 100.0 / settings.infill_percent.min(100.0);
-                let (angles, spacing) = infill_angles(settings.infill_pattern, i, base);
-                for angle in angles {
-                    for seg in scan_fill(&region, spacing, angle.to_radians()) {
-                        for piece in split_by(&seg, |p| exposed[grid.index_of(p)]) {
-                            if !piece.1 {
-                                paths.push(open_path(PathKind::SparseInfill, piece.0));
-                            }
-                        }
-                    }
-                }
+                paths.extend(sparse_infill_paths(
+                    &region, &grid, &exposed, i, line_width, settings,
+                ));
             }
             // Only the very top layer of each surface is ironed. Fuzzy top wins: ironing
             // would flatten its texture.
             if settings.ironing && !settings.fuzzy_top && top.iter().any(|t| *t) {
-                let angle = angle + std::f32::consts::FRAC_PI_2;
-                for seg in scan_fill(&region, IRONING_SPACING_MM, angle) {
-                    for piece in split_by(&seg, |p| top[grid.index_of(p)]) {
-                        if piece.1 {
-                            paths.push(open_path(PathKind::Ironing, piece.0));
-                        }
-                    }
-                }
+                paths.extend(ironing_paths(&region, &grid, &top, angle));
             }
         }
 
@@ -264,6 +194,161 @@ pub fn slice(
     }
     progress(1.0);
     SliceResult { layers, line_width }
+}
+
+/// The outline of every layer, cut through the middle of its height. Reports progress
+/// from 0 to 0.4.
+fn all_outlines(
+    triangles: &[Triangle],
+    heights: &[(f32, f32)],
+    progress: &dyn Fn(f32),
+) -> Vec<Vec<Polygon>> {
+    let n = heights.len();
+    let mut outlines: Vec<Vec<Polygon>> = Vec::with_capacity(n);
+    for (i, (z, h)) in heights.iter().enumerate() {
+        outlines.push(layer_outline(triangles, z - h / 2.0));
+        if i % 8 == 0 {
+            progress(0.4 * i as f32 / n as f32);
+        }
+    }
+    outlines
+}
+
+/// Wall loops of one layer, inner first and outer last for a cleaner outside surface.
+/// Outer walls get fuzzy skin when it is on (never on the first layer, so the print
+/// still sits flat).
+fn wall_paths(
+    outline: &[Polygon],
+    layer: usize,
+    wall_count: u32,
+    line_width: f32,
+    settings: &PrintSettings,
+) -> Vec<ToolPath> {
+    let mut walls: Vec<(PathKind, Polygon)> = Vec::new();
+    for k in 0..wall_count {
+        let d = line_width * (0.5 + k as f32);
+        let kind = if k == 0 {
+            PathKind::OuterWall
+        } else {
+            PathKind::InnerWall
+        };
+        for poly in outline {
+            if let Some(mut p) = offset_left(poly, d) {
+                if kind == PathKind::OuterWall && settings.fuzzy_skin && layer > 0 {
+                    p = fuzz(&p, layer as u64);
+                }
+                walls.push((kind, p));
+            }
+        }
+    }
+    walls.reverse();
+    walls
+        .into_iter()
+        .map(|(kind, points)| ToolPath {
+            kind,
+            points,
+            closed: true,
+        })
+        .collect()
+}
+
+/// The area infill covers: inside the innermost wall, overlapping it slightly.
+fn infill_region(outline: &[Polygon], wall_count: u32, line_width: f32) -> Vec<Polygon> {
+    let inset = line_width * (wall_count as f32 - INFILL_OVERLAP).max(0.0);
+    if inset > 0.0 {
+        outline
+            .iter()
+            .filter_map(|p| offset_left(p, inset))
+            .collect()
+    } else {
+        outline.to_vec()
+    }
+}
+
+/// Vase mode's solid bottom: plain solid lines, alternating 45° and 135°.
+fn vase_bottom_paths(region: &[Polygon], layer: usize, line_width: f32) -> Vec<ToolPath> {
+    let angle = if layer % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
+    scan_fill(region, line_width, angle)
+        .into_iter()
+        .map(|seg| open_path(PathKind::SolidInfill, seg.to_vec()))
+        .collect()
+}
+
+/// Grid cells of the visible top surface on layer `i`: model here, nothing above it.
+fn top_cells(grid: &Grid, masks: &[Vec<bool>], i: usize) -> Vec<bool> {
+    let n = masks.len();
+    (0..grid.cells())
+        .map(|c| masks[i][c] && (i + 1 == n || !masks[i + 1][c]))
+        .collect()
+}
+
+/// Solid lines over the exposed (top/bottom) cells; the parts over `top` cells are
+/// marked as the visible top surface.
+fn solid_infill_paths(
+    region: &[Polygon],
+    grid: &Grid,
+    exposed: &[bool],
+    top: &[bool],
+    angle: f32,
+    line_width: f32,
+) -> Vec<ToolPath> {
+    let mut paths = Vec::new();
+    for seg in scan_fill(region, line_width, angle) {
+        for piece in split_by(&seg, |p| exposed[grid.index_of(p)]) {
+            if !piece.1 {
+                continue;
+            }
+            let solid = [piece.0[0], piece.0[1]];
+            for part in split_by(&solid, |p| top[grid.index_of(p)]) {
+                let kind = if part.1 {
+                    PathKind::TopSurface
+                } else {
+                    PathKind::SolidInfill
+                };
+                paths.push(open_path(kind, part.0));
+            }
+        }
+    }
+    paths
+}
+
+/// Sparse infill lines in the chosen pattern, kept off the exposed cells.
+fn sparse_infill_paths(
+    region: &[Polygon],
+    grid: &Grid,
+    exposed: &[bool],
+    layer: usize,
+    line_width: f32,
+    settings: &PrintSettings,
+) -> Vec<ToolPath> {
+    let mut paths = Vec::new();
+    let base = line_width * 100.0 / settings.infill_percent.min(100.0);
+    let (angles, spacing) = infill_angles(settings.infill_pattern, layer, base);
+    for angle in angles {
+        for seg in scan_fill(region, spacing, angle.to_radians()) {
+            for piece in split_by(&seg, |p| exposed[grid.index_of(p)]) {
+                if !piece.1 {
+                    paths.push(open_path(PathKind::SparseInfill, piece.0));
+                }
+            }
+        }
+    }
+    paths
+}
+
+/// Close-spaced ironing passes over the `top` cells, across the top lines (`angle` is
+/// the solid-infill angle; ironing runs at right angles to it).
+fn ironing_paths(region: &[Polygon], grid: &Grid, top: &[bool], angle: f32) -> Vec<ToolPath> {
+    let mut paths = Vec::new();
+    let angle = angle + std::f32::consts::FRAC_PI_2;
+    for seg in scan_fill(region, IRONING_SPACING_MM, angle) {
+        for piece in split_by(&seg, |p| top[grid.index_of(p)]) {
+            if piece.1 {
+                paths.push(open_path(PathKind::Ironing, piece.0));
+            }
+        }
+    }
+    paths
 }
 
 fn open_path(kind: PathKind, points: Vec<Point2>) -> ToolPath {

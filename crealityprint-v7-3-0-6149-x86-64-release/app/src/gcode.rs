@@ -2,7 +2,7 @@
 
 use crate::geometry::Point2;
 use crate::profiles::{Filament, PrintSettings, Printer, SeamPosition};
-use crate::slicer::{PathKind, SliceResult};
+use crate::slicer::{Layer, PathKind, SliceResult, ToolPath};
 use std::fmt::Write;
 
 /// Travel moves longer than this retract the filament first.
@@ -310,81 +310,114 @@ pub fn generate(
     filament: &Filament,
     s: &PrintSettings,
 ) -> GcodeOutput {
-    let mut g = String::with_capacity(1 << 20);
-    let ox = printer.bed_x / 2.0;
-    let oy = printer.bed_y / 2.0;
-    let lw = result.line_width;
-
-    let _ = writeln!(g, "; Made with PrintCraft (a simple slicer)");
-    let _ = writeln!(g, "; printer: {}", printer.name);
-    let _ = writeln!(
-        g,
-        "; filament: {} {}C / bed {}C",
-        filament.name, filament.nozzle_temp, filament.bed_temp
-    );
-    let _ = writeln!(
-        g,
-        "; layer height {:.2} mm, {} walls, {:.0}% infill, supports {}",
-        s.layer_height,
-        s.walls,
-        s.infill_percent,
-        if s.supports { "on" } else { "off" }
-    );
-    let _ = writeln!(g, ";LAYER_COUNT:{}", result.layers.len());
-    // The same count in the header wording other slicers use, which printer screens read.
-    let _ = writeln!(g, "; total layer number: {}", result.layers.len());
-    // The job's temperatures, in the header forms other slicers write. A printer that
-    // prepares (levels) before running the file reads these to know the job temperature;
-    // without them it may prepare at 0 °C and heat up again afterwards.
-    g.push_str(&header_block(filament, s, printer));
-    let _ = writeln!(g, "M140 S{} ; bed temperature", filament.bed_temp);
-    let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
-    let _ = writeln!(g, "G90 ; absolute positions");
-    let _ = writeln!(g, "M82 ; absolute extrusion");
-    let _ = writeln!(g, "G28 ; home all axes");
-    // Wait only while heating up: a nozzle or plate that is already hotter carries on.
-    g.push_str(&crate::heat::wait_bed(filament.bed_temp, printer.klipper));
-    g.push_str(&crate::heat::wait_nozzle(
-        filament.nozzle_temp,
-        printer.klipper,
-    ));
-    let _ = writeln!(g, "M107 ; fan off");
-    let _ = writeln!(g, "G92 E0");
-    // Purge: clear the nozzle with two side-by-side lines along the left edge.
-    let purge = purge_lines(printer);
-    g.push_str(&purge.gcode);
-    let prime_e = purge.filament_mm;
-    let _ = writeln!(g, "G92 E0");
-
-    let mut ext = Extruder::default();
-    let mut seconds = WARMUP_SECONDS + purge.seconds;
-    let mut pos = Point2::new(purge.end.x - ox, purge.end.y - oy);
-    let travel_f = s.travel_speed * 60.0;
+    let mut w = Writer::start(result, printer, filament, s);
     // Where the wall loops of the previous layer started (for Aligned seams).
     let mut seams_below: Vec<Point2> = Vec::new();
-
     for (li, layer) in result.layers.iter().enumerate() {
-        let _ = writeln!(g, ";LAYER:{li}");
-        // Vase mode: above the solid bottom, the wall climbs continuously instead.
-        let spiral = s.vase_mode && li >= s.bottom_layers as usize && li > 0;
-        if !spiral {
-            let _ = writeln!(g, "G1 Z{:.3} F600", layer.z);
-        }
-        if li == 1 && filament.fan_percent > 0 {
-            let _ = writeln!(g, "M106 S{} ; part fan", filament.fan_percent * 255 / 100);
-        }
-        seconds += LAYER_CHANGE_SECONDS;
+        w.write_layer(li, layer, &mut seams_below);
+    }
+    w.finish(result)
+}
 
-        // Cooling: slow the whole layer down if it would finish too quickly.
-        let layer_time: f32 = layer
-            .paths
-            .iter()
-            .map(|p| path_length(&p.points, p.closed) / speed_for(p.kind, li, s))
-            .sum();
-        let slowdown = if s.min_layer_time > 0.0 && layer_time > 0.0 {
-            (layer_time / s.min_layer_time).min(1.0)
+/// Writes the file front to back, tracking where the nozzle is, the absolute E value
+/// and the running time and filament totals.
+struct Writer<'a> {
+    g: String,
+    printer: &'a Printer,
+    filament: &'a Filament,
+    s: &'a PrintSettings,
+    /// Plate centre in printer coordinates (plate point + offset = printer point).
+    ox: f32,
+    oy: f32,
+    line_width: f32,
+    /// Travel feed rate in mm/min.
+    travel_f: f32,
+    /// Nozzle position in plate coordinates.
+    pos: Point2,
+    /// Absolute E and the filament extruded since the purge.
+    ext: Extruder,
+    /// Filament used by the purge lines.
+    prime_e: f32,
+    seconds: f32,
+}
+
+impl<'a> Writer<'a> {
+    /// Header comments, heating, homing and the purge lines.
+    fn start(
+        result: &SliceResult,
+        printer: &'a Printer,
+        filament: &'a Filament,
+        s: &'a PrintSettings,
+    ) -> Self {
+        let mut g = String::with_capacity(1 << 20);
+        let ox = printer.bed_x / 2.0;
+        let oy = printer.bed_y / 2.0;
+
+        let _ = writeln!(g, "; Made with PrintCraft (a simple slicer)");
+        let _ = writeln!(g, "; printer: {}", printer.name);
+        let _ = writeln!(
+            g,
+            "; filament: {} {}C / bed {}C",
+            filament.name, filament.nozzle_temp, filament.bed_temp
+        );
+        let _ = writeln!(
+            g,
+            "; layer height {:.2} mm, {} walls, {:.0}% infill, supports {}",
+            s.layer_height,
+            s.walls,
+            s.infill_percent,
+            if s.supports { "on" } else { "off" }
+        );
+        let _ = writeln!(g, ";LAYER_COUNT:{}", result.layers.len());
+        // The same count in the header wording other slicers use, which printer screens read.
+        let _ = writeln!(g, "; total layer number: {}", result.layers.len());
+        // The job's temperatures, in the header forms other slicers write. A printer that
+        // prepares (levels) before running the file reads these to know the job temperature;
+        // without them it may prepare at 0 °C and heat up again afterwards.
+        g.push_str(&header_block(filament, s, printer));
+        let _ = writeln!(g, "M140 S{} ; bed temperature", filament.bed_temp);
+        let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
+        let _ = writeln!(g, "G90 ; absolute positions");
+        let _ = writeln!(g, "M82 ; absolute extrusion");
+        let _ = writeln!(g, "G28 ; home all axes");
+        // Wait only while heating up: a nozzle or plate that is already hotter carries on.
+        g.push_str(&crate::heat::wait_bed(filament.bed_temp, printer.klipper));
+        g.push_str(&crate::heat::wait_nozzle(
+            filament.nozzle_temp,
+            printer.klipper,
+        ));
+        let _ = writeln!(g, "M107 ; fan off");
+        let _ = writeln!(g, "G92 E0");
+        // Purge: clear the nozzle with two side-by-side lines along the left edge.
+        let purge = purge_lines(printer);
+        g.push_str(&purge.gcode);
+        let _ = writeln!(g, "G92 E0");
+
+        Self {
+            g,
+            printer,
+            filament,
+            s,
+            ox,
+            oy,
+            line_width: result.line_width,
+            travel_f: s.travel_speed * 60.0,
+            pos: Point2::new(purge.end.x - ox, purge.end.y - oy),
+            ext: Extruder::default(),
+            prime_e: purge.filament_mm,
+            seconds: WARMUP_SECONDS + purge.seconds,
+        }
+    }
+
+    /// One layer: the layer change, then every path. `seams_below` holds the wall seams
+    /// of the layer below and is replaced by this layer's when it has any.
+    fn write_layer(&mut self, li: usize, layer: &Layer, seams_below: &mut Vec<Point2>) {
+        let spiral = self.begin_layer(li, layer);
+        let slowdown = cooling_slowdown(layer, li, self.s);
+        let seam = if spiral {
+            SeamPosition::Nearest
         } else {
-            1.0
+            self.s.seam
         };
 
         let mut last_kind = None;
@@ -394,152 +427,241 @@ pub fn generate(
                 continue;
             }
             if last_kind != Some(path.kind) {
-                let _ = writeln!(g, ";TYPE:{}", path.kind.gcode_type());
+                let _ = writeln!(self.g, ";TYPE:{}", path.kind.gcode_type());
                 last_kind = Some(path.kind);
             }
-            let mut pts = path.points.clone();
-            if path.closed {
-                let seam = if spiral {
-                    SeamPosition::Nearest
-                } else {
-                    s.seam
-                };
-                let is_wall = matches!(path.kind, PathKind::OuterWall | PathKind::InnerWall);
-                let below: &[Point2] = if is_wall { &seams_below } else { &[] };
-                let start = seam_start_aligned(&pts, pos, seam, li * 7919 + pi, below);
-                pts.rotate_left(start);
-                if is_wall {
-                    seams_here.push(pts[0]);
-                }
-                pts.push(pts[0]);
-            }
-            let travel = pos.distance(pts[0]);
-            // Retracted for this travel only: the path below always starts un-retracted.
-            let mut retracted = false;
-            if travel > 0.01 {
-                let retract = travel > RETRACT_MIN_TRAVEL_MM && printer.retract_length > 0.0;
-                if retract {
-                    let e = ext.retract(printer.retract_length);
-                    let _ = writeln!(g, "G1 E{:.5} F{:.0}", e, printer.retract_speed * 60.0);
-                    retracted = true;
-                    seconds += printer.retract_length / printer.retract_speed * 2.0;
-                    if s.z_hop > 0.0 {
-                        let _ = writeln!(g, "G1 Z{:.3} F600 ; z-hop", layer.z + s.z_hop);
-                        seconds += 2.0 * s.z_hop / 10.0;
-                    }
-                }
-                let _ = writeln!(
-                    g,
-                    "G0 X{:.3} Y{:.3} F{:.0}",
-                    pts[0].x + ox,
-                    pts[0].y + oy,
-                    travel_f
-                );
-                seconds += travel / s.travel_speed;
-            }
-            if retracted {
-                if s.z_hop > 0.0 {
-                    let _ = writeln!(g, "G1 Z{:.3} F600", layer.z);
-                }
-                let e = ext.unretract(printer.retract_length);
-                let _ = writeln!(g, "G1 E{:.5} F{:.0}", e, printer.retract_speed * 60.0);
-            }
-            let (flow, speed) = match path.kind {
-                PathKind::Ironing => (IRONING_FLOW, IRONING_SPEED),
-                kind => (
-                    1.0,
-                    (speed_for(kind, li, s) * slowdown).max(MIN_PRINT_SPEED),
-                ),
+            let salt = li * 7919 + pi;
+            let pts = ordered_points(path, self.pos, seam, salt, seams_below, &mut seams_here);
+            self.travel_to(pts[0], layer.z);
+            let style = PathStyle {
+                li,
+                pi,
+                kind: path.kind,
+                spiral,
+                slowdown,
             };
-            let climb = spiral && path.kind == PathKind::OuterWall;
-            // Fuzzy top: short steps, each lifted by a random 0..amount above the layer.
-            let fuzzy = s.fuzzy_top && s.fuzzy_top_mm > 0.0 && path.kind == PathKind::TopSurface;
-            if fuzzy {
-                pts = resample(&pts, FUZZY_TOP_STEP_MM);
-            }
-            let total_len = path_length(&pts, false).max(1e-6);
-            let mut done_len = 0.0;
-            let mut first = true;
-            for (wi, w) in pts.windows(2).enumerate() {
-                let len = w[0].distance(w[1]);
-                if len < 1e-4 {
-                    continue;
-                }
-                done_len += len;
-                let de = filament_for(len, lw, layer.height, filament.diameter) * flow;
-                let e = ext.extrude(de);
-                seconds += len / speed;
-                let z = if climb {
-                    format!(
-                        " Z{:.3}",
-                        layer.z - layer.height + layer.height * done_len / total_len
-                    )
-                } else if fuzzy {
-                    let lift = fuzzy_unit(li, pi, wi) * s.fuzzy_top_mm;
-                    format!(" Z{:.3}", layer.z + lift)
-                } else {
-                    String::new()
-                };
-                let feed = if first {
-                    format!(" F{:.0}", speed * 60.0)
-                } else {
-                    String::new()
-                };
-                first = false;
-                let _ = writeln!(
-                    g,
-                    "G1 X{:.3} Y{:.3}{z} E{:.5}{feed}",
-                    w[1].x + ox,
-                    w[1].y + oy,
-                    e
-                );
-            }
-            if fuzzy {
-                // Back to the layer height before anything else moves.
-                let _ = writeln!(g, "G1 Z{:.3} F600", layer.z);
-            }
-            pos = *pts.last().unwrap();
+            self.extrude(layer, &style, pts);
         }
         if !seams_here.is_empty() {
-            seams_below = seams_here;
+            *seams_below = seams_here;
         }
     }
 
-    let top = result.layers.last().map(|l| l.z).unwrap_or(0.0);
-    let _ = writeln!(g, ";END");
-    let _ = writeln!(g, "G1 E{:.5} F2400 ; retract", ext.e - 2.0);
-    let _ = writeln!(g, "G0 Z{:.2} F600", (top + 10.0).min(printer.max_z));
-    let _ = writeln!(
-        g,
-        "G0 X5 Y{:.0} F{:.0} ; present the print",
-        printer.bed_y - 10.0,
-        travel_f
-    );
-    let _ = writeln!(g, "M104 S0");
-    let _ = writeln!(g, "M140 S0");
-    let _ = writeln!(g, "M107");
-    let _ = writeln!(g, "M84 ; motors off");
+    /// The layer marker, the Z move (skipped while spiralling), and the part fan from
+    /// the second layer on. Returns whether this layer is part of the vase spiral.
+    fn begin_layer(&mut self, li: usize, layer: &Layer) -> bool {
+        let _ = writeln!(self.g, ";LAYER:{li}");
+        // Vase mode: above the solid bottom, the wall climbs continuously instead.
+        let spiral = self.s.vase_mode && li >= self.s.bottom_layers as usize && li > 0;
+        if !spiral {
+            let _ = writeln!(self.g, "G1 Z{:.3} F600", layer.z);
+        }
+        if li == 1 && self.filament.fan_percent > 0 {
+            let _ = writeln!(
+                self.g,
+                "M106 S{} ; part fan",
+                self.filament.fan_percent * 255 / 100
+            );
+        }
+        self.seconds += LAYER_CHANGE_SECONDS;
+        spiral
+    }
 
-    let seconds = seconds * ACCELERATION_ALLOWANCE;
-    let total_e = (prime_e as f64 + ext.extruded) as f32;
-    let volume_cm3 = total_e * std::f32::consts::PI * (filament.diameter / 2.0).powi(2) / 1000.0;
-    let grams = volume_cm3 * filament.density;
-    let estimate = Estimate {
-        seconds,
-        filament_mm: total_e,
-        grams,
-        cost: grams / 1000.0 * filament.price_per_kg,
-        layers: result.layers.len(),
-    };
-    let _ = writeln!(g, "; estimated time: {}", estimate.time_text());
-    let _ = writeln!(
-        g,
-        "; filament used: {:.2} m, {:.1} g",
-        total_e / 1000.0,
-        grams
-    );
-    g.push_str(&config_block(filament, s, printer));
-    GcodeOutput { text: g, estimate }
+    /// Moves to `to` (retracting and z-hopping first on long travels), then undoes any
+    /// retraction so the nozzle is ready to print at layer height `z`.
+    fn travel_to(&mut self, to: Point2, z: f32) {
+        let p = self.printer;
+        let travel = self.pos.distance(to);
+        // Retracted for this travel only: the path after it always starts un-retracted.
+        let mut retracted = false;
+        if travel > 0.01 {
+            let retract = travel > RETRACT_MIN_TRAVEL_MM && p.retract_length > 0.0;
+            if retract {
+                let e = self.ext.retract(p.retract_length);
+                let _ = writeln!(self.g, "G1 E{:.5} F{:.0}", e, p.retract_speed * 60.0);
+                retracted = true;
+                self.seconds += p.retract_length / p.retract_speed * 2.0;
+                if self.s.z_hop > 0.0 {
+                    let _ = writeln!(self.g, "G1 Z{:.3} F600 ; z-hop", z + self.s.z_hop);
+                    self.seconds += 2.0 * self.s.z_hop / 10.0;
+                }
+            }
+            let _ = writeln!(
+                self.g,
+                "G0 X{:.3} Y{:.3} F{:.0}",
+                to.x + self.ox,
+                to.y + self.oy,
+                self.travel_f
+            );
+            self.seconds += travel / self.s.travel_speed;
+        }
+        if retracted {
+            if self.s.z_hop > 0.0 {
+                let _ = writeln!(self.g, "G1 Z{:.3} F600", z);
+            }
+            let e = self.ext.unretract(p.retract_length);
+            let _ = writeln!(self.g, "G1 E{:.5} F{:.0}", e, p.retract_speed * 60.0);
+        }
+    }
+
+    /// Prints along `pts`: one G1 per segment, with a rising Z on vase-spiral walls and
+    /// a random lift on fuzzy top lines. Leaves the nozzle at the last point.
+    fn extrude(&mut self, layer: &Layer, style: &PathStyle, mut pts: Vec<Point2>) {
+        let s = self.s;
+        let (flow, speed) = match style.kind {
+            PathKind::Ironing => (IRONING_FLOW, IRONING_SPEED),
+            kind => (
+                1.0,
+                (speed_for(kind, style.li, s) * style.slowdown).max(MIN_PRINT_SPEED),
+            ),
+        };
+        let climb = style.spiral && style.kind == PathKind::OuterWall;
+        // Fuzzy top: short steps, each lifted by a random 0..amount above the layer.
+        let fuzzy = s.fuzzy_top && s.fuzzy_top_mm > 0.0 && style.kind == PathKind::TopSurface;
+        if fuzzy {
+            pts = resample(&pts, FUZZY_TOP_STEP_MM);
+        }
+        let total_len = path_length(&pts, false).max(1e-6);
+        let mut done_len = 0.0;
+        let mut first = true;
+        for (wi, w) in pts.windows(2).enumerate() {
+            let len = w[0].distance(w[1]);
+            if len < 1e-4 {
+                continue;
+            }
+            done_len += len;
+            let de =
+                filament_for(len, self.line_width, layer.height, self.filament.diameter) * flow;
+            let e = self.ext.extrude(de);
+            self.seconds += len / speed;
+            let z = if climb {
+                format!(
+                    " Z{:.3}",
+                    layer.z - layer.height + layer.height * done_len / total_len
+                )
+            } else if fuzzy {
+                let lift = fuzzy_unit(style.li, style.pi, wi) * s.fuzzy_top_mm;
+                format!(" Z{:.3}", layer.z + lift)
+            } else {
+                String::new()
+            };
+            let feed = if first {
+                format!(" F{:.0}", speed * 60.0)
+            } else {
+                String::new()
+            };
+            first = false;
+            let _ = writeln!(
+                self.g,
+                "G1 X{:.3} Y{:.3}{z} E{:.5}{feed}",
+                w[1].x + self.ox,
+                w[1].y + self.oy,
+                e
+            );
+        }
+        if fuzzy {
+            // Back to the layer height before anything else moves.
+            let _ = writeln!(self.g, "G1 Z{:.3} F600", layer.z);
+        }
+        self.pos = *pts.last().unwrap();
+    }
+
+    /// The end sequence (retract, lift, present the print, heaters and motors off), the
+    /// time and filament summary, and the settings block.
+    fn finish(mut self, result: &SliceResult) -> GcodeOutput {
+        let (printer, filament, g) = (self.printer, self.filament, &mut self.g);
+        let top = result.layers.last().map(|l| l.z).unwrap_or(0.0);
+        let _ = writeln!(g, ";END");
+        let _ = writeln!(g, "G1 E{:.5} F2400 ; retract", self.ext.e - 2.0);
+        let _ = writeln!(g, "G0 Z{:.2} F600", (top + 10.0).min(printer.max_z));
+        let _ = writeln!(
+            g,
+            "G0 X5 Y{:.0} F{:.0} ; present the print",
+            printer.bed_y - 10.0,
+            self.travel_f
+        );
+        let _ = writeln!(g, "M104 S0");
+        let _ = writeln!(g, "M140 S0");
+        let _ = writeln!(g, "M107");
+        let _ = writeln!(g, "M84 ; motors off");
+
+        let total_e = (self.prime_e as f64 + self.ext.extruded) as f32;
+        let seconds = self.seconds * ACCELERATION_ALLOWANCE;
+        let volume_cm3 =
+            total_e * std::f32::consts::PI * (filament.diameter / 2.0).powi(2) / 1000.0;
+        let grams = volume_cm3 * filament.density;
+        let estimate = Estimate {
+            seconds,
+            filament_mm: total_e,
+            grams,
+            cost: grams / 1000.0 * filament.price_per_kg,
+            layers: result.layers.len(),
+        };
+        let _ = writeln!(g, "; estimated time: {}", estimate.time_text());
+        let _ = writeln!(
+            g,
+            "; filament used: {:.2} m, {:.1} g",
+            total_e / 1000.0,
+            grams
+        );
+        g.push_str(&config_block(filament, self.s, printer));
+        GcodeOutput {
+            text: self.g,
+            estimate,
+        }
+    }
+}
+
+/// What `Writer::extrude` needs to know about the path it is printing.
+struct PathStyle {
+    /// Layer and path index (they seed the fuzzy-top lifts).
+    li: usize,
+    pi: usize,
+    kind: PathKind,
+    /// The layer is part of the vase spiral.
+    spiral: bool,
+    /// Cooling factor from `cooling_slowdown`.
+    slowdown: f32,
+}
+
+/// Cooling: the factor (at most 1) that stretches a layer which would otherwise finish
+/// in less than the minimum layer time.
+fn cooling_slowdown(layer: &Layer, li: usize, s: &PrintSettings) -> f32 {
+    let layer_time: f32 = layer
+        .paths
+        .iter()
+        .map(|p| path_length(&p.points, p.closed) / speed_for(p.kind, li, s))
+        .sum();
+    if s.min_layer_time > 0.0 && layer_time > 0.0 {
+        (layer_time / s.min_layer_time).min(1.0)
+    } else {
+        1.0
+    }
+}
+
+/// The points of `path` in printing order. A closed loop is rotated to start at its
+/// seam and repeats that point at the end; wall seams are recorded in `seams_here`, and
+/// Aligned seams follow `seams_below`.
+fn ordered_points(
+    path: &ToolPath,
+    nozzle: Point2,
+    seam: SeamPosition,
+    salt: usize,
+    seams_below: &[Point2],
+    seams_here: &mut Vec<Point2>,
+) -> Vec<Point2> {
+    let mut pts = path.points.clone();
+    if path.closed {
+        let is_wall = matches!(path.kind, PathKind::OuterWall | PathKind::InnerWall);
+        let below: &[Point2] = if is_wall { seams_below } else { &[] };
+        let start = seam_start_aligned(&pts, nozzle, seam, salt, below);
+        pts.rotate_left(start);
+        if is_wall {
+            seams_here.push(pts[0]);
+        }
+        pts.push(pts[0]);
+    }
+    pts
 }
 
 #[cfg(test)]

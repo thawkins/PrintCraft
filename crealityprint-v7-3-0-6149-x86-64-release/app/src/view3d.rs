@@ -45,19 +45,9 @@ impl Camera {
     }
 
     /// Screen position and depth of a point, or None when it is behind the camera.
+    /// Projecting many points? Build a `View` once and use `View::project`.
     pub fn project(&self, p: Vec3, rect: Rect) -> Option<(Pos2, f32)> {
-        let (eye, forward, right, up) = self.basis();
-        let v = p - eye;
-        let depth = v.dot(forward);
-        if depth < 1.0 {
-            return None;
-        }
-        let f = Self::focal(rect) / depth;
-        let c = rect.center();
-        Some((
-            Pos2::new(c.x + v.dot(right) * f, c.y - v.dot(up) * f),
-            depth,
-        ))
+        View::new(self, rect).project(p)
     }
 
     /// Where the mouse ray meets the plate (z = 0).
@@ -106,6 +96,46 @@ impl Camera {
     }
 }
 
+/// A camera's view basis and screen mapping for one rect, worked out once so that
+/// projecting many points (a whole mesh or toolpath) does not redo the trigonometry.
+struct View {
+    eye: Vec3,
+    forward: Vec3,
+    right: Vec3,
+    up: Vec3,
+    focal: f32,
+    center: Pos2,
+}
+
+impl View {
+    fn new(cam: &Camera, rect: Rect) -> Self {
+        let (eye, forward, right, up) = cam.basis();
+        Self {
+            eye,
+            forward,
+            right,
+            up,
+            focal: Camera::focal(rect),
+            center: rect.center(),
+        }
+    }
+
+    /// Same result as `Camera::project` for the camera and rect this view was built from.
+    fn project(&self, p: Vec3) -> Option<(Pos2, f32)> {
+        let v = p - self.eye;
+        let depth = v.dot(self.forward);
+        if depth < 1.0 {
+            return None;
+        }
+        let f = self.focal / depth;
+        let c = self.center;
+        Some((
+            Pos2::new(c.x + v.dot(self.right) * f, c.y - v.dot(self.up) * f),
+            depth,
+        ))
+    }
+}
+
 /// Grey plate with a 10 mm grid and the outline of the printable volume.
 pub fn draw_plate(
     painter: &egui::Painter,
@@ -115,6 +145,7 @@ pub fn draw_plate(
     bed_y: f32,
     max_z: f32,
 ) {
+    let view = View::new(cam, rect);
     let (hx, hy) = (bed_x / 2.0, bed_y / 2.0);
     let corners = [
         Vec3::new(-hx, -hy, 0.0),
@@ -124,13 +155,13 @@ pub fn draw_plate(
     ];
     let pts: Vec<Pos2> = corners
         .iter()
-        .filter_map(|c| cam.project(*c, rect).map(|p| p.0))
+        .filter_map(|c| view.project(*c).map(|p| p.0))
         .collect();
     if pts.len() == 4 {
         painter.add(Shape::convex_polygon(pts, theme::PLATE, Stroke::NONE));
     }
     let line = |a: Vec3, b: Vec3, stroke: Stroke| {
-        if let (Some(pa), Some(pb)) = (cam.project(a, rect), cam.project(b, rect)) {
+        if let (Some(pa), Some(pb)) = (view.project(a), view.project(b)) {
             painter.line_segment([pa.0, pb.0], stroke);
         }
     };
@@ -166,7 +197,7 @@ pub fn draw_plate(
         line(a, a + lift, volume);
     }
     // Front marker so people know which side faces them.
-    if let Some((p, _)) = cam.project(Vec3::new(0.0, -hy - 6.0, 0.0), rect) {
+    if let Some((p, _)) = view.project(Vec3::new(0.0, -hy - 6.0, 0.0)) {
         painter.text(
             p,
             egui::Align2::CENTER_CENTER,
@@ -186,7 +217,8 @@ pub struct DrawObject<'a> {
 /// Flat-shaded triangles of all objects, sorted back to front.
 pub fn draw_objects(painter: &egui::Painter, cam: &Camera, rect: Rect, objects: &[DrawObject]) {
     let light = cam.light_dir();
-    let (eye, _, _, _) = cam.basis();
+    let view = View::new(cam, rect);
+    let eye = view.eye;
     let mut faces: Vec<(f32, [Pos2; 3], Color32)> = Vec::new();
     for obj in objects {
         for t in obj.triangles {
@@ -194,11 +226,9 @@ pub fn draw_objects(painter: &egui::Painter, cam: &Camera, rect: Rect, objects: 
             if n.dot(t[0] - eye) > 0.0 {
                 continue;
             }
-            let (Some(a), Some(b), Some(c)) = (
-                cam.project(t[0], rect),
-                cam.project(t[1], rect),
-                cam.project(t[2], rect),
-            ) else {
+            let (Some(a), Some(b), Some(c)) =
+                (view.project(t[0]), view.project(t[1]), view.project(t[2]))
+            else {
                 continue;
             };
             let shade = 0.35 + 0.65 * n.dot(light).max(0.0);
@@ -227,14 +257,13 @@ pub fn draw_objects(painter: &egui::Painter, cam: &Camera, rect: Rect, objects: 
 
 /// Index of the object under the mouse, nearest first.
 pub fn pick_object(cam: &Camera, rect: Rect, objects: &[&[Triangle]], at: Pos2) -> Option<usize> {
+    let view = View::new(cam, rect);
     let mut best: Option<(f32, usize)> = None;
     for (i, tris) in objects.iter().enumerate() {
         for t in tris.iter() {
-            let (Some(a), Some(b), Some(c)) = (
-                cam.project(t[0], rect),
-                cam.project(t[1], rect),
-                cam.project(t[2], rect),
-            ) else {
+            let (Some(a), Some(b), Some(c)) =
+                (view.project(t[0]), view.project(t[1]), view.project(t[2]))
+            else {
                 continue;
             };
             if inside_triangle(at, a.0, b.0, c.0) {
@@ -274,6 +303,7 @@ pub fn draw_toolpaths(
         .take(upto + 1)
         .map(|l| l.paths.len())
         .sum();
+    let view = View::new(cam, rect);
     // Very busy prints: thin out older layers so the view stays smooth.
     let stride = (total / 40_000).max(1);
     for (li, layer) in result.layers.iter().enumerate().take(upto + 1) {
@@ -288,7 +318,7 @@ pub fn draw_toolpaths(
             let mut pts: Vec<Pos2> = path
                 .points
                 .iter()
-                .filter_map(|p| cam.project(Vec3::new(p.x, p.y, layer.z), rect).map(|q| q.0))
+                .filter_map(|p| view.project(Vec3::new(p.x, p.y, layer.z)).map(|q| q.0))
                 .collect();
             if path.closed && !pts.is_empty() {
                 pts.push(pts[0]);
