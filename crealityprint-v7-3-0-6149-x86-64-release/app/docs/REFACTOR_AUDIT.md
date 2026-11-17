@@ -113,17 +113,56 @@ test that fails without it.
 - `completion_time_uses_the_local_time_zone` mutates `TZ` while parallel tests read local time — a flake source.
 - `printer/tests.rs` `read_request` and `read_full_request` are near-duplicates.
 
+## Second audit pass (after car 8)
+
+A fresh pass over the files the first pass skimmed (gizmo, heat, calibration,
+layer_info, discovery, digest, model, thumbnail, theme, CLI) was not dry:
+
+| ID | Defect | Car |
+|---|---|---|
+| N1 | Lay flat summed faces by direction only, so step tops tied with the bottom; ties broken by HashMap order (non-deterministic) | 9 |
+| N2 | X/Y rotate rings turn about the model's own axes once it is turned about Z (rotation applied X, then Y, then Z) | open, needs `app.rs` (after car 8b) |
+| N3 | Calibration inserted after the nozzle wait even when the plate heats later (cold-plate levelling) | 9 |
+| N4 | `BED_MESH_CALIBRATE` in a comment counted as "already calibrating" | 9 |
+| N5 | One bad ASCII-STL corner shifted every later triangle | 9 |
+| N6 | Huge `TEMPERATURE_WAIT MINIMUM` / `;LAYER:` values overflowed | 9 |
+| N7 | CLI help omitted `aligned`; an option was taken as another option's value | 9 |
+| N8 | Pressing the gizmo centre grabbed the X arrow; rings bridged points behind the camera | 10 |
+| N9 | Digest scheme matched case-sensitively | 9 |
+
+Still open from the second pass (low): `heat_up_only` ignores `T` / lowercase `m109`;
+a binary STL whose header starts with `solid` and has trailing bytes is read as ASCII;
+discovery probes a found host's ports twice; `discovery::identify` and `link::detect_api`
+repeat the same port-order chain.
+
 ## Cleanup train ledger
+
+Status at the end of the drain. Local branches `refactor/car-N-*`, fast-forwarded into
+local `main`; nothing pushed.
 
 | Car | Scope | Status |
 |---|---|---|
-| 1 | Crash fixes on untrusted input: D1–D7, each with a locking test where the code is testable | Approved |
-| 2 | Output and workflow correctness: D8–D14, D21, D22 | Approved |
-| 3 | Printer link correctness: D15–D19 | Approved |
-| 4 | `fsutil` atomic write with fsync (D20, R4) and `codec` base64 (R3) | Approved |
-| 5 | Core helpers: R1, R12, R14, P1 | Approved |
-| 6 | Shared pipeline + object actions + widgets: R2, R6, R7 | Approved |
-| 7 | Printer helpers and perf: R5, R8, R13, P2, P4 | Approved |
-| 8 | God-function decomposition: R9, R10, R11, P3 | Approved |
-| 9 | Structural: `Plate` model out of `PrintCraftApp`, TZ test race | Proposed — needs test edits enumerated |
+| 1 | Crash fixes on untrusted input: D1–D7, 8 locking tests | Done (`1e9891c`) |
+| 2 | Output and workflow correctness: D8–D14, D21, D22 | Done (`8e409d4`) |
+| 3 | Printer link correctness: D15–D19 | Done (`340b5dc`); D16 (Creality pending start) has no automated test |
+| 4 | `fsutil` atomic write with fsync (D20, R4), `codec` base64 (R3) | Done (`3406b3f`) |
+| 5 | Core helpers R1, R12, R14, P1 (sphere.stl 0.39 s → 0.24 s, `/usr/bin/time`) | Done (`1ecd305`) |
+| 6 | Shared pipeline + object actions + widgets: R2, R6, R7 | Done (`0b5f673`) |
+| 7 | Printer helpers and perf: R5, R8, R13, P2, P4 | Done (`72d5da1`); Moonraker/PrusaLink poll-loop logging left different (decision) |
+| 8a | `gcode::generate`, `slicer::slice` split; per-frame camera view (R9, R10, P3) | In progress |
+| 8b | UI god-functions split in place (R11) | In progress |
+| 9 | Second-pass fixes N1, N3–N7, N9 | Done (`d87b002`) |
+| 10 | Gizmo N8 | Done (`2760d85`) |
+| — | N2 rotate rings (world axes) | Approved, after 8b |
+| — | `Plate` model out of `PrintCraftApp`; TZ-mutating test | Proposed: needs test edits enumerated |
 | — | Q1–Q3 | Blocked — decision |
+| — | Moonraker vs PrusaLink contact-error logging | Blocked — decision |
+
+## Lessons for the next audit
+
+- A worktree agent starts from the repository's pushed base, not the local branch:
+  hand it the exact base commit and check `git merge-base` before trusting its counts.
+- `sed`/string revert probes can hit the wrong copy of a repeated snippet (the USB
+  non-vacuity check first reverted `start()` instead of `stop()`); anchor them.
+- A locking test can pass for the wrong reason (lay flat: a tie the new tie-break
+  settled alone); prove each part of a fix with its own non-vacuity check.
