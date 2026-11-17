@@ -14,6 +14,8 @@
 //! them pick the size they want. 300×300 and 96×96 are the sizes Klipper-based Creality
 //! printers are usually set up for (estimated; see PRINTER_LINK.md).
 
+// Kept at this path: callers and tests name `thumbnail::base64`; it lives in codec.
+pub(crate) use crate::codec::base64;
 use crate::geometry::{Bounds, Vec3};
 use crate::model::Triangle;
 use image::{Rgba, RgbaImage};
@@ -142,28 +144,6 @@ pub fn png_bytes(img: &RgbaImage) -> Vec<u8> {
     let mut out = std::io::Cursor::new(Vec::new());
     let _ = img.write_to(&mut out, image::ImageFormat::Png);
     out.into_inner()
-}
-
-/// Standard base64 (with padding).
-pub fn base64(data: &[u8]) -> String {
-    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
-        for k in 0..4 {
-            if k <= chunk.len() {
-                out.push(ABC[(n >> (18 - 6 * k) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
 }
 
 /// One `; thumbnail begin … ; thumbnail end` block for a PNG picture.

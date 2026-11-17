@@ -10,8 +10,10 @@
 //! `printcraft --help` lists every option (preview, printer connection and more).
 
 mod app;
+mod codec;
 mod device_ui;
 mod formats;
+mod fsutil;
 mod gcode;
 mod geometry;
 mod gizmo;

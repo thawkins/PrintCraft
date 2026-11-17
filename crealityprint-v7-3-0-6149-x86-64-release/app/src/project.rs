@@ -8,6 +8,7 @@
 //! The file is JSON. Missing or unknown values fall back to defaults, so files from
 //! older or newer versions still open.
 
+use crate::codec::base64_decode;
 use crate::geometry::Vec3;
 use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::known::{api_from, api_name};
@@ -55,7 +56,7 @@ pub fn to_json(p: &Project) -> String {
                 "rotation": [o.rotation.x, o.rotation.y, o.rotation.z],
                 "scale_percent": o.scale_percent,
                 "triangles": o.mesh.triangles.len(),
-                "mesh": crate::thumbnail::base64(&mesh_bytes(&o.mesh.triangles)),
+                "mesh": crate::codec::base64(&mesh_bytes(&o.mesh.triangles)),
             })
         })
         .collect();
@@ -297,9 +298,8 @@ pub fn from_json(text: &str) -> Result<Project, String> {
 }
 
 pub fn save(path: &Path, p: &Project) -> Result<(), String> {
-    let tmp = path.with_extension(format!("{EXTENSION}.tmp"));
-    std::fs::write(&tmp, to_json(p)).map_err(|e| format!("Could not save the project: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("Could not save the project: {e}"))
+    crate::fsutil::write_atomically(path, to_json(p).as_bytes())
+        .map_err(|e| format!("Could not save the project: {e}"))
 }
 
 pub fn load(path: &Path) -> Result<Project, String> {
@@ -352,44 +352,6 @@ fn mesh_from_bytes(b: &[u8]) -> Option<Vec<Triangle>> {
             })
             .collect(),
     )
-}
-
-/// Standard base64 back to bytes (whitespace ignored); None when it isn't base64.
-pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
-    let clean: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
-    if clean.len() % 4 != 0 {
-        return None;
-    }
-    let mut out = Vec::with_capacity(clean.len() / 4 * 3);
-    let last = clean.len() / 4;
-    for (index, chunk) in clean.chunks(4).enumerate() {
-        let pad = chunk.iter().rev().take_while(|c| **c == b'=').count();
-        // Padding is at most "==" and only ends the final block.
-        if pad > 2 || (pad > 0 && index + 1 != last) {
-            return None;
-        }
-        let mut n = 0u32;
-        for (k, c) in chunk.iter().enumerate() {
-            let d = if *c == b'=' { 0 } else { val(*c)? };
-            if *c == b'=' && k < 4 - pad {
-                return None;
-            }
-            n = n << 6 | d;
-        }
-        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
-        out.extend_from_slice(&bytes[..3 - pad]);
-    }
-    Some(out)
 }
 
 #[cfg(test)]

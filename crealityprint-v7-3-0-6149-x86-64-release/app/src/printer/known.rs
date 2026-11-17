@@ -6,7 +6,7 @@
 
 use super::{Api, FoundPrinter};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KnownPrinter {
@@ -128,7 +128,8 @@ impl KnownPrinters {
         let Some(path) = self.path.as_ref().filter(|_| !self.read_only) else {
             return Ok(());
         };
-        write_atomically(path, &to_json(&self.list))
+        crate::fsutil::write_atomically(path, to_json(&self.list).as_bytes())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -176,15 +177,6 @@ fn to_json(list: &[KnownPrinter]) -> String {
         })
         .collect();
     serde_json::to_string_pretty(&json!({"version": 1, "printers": printers})).unwrap_or_default()
-}
-
-fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
