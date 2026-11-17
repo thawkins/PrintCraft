@@ -81,7 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A long PrusaLink password is no longer sent in plain text as an API key on the first
   request. The key is only tried when the printer offers no Digest sign-in.
 
-## [0.1.0] - 2026-11-17
+## [0.0.1] - 2026-11-17
 
 ### Added
 - First version of the PrintCraft desktop slicer: STL, OBJ and 3MF import; move, scale,
@@ -94,4 +94,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Command-line slicing (`printcraft --slice`).
 
 [Unreleased]: https://github.com/thawkins/PrintCraft/compare/4a62057...HEAD
-[0.1.0]: https://github.com/thawkins/PrintCraft/commit/4a62057
+[0.0.1]: https://github.com/thawkins/PrintCraft/commit/4a62057
