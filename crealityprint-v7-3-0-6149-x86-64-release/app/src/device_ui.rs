@@ -10,11 +10,11 @@ use crate::printer::discovery::{self, Scan};
 use crate::printer::known::KnownPrinters;
 use crate::printer::layer_info::with_layer_info;
 use crate::printer::link::{LinkState, PrinterLink};
-use crate::printer::{prusalink, usb, Api, HistoryEntry};
+use crate::printer::{prusalink, usb, Api, Firmware, HistoryEntry};
 use crate::printer::{Command, FoundPrinter, JobState, PrinterStatus, Wake};
 use crate::theme;
 use crate::widgets::card;
-use eframe::egui::{self, Color32, RichText, Sense, Ui};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke, Ui};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -84,6 +84,10 @@ pub struct DevicePage {
     /// The picture of the last job sent from here: (file name, texture).
     job_picture: Option<(String, egui::TextureHandle)>,
     camera_big: bool,
+    /// The enlarged camera fills the app's window.
+    camera_max: bool,
+    /// Open the enlarged camera (maximised when true) once its first picture arrives.
+    camera_wanted: Option<bool>,
     pending: Option<Pending>,
     /// PrusaLink password (the user name is always "maker").
     prusa_password: String,
@@ -111,10 +115,22 @@ pub struct DevicePage {
     known: KnownPrinters,
     /// The current connection has been added to the known list.
     remembered_link: bool,
-    /// A printer from an opened project, being looked for before connecting.
-    locating: Option<(FoundPrinter, std::sync::mpsc::Receiver<bool>)>,
+    /// A saved printer (from an opened project or the known list) being looked for before
+    /// connecting; it may have moved to a new address.
+    locating: Option<Locating>,
+    /// The addresses searched when a saved printer isn't at its saved address: the local
+    /// network in the app, nothing in tests (so they never reach real printers).
+    search_hosts: fn() -> Vec<String>,
     /// A message shown in a small window until the person closes it.
     alert: Option<(String, String)>,
+}
+
+struct Locating {
+    printer: FoundPrinter,
+    /// Saved in an opened project (rather than picked from the known list).
+    from_project: bool,
+    /// The printer where it was found (its address may be new), or None.
+    rx: std::sync::mpsc::Receiver<Option<FoundPrinter>>,
 }
 
 impl Default for DevicePage {
@@ -132,6 +148,8 @@ impl Default for DevicePage {
             camera_frame: 0,
             job_picture: None,
             camera_big: false,
+            camera_max: false,
+            camera_wanted: None,
             pending: None,
             prusa_password: String::new(),
             usb_ports: Vec::new(),
@@ -155,6 +173,7 @@ impl Default for DevicePage {
             known: KnownPrinters::load(None),
             remembered_link: false,
             locating: None,
+            search_hosts: Vec::new,
             alert: None,
         }
     }
@@ -171,6 +190,7 @@ impl DevicePage {
             } else {
                 KnownPrinters::load(path)
             },
+            search_hosts: discovery::local_hosts,
             ..Self::default()
         }
     }
@@ -210,15 +230,37 @@ impl DevicePage {
     /// Selects the printer saved in a project: looks for it first (network or USB) and
     /// connects only if it is there. If it isn't, no printer is selected and an alert says so.
     pub fn select_saved_device(&mut self, printer: FoundPrinter, ctx: &egui::Context) {
+        self.locate_and_connect(printer, true, ctx);
+    }
+
+    /// Looks for a saved printer in the background, then connects to it where it was
+    /// found. A network printer that no longer answers at its saved address (or where
+    /// another printer now answers) is searched for on the local network by its kind and
+    /// name, since its address may have changed.
+    fn locate_and_connect(
+        &mut self,
+        printer: FoundPrinter,
+        from_project: bool,
+        ctx: &egui::Context,
+    ) {
         self.disconnect();
         let (tx, rx) = std::sync::mpsc::channel();
         let p = printer.clone();
         let c = ctx.clone();
+        let search = self.search_hosts;
         std::thread::spawn(move || {
-            let _ = tx.send(device_is_present(&p));
+            let found = match p.api {
+                Some(Api::Usb) | None => device_is_present(&p).then(|| p.clone()),
+                Some(_) => discovery::relocate(&p, &search()),
+            };
+            let _ = tx.send(found);
             c.request_repaint();
         });
-        self.locating = Some((printer, rx));
+        self.locating = Some(Locating {
+            printer,
+            from_project,
+            rx,
+        });
     }
 
     /// No printer selected (a project without one, or "New project").
@@ -233,27 +275,51 @@ impl DevicePage {
     }
 
     fn poll_locating(&mut self, ctx: &egui::Context) {
-        let Some((_, rx)) = &self.locating else {
+        let Some(locating) = &self.locating else {
             return;
         };
-        match rx.try_recv() {
+        match locating.rx.try_recv() {
             Ok(found) => {
-                let (printer, _) = self.locating.take().expect("locating");
-                if found {
-                    self.connect(printer, ctx);
-                } else {
-                    let place = if printer.api == Some(Api::Usb) {
-                        "on USB port"
-                    } else {
-                        "at"
-                    };
-                    self.show_alert(
-                        "Printer not found",
-                        format!(
-                            "The printer saved in this project, {} ({place} {}), could not be located.\n\nNo printer is selected. Check that it is switched on and connected, then pick it on the Device page.",
-                            printer.name, printer.host
-                        ),
-                    );
+                let Locating {
+                    printer,
+                    from_project,
+                    ..
+                } = self.locating.take().expect("locating");
+                match found {
+                    Some(found) => {
+                        let moved =
+                            (found.host != printer.host).then(|| self.moved(&printer, &found));
+                        self.connect(found, ctx);
+                        if let (Some(msg), Some(link)) = (moved, &self.link) {
+                            link.note(msg);
+                        }
+                    }
+                    None => {
+                        let usb = printer.api == Some(Api::Usb);
+                        let place = if usb { "on USB port" } else { "at" };
+                        let searched = if usb {
+                            ""
+                        } else {
+                            " It didn't answer there, and a search of the local network didn't find it at a new address either."
+                        };
+                        let which = if from_project {
+                            format!("The printer saved in this project, {}", printer.name)
+                        } else {
+                            format!("The printer {}", printer.name)
+                        };
+                        let after = if from_project {
+                            "No printer is selected. Check that it is switched on and connected, then pick it on the Device page."
+                        } else {
+                            "Check that it is switched on and on the same network as this computer, then try again."
+                        };
+                        self.show_alert(
+                            "Printer not found",
+                            format!(
+                                "{which} ({place} {}), could not be located.{searched}\n\n{after}",
+                                printer.host
+                            ),
+                        );
+                    }
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -265,7 +331,19 @@ impl DevicePage {
 
     /// The name of a printer being looked for, if any.
     pub fn locating_name(&self) -> Option<&str> {
-        self.locating.as_ref().map(|(p, _)| p.name.as_str())
+        self.locating.as_ref().map(|l| l.printer.name.as_str())
+    }
+
+    /// A saved printer turned up at a new address: the known list follows it (the old
+    /// address is dropped, so the printer isn't listed twice). Returns a note for the log.
+    fn moved(&mut self, old: &FoundPrinter, now: &FoundPrinter) -> String {
+        self.known.forget(&old.host);
+        self.known.remember(now, chrono::Utc::now().timestamp());
+        let _ = self.known.save();
+        format!(
+            "{} has a new address: {} (it was {}).",
+            now.name, now.host, old.host
+        )
     }
 
     fn alert_dialog(&mut self, ctx: &egui::Context) {
@@ -322,6 +400,11 @@ impl DevicePage {
 
     /// Connects to a typed-in address; the kind of printer is worked out on the way.
     pub fn connect_to(&mut self, host: String, ctx: &egui::Context) {
+        if is_serial_port(&host) {
+            self.usb_port = host;
+            self.connect_usb(ctx);
+            return;
+        }
         self.manual_host = host.clone();
         let printer = FoundPrinter {
             name: format!("Printer at {host}"),
@@ -368,6 +451,7 @@ impl DevicePage {
         self.camera = None;
         self.camera_texture = None;
         self.camera_big = false;
+        self.camera_max = false;
     }
 
     fn send(&self, cmd: Command) {
@@ -381,12 +465,26 @@ impl DevicePage {
         link.with_state(|s| s.api).or(link.printer.api)
     }
 
+    /// The printer's firmware family: Klipper behind the Klipper network services,
+    /// otherwise what a USB printer reported to M115 (Marlin when it said nothing).
+    fn firmware(&self) -> Firmware {
+        if self.api().is_some_and(Api::is_klipper) {
+            return Firmware::Klipper;
+        }
+        self.link
+            .as_ref()
+            .and_then(|l| l.with_state(|s| s.status.firmware.clone()))
+            .map(|name| Firmware::from_name(&name))
+            .unwrap_or_default()
+    }
+
     /// Sends a sliced plate, adding calibration and layer information as the printer needs.
     fn send_job(&mut self, job: PrintJob) {
-        let klipper = self.api().is_some_and(Api::is_klipper);
+        let firmware = self.firmware();
+        let klipper = firmware.is_klipper();
         let mut text = (*job.gcode).clone();
         if self.calibrate && !levels_itself(self.api()) {
-            text = with_calibration(&text, klipper);
+            text = with_calibration(&text, firmware);
         }
         if klipper {
             text = with_layer_info(&text);
@@ -578,6 +676,16 @@ impl DevicePage {
                 RichText::new("Printers found or used before. Pick one to connect again.")
                     .color(theme::TEXT_DIM),
             );
+            let busy = self.locating.is_some();
+            if let Some(l) = &self.locating {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(format!(
+                        "Looking for {}… If it isn't at {} any more, the local network is searched for it.",
+                        l.printer.name, l.printer.host
+                    ));
+                });
+            }
             ui.add_space(4.0);
             for k in &self.known.list {
                 let p = &k.printer;
@@ -614,7 +722,10 @@ impl DevicePage {
                                     {
                                         forget = Some(p.host.clone());
                                     }
-                                    if ui.button("Connect").clicked() {
+                                    if ui
+                                        .add_enabled(!busy, egui::Button::new("Connect"))
+                                        .clicked()
+                                    {
                                         connect = Some(p.clone());
                                     }
                                 },
@@ -631,8 +742,11 @@ impl DevicePage {
             if p.api == Some(Api::Usb) {
                 self.usb_port = p.host.clone();
                 self.usb_baud = p.baud.unwrap_or(usb::DEFAULT_BAUD);
+                self.connect(p, &ctx);
+            } else {
+                // Its address may have changed since: check, and search if it's not there.
+                self.locate_and_connect(p, false, &ctx);
             }
-            self.connect(p, &ctx);
         }
     }
 
@@ -775,7 +889,7 @@ impl DevicePage {
         let mut go = false;
         card(ui, "Printer on a USB cable", |ui| {
             ui.label(
-                RichText::new("For printers running Marlin or Prusa firmware. The app sends the print line by line, so keep this computer awake until it finishes.")
+                RichText::new("For printers running Marlin, Prusa or Repetier firmware. The app sends the print line by line, so keep this computer awake until it finishes.")
                     .color(theme::TEXT_DIM),
             );
             if self.usb_ports.is_empty() && ui.ctx().cumulative_frame_nr() % 300 == 1 {
@@ -858,14 +972,19 @@ impl DevicePage {
                     });
                 });
             let api = s.api.map(|a| a.label()).unwrap_or("Connecting…");
+            let usb = link.printer.api == Some(Api::Usb);
+            // A USB printer's "model" is its firmware name, shown in the protocol badge.
             let model = s
                 .status
                 .model
                 .as_deref()
-                .filter(|m| !m.is_empty())
+                .filter(|m| !m.is_empty() && !(usb && s.status.firmware.as_deref() == Some(*m)))
                 .map(|m| format!(" · model {m}"))
                 .unwrap_or_default();
             ui.label(RichText::new(format!("{api}{model}")).color(theme::TEXT_DIM));
+            if usb && s.connected {
+                protocol_badge(ui, s.status.firmware.as_deref());
+            }
         });
         if close {
             self.disconnect();
@@ -893,6 +1012,10 @@ impl DevicePage {
                     self.camera_texture =
                         Some(ctx.load_texture("printer-camera", img, egui::TextureOptions::LINEAR))
                 }
+            }
+            if let Some(max) = self.camera_wanted.take() {
+                self.camera_big = true;
+                self.camera_max = max;
             }
         }
     }
@@ -964,27 +1087,89 @@ impl DevicePage {
         }
     }
 
+    /// The enlarged camera: a window with its own title bar holding Maximise (or Restore)
+    /// and Close. Maximised, it fills the app's window; double-clicking the title bar
+    /// switches between the two, and Escape restores it.
     fn camera_window(&mut self, ctx: &egui::Context) {
         if !self.camera_big {
             return;
         }
         let Some(tex) = &self.camera_texture else {
             self.camera_big = false;
+            self.camera_max = false;
             return;
         };
-        let mut open = true;
-        let screen = ctx.content_rect().size();
-        egui::Window::new("Camera")
-            .open(&mut open)
+        let (tex_id, tex_size) = (tex.id(), tex.size_vec2());
+        if self.camera_max && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.camera_max = false;
+        }
+        let max = self.camera_max;
+        let screen = ctx.content_rect();
+        // Separate ids, so restoring returns to the size and place it had before.
+        let mut window = egui::Window::new("Camera")
+            .id(egui::Id::new(if max {
+                "camera_max"
+            } else {
+                "camera_window"
+            }))
+            .title_bar(false)
             .collapsible(false)
-            .default_size(screen * 0.8)
-            .show(ctx, |ui| {
-                let size = tex.size_vec2();
-                let avail = ui.available_size();
-                let scale = (avail.x / size.x).min((avail.y - 4.0).max(100.0) / size.y);
-                ui.image((tex.id(), size * scale));
+            .movable(!max)
+            .resizable(!max);
+        window = if max {
+            window.fixed_rect(screen.shrink(6.0))
+        } else {
+            window.default_size(screen.size() * 0.8)
+        };
+        let mut toggle = false;
+        let mut close = false;
+        window.show(ctx, |ui| {
+            let bar = ui.horizontal(|ui| {
+                ui.label(RichText::new("Camera").size(15.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if window_button(ui, WindowIcon::Close)
+                        .on_hover_text("Close")
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                    let (icon, hint) = if max {
+                        (WindowIcon::Restore, "Restore the camera window (Esc)")
+                    } else {
+                        (WindowIcon::Maximise, "Maximise: fill the app's window")
+                    };
+                    if window_button(ui, icon).on_hover_text(hint).clicked() {
+                        toggle = true;
+                    }
+                });
             });
-        self.camera_big = open;
+            let title = ui.interact(
+                bar.response.rect,
+                egui::Id::new("camera_title_bar"),
+                Sense::click(),
+            );
+            if title.double_clicked() {
+                toggle = true;
+            }
+            ui.separator();
+            let avail = ui.available_size();
+            let scale = (avail.x / tex_size.x).min((avail.y - 4.0).max(100.0) / tex_size.y);
+            ui.vertical_centered(|ui| {
+                ui.image((tex_id, tex_size * scale));
+            });
+        });
+        if toggle {
+            self.camera_max = !self.camera_max;
+        }
+        if close {
+            self.camera_big = false;
+            self.camera_max = false;
+        }
+    }
+
+    /// Opens the enlarged camera (maximised or not) as soon as its first picture arrives.
+    pub fn show_camera_when_ready(&mut self, maximised: bool) {
+        self.camera_wanted = Some(maximised);
     }
 
     /// What the printer is doing now: the part's picture, the job's details, and the
@@ -1690,6 +1875,62 @@ pub fn device_is_present(p: &FoundPrinter) -> bool {
     }
 }
 
+#[derive(Clone, Copy)]
+enum WindowIcon {
+    Maximise,
+    Restore,
+    Close,
+}
+
+/// A small square title-bar button with a drawn icon (drawn, so it never depends on a font
+/// having the symbol): one square to maximise, two overlapping squares to restore, a
+/// cross to close.
+fn window_button(ui: &mut Ui, icon: WindowIcon) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), Sense::click());
+    let visuals = ui.style().interact(&response);
+    if response.hovered() {
+        let fill = match icon {
+            WindowIcon::Close => Color32::from_rgb(196, 60, 60),
+            _ => visuals.bg_fill,
+        };
+        ui.painter().rect_filled(rect, 4.0, fill);
+    }
+    let stroke = Stroke::new(1.4, visuals.fg_stroke.color);
+    let c = rect.center();
+    let p = ui.painter();
+    match icon {
+        WindowIcon::Maximise => {
+            let r = egui::Rect::from_center_size(c, egui::vec2(10.0, 10.0));
+            p.rect_stroke(r, 1.0, stroke, egui::StrokeKind::Middle);
+        }
+        WindowIcon::Restore => {
+            let back =
+                egui::Rect::from_center_size(c + egui::vec2(2.0, -2.0), egui::vec2(8.0, 8.0));
+            let front = back.translate(egui::vec2(-4.0, 4.0));
+            p.line_segment([back.left_top(), back.right_top()], stroke);
+            p.line_segment([back.right_top(), back.right_bottom()], stroke);
+            p.line_segment(
+                [back.left_top(), egui::pos2(back.left(), front.top())],
+                stroke,
+            );
+            p.line_segment(
+                [
+                    back.right_bottom(),
+                    egui::pos2(front.right(), back.bottom()),
+                ],
+                stroke,
+            );
+            p.rect_stroke(front, 1.0, stroke, egui::StrokeKind::Middle);
+        }
+        WindowIcon::Close => {
+            let d = 4.5;
+            p.line_segment([c + egui::vec2(-d, -d), c + egui::vec2(d, d)], stroke);
+            p.line_segment([c + egui::vec2(-d, d), c + egui::vec2(d, -d)], stroke);
+        }
+    }
+    response
+}
+
 fn waker(ctx: &egui::Context) -> Wake {
     let c = ctx.clone();
     Arc::new(move || c.request_repaint())
@@ -1764,6 +2005,57 @@ fn temp_tile(
 }
 
 /// A small drawn "×" button (the symbol isn't in every font).
+/// The protocol a USB printer is driven with, as a badge beside the connection: Repetier's
+/// in the accent colour with its version, Marlin-style dimmed, and a note while the
+/// printer hasn't named its firmware yet.
+fn protocol_badge(ui: &mut Ui, firmware: Option<&str>) {
+    let (text, color, hover) = match firmware {
+        Some(name) => {
+            let text = match crate::printer::repetier_version(name) {
+                Some(v) => format!("Repetier-Firmware v{v}"),
+                None if Firmware::from_name(name) == Firmware::Repetier => {
+                    "Repetier-Firmware, version unknown".to_string()
+                }
+                None => "Marlin-style protocol".to_string(),
+            };
+            let color = if Firmware::from_name(name) == Firmware::Repetier {
+                theme::ACCENT
+            } else {
+                theme::TEXT_DIM
+            };
+            let hover = format!(
+                "The printer reported \"{name}\" (M115). Using the {}.",
+                crate::printer::protocol_label(name)
+            );
+            (text, color, hover)
+        }
+        None => (
+            "Protocol: waiting for the firmware's name".to_string(),
+            theme::WARNING,
+            "The app asked the printer for its firmware (M115) and is waiting for the answer. \
+             Until then it is driven like Marlin."
+                .to_string(),
+        ),
+    };
+    egui::Frame::new()
+        .stroke(egui::Stroke::new(1.0, color))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(8, 2))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).color(color).size(12.0));
+        })
+        .response
+        .on_hover_text(hover);
+}
+
+/// A serial port name (`/dev/ttyUSB0`, `COM3`) rather than a network address.
+fn is_serial_port(host: &str) -> bool {
+    host.starts_with("/dev/")
+        || host
+            .strip_prefix("COM")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn close_button(ui: &mut Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), Sense::click());
     let color = if response.hovered() {
@@ -2008,6 +2300,22 @@ fn merge_records(app: &[HistoryEntry], printer: &[HistoryEntry]) -> Vec<HistoryE
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn serial_port_names_connect_over_usb() {
+        for port in ["/dev/ttyUSB0", "/dev/pts/7", "COM3", "COM12"] {
+            assert!(is_serial_port(port), "{port}");
+        }
+        for host in [
+            "192.168.1.20",
+            "printer.local",
+            "COM",
+            "COMPUTER",
+            "localhost:7125",
+        ] {
+            assert!(!is_serial_port(host), "{host}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -2081,6 +2389,111 @@ mod tests {
             page.poll_locating(ctx);
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn escape_restores_a_maximised_camera_and_closing_resets_it() {
+        let ctx = egui::Context::default();
+        let picture = ctx.load_texture(
+            "test-camera",
+            egui::ColorImage::new([4, 3], vec![Color32::GRAY; 12]),
+            egui::TextureOptions::LINEAR,
+        );
+        let mut page = DevicePage {
+            camera_texture: Some(picture),
+            camera_big: true,
+            camera_max: true,
+            ..DevicePage::default()
+        };
+        let frame = |page: &mut DevicePage, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| page.camera_window(ui.ctx()));
+            // No renderer here: the picture uploads are dropped on purpose.
+            out.textures_delta.clear();
+        };
+        frame(&mut page, Vec::new());
+        assert!(page.camera_big && page.camera_max, "stays maximised");
+        let esc = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut page, vec![esc]);
+        assert!(
+            page.camera_big && !page.camera_max,
+            "Escape restores, keeps it open"
+        );
+        // Losing the picture (disconnected) closes it and forgets maximised.
+        page.camera_max = true;
+        page.camera_texture = None;
+        frame(&mut page, Vec::new());
+        assert!(!page.camera_big && !page.camera_max);
+    }
+
+    /// The "network" searched in the test below: loopback addresses only.
+    fn loopback_network() -> Vec<String> {
+        (80..=86).map(|d| format!("127.0.0.{d}")).collect()
+    }
+
+    #[test]
+    fn connecting_to_a_known_printer_follows_it_to_its_new_address() {
+        if !crate::printer::end_to_end::pretend_creality_named("127.0.0.83", "moved-ke") {
+            return;
+        }
+        let ctx = egui::Context::default();
+        let mut page = DevicePage {
+            search_hosts: loopback_network,
+            ..DevicePage::default()
+        };
+        let saved = FoundPrinter {
+            host: "127.0.0.81".into(),
+            name: "moved-ke".into(),
+            model: "Pretend KE".into(),
+            api: Some(Api::CrealityLan),
+            ..Default::default()
+        };
+        page.known.remember(&saved, 1);
+        page.locate_and_connect(saved, false, &ctx);
+        assert_eq!(page.locating_name(), Some("moved-ke"));
+        finish_locating(&mut page, &ctx);
+        assert!(page.alert.is_none(), "{:?}", page.alert);
+        let link = page.link.as_ref().expect("connected");
+        assert_eq!(link.printer.host, "127.0.0.83");
+        assert!(link
+            .state()
+            .log
+            .iter()
+            .any(|l| l.contains("new address: 127.0.0.83")));
+        // The known list follows it: one entry, at the new address.
+        let hosts: Vec<&str> = page
+            .known
+            .list
+            .iter()
+            .map(|k| k.printer.host.as_str())
+            .collect();
+        assert_eq!(hosts, ["127.0.0.83"]);
+        // Not anywhere: the alert says the network was searched.
+        page.disconnect();
+        let gone = FoundPrinter {
+            host: "127.0.0.85".into(),
+            name: "gone-ke".into(),
+            api: Some(Api::CrealityLan),
+            ..Default::default()
+        };
+        page.locate_and_connect(gone, false, &ctx);
+        finish_locating(&mut page, &ctx);
+        assert!(page.link.is_none());
+        let (_, body) = page.alert.clone().expect("alert");
+        assert!(body.contains("gone-ke") && body.contains("search of the local network"));
     }
 
     #[test]

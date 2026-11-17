@@ -214,6 +214,13 @@ impl PrinterLink {
     pub fn send(&self, cmd: Command) {
         let _ = self.tx.send(cmd);
     }
+
+    /// Adds a line to the connection's activity log from the window's side.
+    pub fn note(&self, msg: impl Into<String>) {
+        if let Ok(mut s) = self.shared.lock() {
+            s.note(msg);
+        }
+    }
 }
 
 impl Drop for PrinterLink {

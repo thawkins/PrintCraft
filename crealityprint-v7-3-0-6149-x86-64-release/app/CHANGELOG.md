@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A USB printer's page shows which protocol drives it: a "Repetier-Firmware v1" or
+  "Repetier-Firmware v2" badge, or "Marlin-style protocol", and the activity log says so
+  when the printer names its firmware.
+- USB connections record every line sent and received, with timings, in `usb-serial.log`
+  in the settings folder's `logs` folder (the log before is kept as
+  `usb-serial.previous.log`), so a misbehaving printer can be diagnosed.
+- `--connect` also takes a serial port (`/dev/ttyUSB0`, `COM3`) and connects over USB.
+
 ## [0.0.2] - 2026-11-17
 
 ### Added

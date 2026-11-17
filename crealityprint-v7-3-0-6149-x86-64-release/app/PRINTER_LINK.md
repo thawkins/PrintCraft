@@ -37,6 +37,31 @@ connection. The list shows first on the Device page, newest first, with **Connec
   changes it.
 * `printcraft --device` opens straight on the Device page.
 
+### A known printer with a new address (person's request; `discovery::relocate`)
+
+Routers often give a printer a new address, for example after it restarts. When **Connect**
+is pressed on a known network printer, or a project with a printer is opened, the app
+looks for the printer before connecting. "Looking for <name>…" shows while it does.
+1. **The saved address.** It is asked on the printer kind's port (Creality network
+   service 9999, Moonraker 7125, PrusaLink 80), with 1.5 s to answer. If the printer there
+   gives the same name (its hostname, e.g. `Ender3V3KE-A654`), or no name, that is it.
+2. **Otherwise the network is searched.** Every address of this computer's local
+   network (x.x.x.1-254) is asked on that one port, 64 at a time with 0.4 s each. Each
+   that answers is asked its name, and the printer of the same kind and name is used.
+   This covers both the old address not answering and a different printer now having
+   it.
+3. **Found at a new address.** The app connects there. The known list replaces the old
+   entry with the new address, so the printer isn't listed twice, and the Activity log
+   says "<name> has a new address: … (it was …)".
+4. **Not found.** An alert says the printer didn't answer at its saved address and that
+   a search of the local network didn't find it either. From a project, no printer is
+   selected.
+
+A printer saved without a name of its own ("Printer at …") can't be recognised
+elsewhere, so only its saved address is tried. USB printers are only looked for on
+their port. A ping isn't used, because many printers and networks don't answer pings
+while the printer's own port does.
+
 ## 1. Finding the printer (src/printer/discovery.rs)
 
 * The printer joins your Wi-Fi and gets an address. Its screen shows the address in the
@@ -107,20 +132,27 @@ show a "printer model mismatch" warning on the screen; it can be confirmed.
 
 ## 3b. USB cable (src/printer/usb.rs) — standard RepRap host protocol, unverified on a real printer
 
-For printers running **Marlin** or **Prusa firmware** (MK3S, MINI, MK4 and most older
-printers). **Klipper printers such as the Ender-3 V3 KE can't be driven over USB this
+For printers running **Marlin**, **Prusa firmware** (MK3S, MINI, MK4 and most older
+printers) or **Repetier-Firmware** (see 3c). **Klipper printers such as the Ender-3 V3 KE can't be driven over USB this
 way**: their USB socket leads to Klipper's own controller. Use the network for them.
 
 * The port list comes from the system's serial devices (`/dev/ttyACM*`, `/dev/ttyUSB*`,
   `COM` ports). The speed is 115200 baud by default (250000, 230400, 57600 and 500000 can
   be chosen).
-* Opening the port restarts many boards, so the app waits 2 s first.
+* Opening the port restarts many boards, so the app waits 2 s first. Then it asks
+  `M115`. The `FIRMWARE_NAME:` in the answer is shown on the Device page as the printer's
+  model, and decides how the printer is driven (see 3c for Repetier).
 * Starting a print sends `M110 N0` (line numbers restart), then `M155 S2` (report
   temperatures every 2 s), then each command of the file without comments, as
   `N<line> <command>*<checksum>` (XOR of every character before `*`).
-* Exactly one line is in flight: the next goes out after the printer answers `ok`.
-  `Resend: N` (or `rs N`) sends from line N again. If the printer is silent for 60 s, the
-  app carries on.
+* Exactly one line is in flight: the next goes out after the printer answers `ok` (also
+  `ok 12`). `Resend: N`, `Resend: N12`, `rs N` or `rs:N` sends from line N again.
+  `wait` (the printer's buffer is empty) means an `ok` was lost, so the app carries on.
+  `busy:` keeps it waiting. If the printer is silent for 60 s, the app carries on.
+* `start` (the board restarted) during a print ends the job: the printer has lost it.
+  `!!`, `Error:` and `fatal:` lines are shown to the person, and `fatal:` (the firmware
+  has shut down) ends the job. These replies are from the "Replies from the RepRap machine"
+  part of the RepRap wiki's G-code page.
 * Temperatures are read from `T:210.0 /210.0 B:60.0 /60.0`. When idle, the app asks with
   `M105` every 3 s.
 * Progress is lines sent ÷ lines in the file. The layer comes from the file's `;LAYER:`
@@ -130,6 +162,51 @@ way**: their USB socket leads to Klipper's own controller. Use the network for t
   motors off).
 * The computer must stay awake with the app open until the print finishes. Closing the
   app or the Printer connection turns the heaters off.
+
+### Serial log (src/printer/serial_log.rs)
+
+Every USB connection records what is said over the port, to diagnose a printer that
+misbehaves. The file is `usb-serial.log` in the `logs` folder of the settings folder
+(Linux `~/.config/printcraft/logs/`, macOS `~/Library/Application Support/printcraft/logs/`,
+Windows `%APPDATA%\printcraft\logs\`). The activity log names it when the port opens.
+
+* Each line has the time of day, the seconds since the port opened, and `>>>` for what
+  the app sent, `<<<` for what the printer answered, or `---` for the app's own notes
+  (such as why the connection ended).
+* A new connection moves the last log to `usb-serial.previous.log`, so a printer that
+  restarts and reconnects keeps the evidence of what went wrong.
+* The file stops at 50 MB. Only G-code and the printer's replies go over the port, so
+  nothing secret is recorded.
+* Tests that drive pretend printers write to a temporary folder instead.
+
+## 3c. Repetier-Firmware over USB (src/printer/usb.rs) — documented, unverified on a real printer
+
+Sources: the RepRap wiki pages "Repetier-Firmware" and "G-code", read for this.
+
+* **Detection.** Repetier-Firmware speaks the same numbered, checksummed ASCII lines. It
+  works out by itself whether a host uses ASCII or its own binary protocol. When M115 names
+  Repetier, the app switches to the steps below. Choose the board's speed under USB;
+  250000 is in the list.
+* **Shown to the person.** A USB connection's header has a badge with the protocol in
+  use: "Repetier-Firmware v1" (the 1.x releases, and the 0.9x releases they grew from)
+  or "Repetier-Firmware v2" (2.x), from the version in the M115 name, or "Marlin-style
+  protocol". Hovering it shows the name the printer reported. The activity log says the
+  same when the printer names itself. Both versions are driven the same way so far.
+* **Print mode on the printer's screen.** Starting a print sends `M110 N0`, then
+  `M530 S1 L<layers>` ("a print has started", with the layer count) and `M531 <name>`.
+  Comment and checksum marks are removed from the name, and it is cut to 40 characters.
+  Marlin's `M155` is not sent.
+* **Progress.** `M532 X<percent> L<layer>` goes out whenever the progress has moved by
+  0.1 % or a new layer has begun. The wiki says "every 0.1% progress change on every
+  layer change".
+* **End.** `M530 S0` goes out once after the last line, and before the heaters-off lines
+  when the print is stopped.
+* **Temperatures** are asked for with `M105` every 3 s during a print as well, because
+  the app doesn't rely on automatic reports.
+* **Calibrate before printing** uses `G32`, Repetier's "Probe Z and calculate Z plane",
+  with the printer's own configured method. In Repetier, `G29` only measures the height.
+* **Heat waits.** `M109 S` and `M190 S` wait only while heating, as in Marlin, so print
+  files need no change.
 
 ## 4. Progress and monitoring (src/device_ui.rs)
 
@@ -159,7 +236,7 @@ BED_MESH_CALIBRATE ; printer calibration: measure the plate
 
 `BED_MESH_CALIBRATE` is Klipper's documented bed-levelling command. The KE runs Klipper,
 so the same file works over the Creality service and over Moonraker. Prusa (PrusaLink)
-and USB printers get the standard `G29` instead. The lines are added only once, and only
+and USB printers get the standard `G29` instead, or `G32` on Repetier-Firmware. The lines are added only once, and only
 to files sent from the Printer page; **Export G-code** is unchanged. The switch is not
 remembered between app starts.
 
@@ -263,7 +340,11 @@ itself was used.
   Disconnecting does not cancel an upload already in progress: the file finishes
   sending and, for upload-and-print, the print still starts (decided 2026-11-17).
 * **Camera:** Refresh (reconnect the video) and Enlarge (a large window; clicking the
-  picture also enlarges it).
+  picture also enlarges it). The enlarged window's title bar has **Maximise** (a square)
+  and Close. Maximised, the camera fills the app's window and the button becomes
+  **Restore** (two squares), which returns it to its earlier size and place.
+  Double-clicking the title bar switches between the two, and Esc restores.
+  `--connect ADDRESS --camera big|max` opens it either way for check pictures.
 * **Current printing:**
   * a thumbnail (a plain file-and-cube picture, since the printer's own thumbnail isn't
     available)
@@ -348,6 +429,10 @@ and shows the newest one. If no camera is found, the page says so and offers
 * USB: the line protocol is tested with a pretend printer. The tests cover numbering,
   checksums (checked by hand), a damaged line being sent again, pause, and stop turning
   the heaters off. No real serial printer was attached.
+* Repetier: an end-to-end test drives a pretend Repetier printer on a pseudo serial port
+  (Linux/macOS). It checks that M115 names the firmware, the print-mode, name and progress
+  commands, the line checksums, recovery from `rs:2` followed only by `wait`, and that the
+  job is reported finished.
 * The digest sign-in is checked against the worked example in RFC 2617.
 
 ## 7. Still unknown
@@ -359,3 +444,8 @@ and shows the newest one. If no camera is found, the page says so and offers
 * USB: a real Marlin or Prusa printer. Some boards need a different speed, and some
   older firmware doesn't support `M155` (the app falls back to asking with `M105` only
   when idle).
+* Repetier: a real Repetier printer. Untested so far:
+  * whether it answers `ok` after a resend (the app copes either way, through `wait`);
+  * whether its screen shows the `M531` name and `M532` progress;
+  * whether `G32` suits its probe setup.
+  Repetier-Server (network) is not supported.

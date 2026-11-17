@@ -2,7 +2,8 @@
 //!
 //! Klipper printers reached through Moonraker use Klipper's documented
 //! BED_MESH_CALIBRATE. Marlin and Prusa firmware (PrusaLink and USB printing) use the
-//! standard G29. Printers on the Creality network service level by themselves, so nothing
+//! standard G29. Repetier-Firmware (USB) uses G32, its "Probe Z and calculate Z plane"
+//! (RepRap wiki, G-code page). Printers on the Creality network service level by themselves, so nothing
 //! is added for them (see device_ui `levels_itself`).
 //!
 //! The step goes in once both the plate **and the nozzle** have reached the job's
@@ -11,10 +12,14 @@
 //! around the measurement. Afterwards the job temperature is set again, waiting only if the
 //! nozzle has to heat back up (see heat.rs), in case the levelling routine changed it.
 
+use super::Firmware;
+
 /// The levelling command for Klipper printers.
 pub const KLIPPER_LEVEL: &str = "BED_MESH_CALIBRATE";
 /// The levelling command for Marlin and Prusa firmware.
 pub const MARLIN_LEVEL: &str = "G29";
+/// The levelling command for Repetier-Firmware.
+pub const REPETIER_LEVEL: &str = "G32";
 
 /// The nozzle temperature the file heats to before printing, if any.
 pub fn job_nozzle_temp(gcode: &str) -> Option<u32> {
@@ -23,8 +28,9 @@ pub fn job_nozzle_temp(gcode: &str) -> Option<u32> {
 
 /// The calibration lines for one printer: home, level, then back at the job temperature
 /// (waiting only if the nozzle needs to heat up again).
-pub fn calibration_lines(klipper: bool, nozzle: Option<u32>) -> String {
-    let level = if klipper { KLIPPER_LEVEL } else { MARLIN_LEVEL };
+pub fn calibration_lines(firmware: Firmware, nozzle: Option<u32>) -> String {
+    let level = firmware.level_command();
+    let klipper = firmware.is_klipper();
     let mut s = String::from("G28 ; home again now the plate and nozzle are hot\n");
     if let Some(t) = nozzle {
         s.push_str(&format!(
@@ -42,16 +48,18 @@ pub fn calibration_lines(klipper: bool, nozzle: Option<u32>) -> String {
 
 /// The print file with the calibration step added (once) after the later of the nozzle-
 /// and plate-heat waits, or after the first home move, or at the very start.
-pub fn with_calibration(gcode: &str, klipper: bool) -> String {
+pub fn with_calibration(gcode: &str, firmware: Firmware) -> String {
     // Only commands count: a comment mentioning the step does not mean it runs.
     let already = gcode.lines().any(|l| {
         let code = l.split(';').next().unwrap_or("").trim();
-        code.starts_with(MARLIN_LEVEL) || code.starts_with(KLIPPER_LEVEL)
+        [MARLIN_LEVEL, KLIPPER_LEVEL, REPETIER_LEVEL]
+            .iter()
+            .any(|c| code.split_whitespace().next() == Some(c))
     });
     if already {
         return gcode.to_string();
     }
-    let lines = calibration_lines(klipper, job_nozzle_temp(gcode));
+    let lines = calibration_lines(firmware, job_nozzle_temp(gcode));
     let after = |test: &dyn Fn(&str) -> bool| {
         let mut offset = 0;
         for line in gcode.split_inclusive('\n') {
@@ -88,7 +96,7 @@ mod tests {
 
     #[test]
     fn waits_for_the_plate_too_when_it_heats_after_the_nozzle() {
-        let out = with_calibration("M109 S215\nM190 S60\nG1 X1\n", true);
+        let out = with_calibration("M109 S215\nM190 S60\nG1 X1\n", Firmware::Klipper);
         let bed_wait = out.find("M190 S60").unwrap();
         let cal = out.find(KLIPPER_LEVEL).unwrap();
         assert!(cal > bed_wait, "{out}");
@@ -97,14 +105,14 @@ mod tests {
     #[test]
     fn a_comment_naming_the_step_does_not_count_as_calibrating() {
         let g = "; BED_MESH_CALIBRATE disabled\nM190 S60\nM109 S210\nG1 X1\n";
-        let out = with_calibration(g, true);
+        let out = with_calibration(g, Firmware::Klipper);
         assert_eq!(out.matches(KLIPPER_LEVEL).count(), 2, "{out}");
     }
 
     #[test]
     fn calibrates_with_the_nozzle_already_at_job_temperature() {
         let g = "M140 S60\nM104 S210\nG28 ; home\nM190 S60 ; wait for bed\nM109 S210 ; wait for nozzle\nG1 X1\n";
-        let out = with_calibration(g, true);
+        let out = with_calibration(g, Firmware::Klipper);
         let bed = out.find("M190").unwrap();
         let nozzle_wait = out.find("M109 S210 ; wait for nozzle").unwrap();
         let cal = out.find("BED_MESH_CALIBRATE").unwrap();
@@ -137,13 +145,13 @@ mod tests {
 
     #[test]
     fn added_only_once() {
-        let once = with_calibration("G28\nG1 X1\n", true);
-        assert_eq!(with_calibration(&once, true), once);
+        let once = with_calibration("G28\nG1 X1\n", Firmware::Klipper);
+        assert_eq!(with_calibration(&once, Firmware::Klipper), once);
     }
 
     #[test]
     fn falls_back_to_start_of_file() {
-        assert!(with_calibration("G1 X1\n", true).starts_with("G28"));
+        assert!(with_calibration("G1 X1\n", Firmware::Klipper).starts_with("G28"));
     }
 
     #[test]
@@ -156,7 +164,7 @@ mod tests {
         let r = crate::slicer::slice(&tris, &s, 0.42, &|_| {});
         let f = &Filament::presets()[0];
         let g = crate::gcode::generate(&r, &Printer::presets()[0], f, &s).text;
-        let out = with_calibration(&g, true);
+        let out = with_calibration(&g, Firmware::Klipper);
         let cal = out.find("BED_MESH_CALIBRATE").unwrap();
         assert!(out.find("M190").unwrap() < cal);
         assert!(out.find("M109").unwrap() < cal);
@@ -166,8 +174,21 @@ mod tests {
 
     #[test]
     fn marlin_and_prusa_printers_get_g29() {
-        let out = with_calibration("M190 S60\nM109 S210\n", false);
+        let out = with_calibration("M190 S60\nM109 S210\n", Firmware::Marlin);
         assert!(out.contains("G29 ;") && !out.contains("BED_MESH"));
-        assert_eq!(with_calibration(&out, false), out);
+        assert_eq!(with_calibration(&out, Firmware::Marlin), out);
+    }
+
+    #[test]
+    fn repetier_printers_get_g32() {
+        let out = with_calibration("M190 S60\nM109 S210\n", Firmware::Repetier);
+        assert!(out.contains("G32 ;"), "{out}");
+        assert!(!out.contains("G29") && !out.contains("BED_MESH"));
+        // Repetier waits like Marlin: M109 S waits only while heating.
+        assert!(
+            out.ends_with("M109 S210\n") || out.contains("M109 S210"),
+            "{out}"
+        );
+        assert_eq!(with_calibration(&out, Firmware::Repetier), out);
     }
 }

@@ -8,9 +8,31 @@
 //!
 //! Klipper printers such as the Ender-3 V3 KE can't be driven this way: their USB socket
 //! leads to Klipper's own controller, not to a G-code host. Use the network instead.
+//!
+//! **Repetier-Firmware** (RepRap wiki "Repetier-Firmware" and the "Replies from the RepRap
+//! machine" part of the G-code page) speaks the same numbered, checksummed ASCII lines; it
+//! works out by itself whether a host uses ASCII or its binary protocol, so the ASCII
+//! lines here suit it. The app asks every USB printer for its name with M115 and, when it
+//! says Repetier:
+//! * announces the job on the printer's screen with `M530 S1 L<layers>` and
+//!   `M531 <name>`, reports progress with `M532 X<percent> L<layer>` on every 0.1 %
+//!   change or new layer, and ends with `M530 S0`;
+//! * asks for temperatures (M105) every few seconds while printing, instead of Marlin's
+//!   M155 automatic reports;
+//! * levels the plate with G32 when calibration is on (see calibration.rs).
+//!
+//! Replies understood from every firmware: `ok` (also `ok 12`), `Resend: 12`,
+//! `Resend: N12`, `rs 12` and `rs:12` (send line 12 again), `wait` (the printer's buffer is
+//! empty, so an `ok` was lost), `busy:` (still working), `start` (the board restarted, so
+//! a running print is lost), and `!!` / `Error:` / `fatal:` (shown to the person; `fatal:`
+//! ends the print, since the firmware has shut down).
 
 use super::link::{ContactLog, Worker};
-use super::{bed_gcode, fan_gcode, jog_gcode, nozzle_gcode, Command, JobState, PrinterStatus};
+use super::serial_log::SerialLog;
+use super::{
+    bed_gcode, fan_gcode, firmware_name, jog_gcode, nozzle_gcode, Command, Firmware, JobState,
+    PrinterStatus,
+};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
@@ -110,10 +132,26 @@ pub struct Streamer {
     resend_from: Option<usize>,
     /// Extra commands (unnumbered) to slip in between job lines, e.g. after Stop.
     urgent: Vec<String>,
+    /// What the printer said it runs (M115); Marlin until it says otherwise.
+    pub firmware: Firmware,
+    /// Repetier: the progress (in 0.1 %) and layer last shown on the printer's screen.
+    shown_progress: Option<(u32, u32)>,
+    /// Repetier: `M530 S0` (print ended) has been queued for this job.
+    end_announced: bool,
+}
+
+/// A job name the printer can show: no comment or checksum marks, one line, not too long.
+fn display_name(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .filter(|c| !matches!(c, ';' | '*' | '\n' | '\r'))
+        .take(40)
+        .collect();
+    clean.trim().to_string()
 }
 
 impl Streamer {
-    pub fn start(&mut self, gcode: &str) {
+    pub fn start(&mut self, gcode: &str, name: &str) {
         let (cmds, layers, total) = prepare(gcode);
         self.job = cmds;
         self.job_layers = layers;
@@ -123,10 +161,35 @@ impl Streamer {
         self.paused = false;
         self.resend_from = None;
         self.sent = vec![String::new()];
+        self.shown_progress = None;
+        self.end_announced = false;
         // Start numbering again at 1.
         self.urgent.push("M110 N0".into());
-        // Ask the firmware to report temperatures by itself every 2 s.
-        self.urgent.push("M155 S2".into());
+        if self.firmware == Firmware::Repetier {
+            // Repetier's print mode: its screen shows the job, its layers and progress.
+            self.urgent.push(format!("M530 S1 L{total}"));
+            let name = display_name(name);
+            if !name.is_empty() {
+                self.urgent.push(format!("M531 {name}"));
+            }
+        } else {
+            // Ask the firmware to report temperatures by itself every 2 s.
+            self.urgent.push("M155 S2".into());
+        }
+    }
+
+    /// Repetier: queue `M532` when the progress has moved on by 0.1 % or a new layer began.
+    fn report_progress(&mut self) {
+        if self.firmware != Firmware::Repetier || self.job.is_empty() {
+            return;
+        }
+        let tenths = (self.next * 1000 / self.job.len()) as u32;
+        let now = (tenths, self.layer());
+        if self.shown_progress != Some(now) {
+            self.shown_progress = Some(now);
+            self.urgent
+                .push(format!("M532 X{}.{} L{}", tenths / 10, tenths % 10, now.1));
+        }
     }
 
     /// Sends a command between job lines (temperatures, fan, speed, moves).
@@ -142,6 +205,10 @@ impl Streamer {
         // not replay motion lines after the print was stopped.
         self.resend_from = None;
         self.sent = vec![String::new()];
+        if self.firmware == Firmware::Repetier {
+            self.urgent.push("M530 S0".into());
+            self.end_announced = true;
+        }
         for c in ["M104 S0", "M140 S0", "M107", "M84"] {
             self.urgent.push(c.into());
         }
@@ -167,12 +234,24 @@ impl Streamer {
             && self.next >= self.job.len()
             && !self.waiting_ok
             && self.resend_from.is_none()
+            && self.urgent.is_empty()
+            && (self.firmware != Firmware::Repetier || self.end_announced)
     }
 
     /// The next line to write, if it's time to write one.
     pub fn next_out(&mut self, idle_poll_due: bool) -> Option<String> {
         if self.waiting_ok {
             return None;
+        }
+        // Repetier: the last line has been taken; leave print mode.
+        if self.printing
+            && self.firmware == Firmware::Repetier
+            && self.next >= self.job.len()
+            && self.resend_from.is_none()
+            && !self.end_announced
+        {
+            self.end_announced = true;
+            self.urgent.push("M530 S0".into());
         }
         if let Some(n) = self.resend_from {
             if n < self.sent.len() {
@@ -196,6 +275,7 @@ impl Streamer {
             let n = self.sent.len();
             self.sent.push(cmd.clone());
             self.waiting_ok = true;
+            self.report_progress();
             return Some(numbered(n as u64, &cmd));
         }
         if idle_poll_due {
@@ -209,17 +289,56 @@ impl Streamer {
     pub fn on_line(&mut self, line: &str) {
         let l = line.trim();
         let lower = l.to_ascii_lowercase();
-        if let Some(n) = lower
-            .strip_prefix("resend:")
-            .or_else(|| lower.strip_prefix("rs "))
-            .map(|r| r.trim().trim_start_matches('n'))
-            .and_then(|r| r.split_whitespace().next())
-            .and_then(|r| r.parse::<usize>().ok())
-        {
+        if let Some(n) = resend_line(&lower) {
             self.resend_from = Some(n);
         } else if lower.starts_with("ok") {
             self.waiting_ok = false;
+        } else if lower == "wait" {
+            // The printer's buffer is empty and it is waiting for us: an "ok" went
+            // missing. Carry on (a lost line is asked for again by number).
+            self.waiting_ok = false;
         }
+    }
+}
+
+/// The line number in `resend: 12`, `resend: n12`, `resend:n:12`, `rs 12` or `rs:12`.
+fn resend_line(lower: &str) -> Option<usize> {
+    let rest = lower
+        .strip_prefix("resend")
+        .or_else(|| lower.strip_prefix("rs "))
+        .or_else(|| lower.strip_prefix("rs:"))?;
+    let rest = rest.trim_start_matches([':', ' ', 'n', ':']);
+    rest.split(|c: char| !c.is_ascii_digit())
+        .next()
+        .and_then(|d| d.parse().ok())
+}
+
+/// What a line from the printer means for the session, beyond the protocol.
+#[derive(Debug, PartialEq)]
+enum Notice {
+    /// The firmware's name (M115).
+    Firmware(String),
+    /// The board restarted (`start`): a running print is lost.
+    Restarted,
+    /// A fatal error: the firmware has shut down.
+    Fatal,
+    /// An error worth showing.
+    Error,
+}
+
+fn notice(line: &str) -> Option<Notice> {
+    if let Some(name) = firmware_name(line) {
+        return Some(Notice::Firmware(name));
+    }
+    let lower = line.trim().to_ascii_lowercase();
+    if lower == "start" {
+        Some(Notice::Restarted)
+    } else if lower.starts_with("fatal:") {
+        Some(Notice::Fatal)
+    } else if lower.starts_with("error") || lower.starts_with("!!") {
+        Some(Notice::Error)
+    } else {
+        None
     }
 }
 
@@ -232,8 +351,17 @@ pub fn run(w: &Worker) {
             .open()
         {
             Ok(port) => {
-                w.update(|s| s.note(format!("Opened {} at {baud} baud.", w.host)));
-                session(w, port, &mut contact)
+                let mut log = SerialLog::open_default(&w.host, baud);
+                let where_ = log
+                    .as_ref()
+                    .map(|l| format!(" Recording what is said in {}.", l.path.display()))
+                    .unwrap_or_default();
+                w.update(|s| s.note(format!("Opened {} at {baud} baud.{where_}", w.host)));
+                let problem = session(w, port, &mut contact, &mut log);
+                if let (Some(log), Some(p)) = (&mut log, &problem) {
+                    log.note(&format!("Connection ended: {p}"));
+                }
+                problem
             }
             Err(e) => Some(format!("could not open {}: {e}", w.host)),
         };
@@ -254,9 +382,12 @@ fn session(
     w: &Worker,
     mut port: Box<dyn serialport::SerialPort>,
     contact: &mut ContactLog,
+    log: &mut Option<SerialLog>,
 ) -> Option<String> {
     let opened = Instant::now();
     let mut st = Streamer::default();
+    // Which firmware is this? (Repetier is driven a little differently.)
+    st.send_now("M115");
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 1024];
     let mut last_poll = Instant::now();
@@ -274,6 +405,9 @@ fn session(
             }
             // Best effort: send the "heaters off" lines before letting go.
             for c in ["M104 S0", "M140 S0", "M84"] {
+                if let Some(log) = log.as_mut() {
+                    log.sent(c);
+                }
                 let _ = port.write_all(format!("{c}\n").as_bytes());
             }
             return None;
@@ -281,7 +415,7 @@ fn session(
         while let Ok(cmd) = w.rx.try_recv() {
             match cmd {
                 Command::UploadAndPrint { name, gcode } => {
-                    st.start(&gcode);
+                    st.start(&gcode, &name);
                     started_at = Some(Instant::now());
                     file_name = Some(name.clone());
                     w.update(|s| {
@@ -353,6 +487,9 @@ fn session(
             let line: Vec<u8> = buf.drain(..=i).collect();
             let line = String::from_utf8_lossy(&line).trim().to_string();
             if !line.is_empty() {
+                if let Some(log) = log.as_mut() {
+                    log.received(&line);
+                }
                 st.on_line(&line);
                 lines.push(line);
             }
@@ -360,12 +497,54 @@ fn session(
         if !lines.is_empty() {
             // Connected once the firmware answers, not when the port opens.
             contact.reached(w);
+            let mut ended: Option<String> = None;
+            let notices: Vec<(String, Notice)> = lines
+                .iter()
+                .filter_map(|l| notice(l).map(|n| (l.clone(), n)))
+                .collect();
+            for (line, n) in &notices {
+                match n {
+                    Notice::Firmware(name) => st.firmware = Firmware::from_name(name),
+                    Notice::Restarted => {
+                        // Whatever line was in flight is gone with the restart.
+                        st.waiting_ok = false;
+                        if st.printing {
+                            st.stop();
+                            ended = Some("The printer restarted, so the print stopped.".into());
+                        }
+                    }
+                    Notice::Fatal if st.printing => {
+                        st.stop();
+                        ended = Some(format!("The printer stopped with an error: {line}"));
+                    }
+                    _ => {}
+                }
+            }
             w.update(|s| {
                 for line in &lines {
                     parse_temps(line, &mut s.status);
-                    if line.starts_with("Error") || line.starts_with("!!") {
-                        s.note(format!("Printer says: {line}"));
+                }
+                for (line, n) in &notices {
+                    match n {
+                        Notice::Firmware(name) => {
+                            if s.status.firmware.as_deref() != Some(name) {
+                                s.note(format!(
+                                    "The printer runs {name}. Using the {}.",
+                                    super::protocol_label(name)
+                                ));
+                            }
+                            s.status.firmware = Some(name.clone());
+                            if s.status.model.is_none() {
+                                s.status.model = Some(name.clone());
+                            }
+                        }
+                        Notice::Fatal | Notice::Error => s.note(format!("Printer says: {line}")),
+                        Notice::Restarted => {}
                     }
+                }
+                if let Some(why) = &ended {
+                    s.status.state = JobState::Stopped;
+                    s.note(why.clone());
                 }
             });
         }
@@ -379,9 +558,17 @@ fn session(
             last_heard = Instant::now();
         }
         let poll_due = !st.printing && last_poll.elapsed() > IDLE_POLL;
+        // Repetier doesn't report temperatures by itself (no M155): ask while printing.
+        if st.printing && st.firmware == Firmware::Repetier && last_poll.elapsed() > IDLE_POLL {
+            last_poll = Instant::now();
+            st.send_now("M105");
+        }
         if let Some(out) = st.next_out(poll_due) {
             if poll_due {
                 last_poll = Instant::now();
+            }
+            if let Some(log) = log.as_mut() {
+                log.sent(&out);
             }
             if let Err(e) = port.write_all(format!("{out}\n").as_bytes()) {
                 return Some(format!("sending failed: {e}"));
@@ -482,7 +669,7 @@ mod tests {
     #[test]
     fn streams_a_job_with_one_resend() {
         let mut st = Streamer::default();
-        st.start(";LAYER:0\nG1 X1\nG1 X2\n;LAYER:1\nG1 X3\nG1 X4\n");
+        st.start(";LAYER:0\nG1 X1\nG1 X2\n;LAYER:1\nG1 X3\nG1 X4\n", "job");
         let mut written = Vec::new();
         let mut asked_again = false;
         for _ in 0..50 {
@@ -512,7 +699,7 @@ mod tests {
     #[test]
     fn pause_holds_and_stop_cools_down() {
         let mut st = Streamer::default();
-        st.start("G1 X1\nG1 X2\n");
+        st.start("G1 X1\nG1 X2\n", "job");
         while st.next_out(false).is_some_and(|l| !l.starts_with('N')) {
             st.on_line("ok");
         }
@@ -531,7 +718,7 @@ mod tests {
     #[test]
     fn a_resend_around_stop_does_not_replay_the_job() {
         let mut st = Streamer::default();
-        st.start("G1 X1\nG1 X2\nG1 X3\n");
+        st.start("G1 X1\nG1 X2\nG1 X3\n", "job");
         let mut job_lines = 0;
         while let Some(l) = st.next_out(false) {
             st.on_line("ok");
@@ -550,5 +737,127 @@ mod tests {
         }
         assert!(after.iter().all(|l| !l.contains("G1")), "{after:?}");
         assert_eq!(after, vec!["M104 S0", "M140 S0", "M107", "M84"]);
+    }
+
+    /// Runs a whole job against a pretend printer that answers "ok" to every line.
+    fn run_job(st: &mut Streamer) -> Vec<String> {
+        let mut written = Vec::new();
+        for _ in 0..500 {
+            let Some(out) = st.next_out(false) else { break };
+            written.push(out);
+            st.on_line("ok");
+            if st.finished() {
+                break;
+            }
+        }
+        written
+    }
+
+    #[test]
+    fn repetier_shows_the_job_and_its_progress_on_the_printer() {
+        let mut st = Streamer {
+            firmware: Firmware::Repetier,
+            ..Streamer::default()
+        };
+        st.start(
+            ";LAYER:0\nG1 X1\nG1 X2\n;LAYER:1\nG1 X3\nG1 X4\n",
+            "cube; v2*.gcode",
+        );
+        let written = run_job(&mut st);
+        assert!(st.finished());
+        assert_eq!(
+            &written[..3],
+            ["M110 N0", "M530 S1 L2", "M531 cube v2.gcode"]
+        );
+        assert!(
+            !written.iter().any(|l| l.starts_with("M155")),
+            "{written:?}"
+        );
+        let progress: Vec<&String> = written.iter().filter(|l| l.starts_with("M532")).collect();
+        assert_eq!(
+            progress,
+            [
+                "M532 X25.0 L1",
+                "M532 X50.0 L1",
+                "M532 X75.0 L2",
+                "M532 X100.0 L2"
+            ]
+        );
+        // Print mode ends once, after the last job line.
+        assert_eq!(written.last().unwrap(), "M530 S0");
+        assert_eq!(written.iter().filter(|l| *l == "M530 S0").count(), 1);
+        let job: Vec<&String> = written.iter().filter(|l| l.starts_with('N')).collect();
+        assert_eq!(job.len(), 4);
+    }
+
+    #[test]
+    fn stopping_a_repetier_print_leaves_print_mode() {
+        let mut st = Streamer {
+            firmware: Firmware::Repetier,
+            ..Streamer::default()
+        };
+        st.start("G1 X1\nG1 X2\n", "a");
+        st.stop();
+        let mut after = Vec::new();
+        while let Some(l) = st.next_out(false) {
+            after.push(l);
+            st.on_line("ok");
+        }
+        assert_eq!(
+            after.iter().filter(|l| *l == "M530 S0").count(),
+            1,
+            "{after:?}"
+        );
+        assert!(after.ends_with(&["M104 S0", "M140 S0", "M107", "M84"].map(String::from)));
+    }
+
+    #[test]
+    fn understands_every_resend_form() {
+        for (reply, n) in [
+            ("resend: 12", 12),
+            ("resend: n12", 12),
+            ("resend:n:12", 12),
+            ("rs 12", 12),
+            ("rs:12", 12),
+            ("rs n12", 12),
+        ] {
+            assert_eq!(resend_line(reply), Some(n), "{reply}");
+        }
+        assert_eq!(resend_line("rsx"), None);
+        assert_eq!(resend_line("ok"), None);
+    }
+
+    #[test]
+    fn wait_means_the_ok_was_lost() {
+        let mut st = Streamer::default();
+        st.start("G1 X1\nG1 X2\n", "job");
+        assert!(st.next_out(false).is_some());
+        assert_eq!(st.next_out(false), None, "waits for ok");
+        st.on_line("wait");
+        assert!(st.next_out(false).is_some(), "carries on after `wait`");
+        // `busy:` keeps it waiting.
+        st.on_line("busy: processing");
+        assert_eq!(st.next_out(false), None);
+    }
+
+    #[test]
+    fn reads_firmware_names_and_other_notices() {
+        let repetier = "FIRMWARE_NAME:Repetier_1.0.3 COMPILED:Jan 1 2020 FIRMWARE_URL:https://github.com/repetier/Repetier-Firmware/ PROTOCOL_VERSION:1.0 MACHINE_TYPE:Mendel EXTRUDER_COUNT:1 REPETIER_PROTOCOL:3";
+        assert_eq!(
+            notice(repetier),
+            Some(Notice::Firmware("Repetier 1.0.3".into()))
+        );
+        assert_eq!(Firmware::from_name("Repetier 1.0.3"), Firmware::Repetier);
+        let marlin = "FIRMWARE_NAME:Marlin 2.1.2.1 (Jun 12 2024) SOURCE_CODE_URL:github.com/MarlinFirmware/Marlin PROTOCOL_VERSION:1.0";
+        assert_eq!(
+            notice(marlin),
+            Some(Notice::Firmware("Marlin 2.1.2.1 (Jun 12 2024)".into()))
+        );
+        assert_eq!(Firmware::from_name("Marlin 2.1.2.1"), Firmware::Marlin);
+        assert_eq!(notice("start"), Some(Notice::Restarted));
+        assert_eq!(notice("fatal: Heater decoupled"), Some(Notice::Fatal));
+        assert_eq!(notice("Error:Wrong checksum"), Some(Notice::Error));
+        assert_eq!(notice("!! Thermistor"), Some(Notice::Error));
+        assert_eq!(notice("ok T:20 B:20"), None);
     }
 }

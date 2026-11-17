@@ -40,6 +40,8 @@ pub struct StartOptions {
     pub tool: Option<String>,
     /// Show the File menu open (for checking pictures).
     pub file_menu: bool,
+    /// Open the enlarged camera once it shows a picture; maximised when true.
+    pub camera: Option<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -229,6 +231,9 @@ impl PrintCraftApp {
         if let Some(host) = start.connect {
             app.device.connect_to(host, &cc.egui_ctx);
             app.mode = Mode::Printer;
+        }
+        if let Some(maximised) = start.camera {
+            app.device.show_camera_when_ready(maximised);
         }
         app
     }

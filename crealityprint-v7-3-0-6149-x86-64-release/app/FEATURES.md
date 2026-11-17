@@ -96,9 +96,11 @@ a project file fall back to defaults, so older and newer files still open.
 |---|---|
 | Send to printer over the network | Yes: Creality network service and Moonraker/Klipper, plus **PrusaLink (new)** |
 | Find printers on the network | Yes (address scan; now also finds PrusaLink printers) |
+| Known printer with a new address | **Yes (new)**. Connecting to a known printer, or opening a project with one, checks the saved address first. If the printer isn't there, or a different printer is, the local network is searched for the printer by its kind and name. The app connects at the new address and updates the known list. |
 | Monitor progress, layers, time and temperatures; pause/resume/stop | Yes (Creality, Moonraker, PrusaLink, USB) |
 | Camera view | Yes for Creality/Klipper MJPEG cameras; Prusa cameras use the Prusa Connect cloud (not supported) |
-| USB printing (stream G-code over a cable) | **Yes (new)**: Marlin/Prusa firmware, line numbers, checksums, resend |
+| USB printing (stream G-code over a cable) | **Yes (new)**: Marlin/Prusa firmware, line numbers, checksums, resend. Every line sent and received is recorded in `usb-serial.log` in the settings folder's `logs` folder, for diagnosing a printer. |
+| Repetier-Firmware printers | **Yes (new)**, over USB. Found by its M115 name. The printer's screen gets print mode, the job name and progress (M530/M531/M532). Temperatures are polled while printing. Calibration uses G32. Its replies (`rs:`, `wait`, `fatal:`) are understood. The printer page shows a "Repetier-Firmware v1" or "v2" badge (from the M115 version). Repetier-Server (network) is not supported. |
 | Prusa Connect (cloud), OctoPrint, Duet, other hosts | Not yet |
 
 All new slicing values are listed in MECHANICS.md and mechanics.json. The connection

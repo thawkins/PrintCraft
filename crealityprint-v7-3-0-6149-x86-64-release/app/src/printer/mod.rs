@@ -17,12 +17,13 @@ pub mod digest;
 pub mod discovery;
 #[cfg(test)]
 #[path = "tests.rs"]
-mod end_to_end;
+pub(crate) mod end_to_end;
 pub mod known;
 pub mod layer_info;
 pub mod link;
 pub mod moonraker;
 pub mod prusalink;
+pub mod serial_log;
 pub mod usb;
 
 use std::sync::Arc;
@@ -169,6 +170,98 @@ pub struct PrinterStatus {
     pub speed_percent: Option<f32>,
     /// The printer's own "calibrate before printing" setting, when it reports one.
     pub printer_calibration: Option<bool>,
+    /// The firmware's own name, as a USB printer reports it to M115
+    /// (`FIRMWARE_NAME:Repetier_1.0.3`, `FIRMWARE_NAME:Marlin 2.1.2`).
+    pub firmware: Option<String>,
+}
+
+/// The firmware families whose G-code differs where it matters to the app.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Firmware {
+    /// Marlin, Prusa firmware and the many firmwares that follow them.
+    #[default]
+    Marlin,
+    Klipper,
+    /// Repetier-Firmware (RepRap wiki "Repetier-Firmware").
+    Repetier,
+}
+
+impl Firmware {
+    /// From the name a printer gives in its M115 report.
+    pub fn from_name(name: &str) -> Firmware {
+        let n = name.to_ascii_lowercase();
+        if n.contains("repetier") {
+            Self::Repetier
+        } else if n.contains("klipper") {
+            Self::Klipper
+        } else {
+            Self::Marlin
+        }
+    }
+
+    pub fn is_klipper(self) -> bool {
+        self == Self::Klipper
+    }
+
+    /// The command that measures the plate (bed levelling). Repetier-Firmware's is G32
+    /// ("Probe Z and calculate Z plane"); its G29 only measures the height.
+    pub fn level_command(self) -> &'static str {
+        match self {
+            Self::Klipper => "BED_MESH_CALIBRATE",
+            Self::Marlin => "G29",
+            Self::Repetier => "G32",
+        }
+    }
+}
+
+/// The firmware name in an M115 report line such as
+/// `FIRMWARE_NAME:Repetier_1.0.3 FIRMWARE_URL:https://... PROTOCOL_VERSION:1.0`, made
+/// readable ("Repetier 1.0.3").
+pub fn firmware_name(line: &str) -> Option<String> {
+    let rest = &line[line.find("FIRMWARE_NAME:")? + "FIRMWARE_NAME:".len()..];
+    // The name runs until the next KEY: field.
+    let end = rest
+        .match_indices(' ')
+        .map(|(i, _)| i)
+        .find(|&i| {
+            rest[i + 1..].split_whitespace().next().is_some_and(|w| {
+                w.contains(':') && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            })
+        })
+        .unwrap_or(rest.len());
+    let name = rest[..end].trim().replace('_', " ");
+    (!name.is_empty()).then_some(name)
+}
+
+/// The version number in a firmware name ("Repetier 1.0.3" → "1.0.3"): the first word
+/// that starts with a digit.
+fn version_in(name: &str) -> Option<&str> {
+    name.split_whitespace()
+        .find(|w| w.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// Which Repetier-Firmware line a printer runs, from its M115 name: 1 for the 1.x
+/// releases (and the 0.9x releases they grew from), 2 for the 2.x rewrite. None when the
+/// firmware isn't Repetier or gave no version.
+pub fn repetier_version(name: &str) -> Option<u32> {
+    if Firmware::from_name(name) != Firmware::Repetier {
+        return None;
+    }
+    let major: u32 = version_in(name)?.split('.').next()?.parse().ok()?;
+    Some(major.max(1))
+}
+
+/// How a USB printer is being driven, for the person to see: "Repetier-Firmware
+/// protocol, version 1 (1.0.3)" or "Marlin-style protocol (Marlin 2.1.2)".
+pub fn protocol_label(name: &str) -> String {
+    match Firmware::from_name(name) {
+        Firmware::Repetier => match (repetier_version(name), version_in(name)) {
+            (Some(v), Some(full)) => format!("Repetier-Firmware protocol, version {v} ({full})"),
+            _ => "Repetier-Firmware protocol, version not reported".into(),
+        },
+        Firmware::Klipper => format!("Klipper ({name})"),
+        Firmware::Marlin => format!("Marlin-style protocol ({name})"),
+    }
 }
 
 /// Things the app asks the printer to do.
@@ -427,5 +520,32 @@ mod tests {
         assert_eq!(fan_gcode(100.0), "M106 P0 S255");
         assert_eq!(fan_gcode(0.0), "M107");
         assert_eq!(url_encode("G91\nG1 X1"), "G91%0AG1%20X1");
+    }
+
+    #[test]
+    fn names_the_repetier_protocol_and_its_version() {
+        assert_eq!(
+            protocol_label("Repetier 1.0.3"),
+            "Repetier-Firmware protocol, version 1 (1.0.3)"
+        );
+        assert_eq!(
+            protocol_label("Repetier 2.0.0"),
+            "Repetier-Firmware protocol, version 2 (2.0.0)"
+        );
+        // 0.9x releases are the start of the version 1 line.
+        assert_eq!(
+            protocol_label("Repetier 0.92.9"),
+            "Repetier-Firmware protocol, version 1 (0.92.9)"
+        );
+        assert_eq!(
+            protocol_label("Repetier"),
+            "Repetier-Firmware protocol, version not reported"
+        );
+        assert_eq!(
+            protocol_label("Marlin 2.1.2.1 (Jun 12 2024)"),
+            "Marlin-style protocol (Marlin 2.1.2.1 (Jun 12 2024))"
+        );
+        assert_eq!(repetier_version("Repetier 2.0.0"), Some(2));
+        assert_eq!(repetier_version("Marlin 2.1.2"), None);
     }
 }

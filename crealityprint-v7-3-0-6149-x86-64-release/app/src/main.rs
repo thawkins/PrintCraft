@@ -42,9 +42,13 @@ Usage:
   printcraft [MODEL.stl ...]
   printcraft --preview MODEL.stl [...]      open the models and slice them straight away
   printcraft --connect ADDRESS                open the Device page and connect to a printer
+                                              (a serial port such as /dev/ttyUSB0 or COM3
+                                              connects over USB at 115200 baud)
   printcraft --device                         open on the Device page (known printers)
   printcraft --tool move|scale|rotate MODEL   start with this selection tool
   printcraft --file-menu                      open with the File menu showing
+  printcraft --connect ADDRESS --camera big|max
+                                              show the printer's camera enlarged or maximised
   printcraft --screenshot OUT.png [MODEL.stl ...]
   printcraft --slice MODEL.stl [MODEL.stl ...] --output OUT.gcode [options]
 
@@ -80,6 +84,7 @@ struct Args {
     device: bool,
     tool: Option<String>,
     file_menu: bool,
+    camera: Option<bool>,
     output: Option<PathBuf>,
     quality: Option<String>,
     filament: Option<String>,
@@ -118,6 +123,14 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--device" => a.device = true,
             "--tool" => a.tool = Some(value("--tool")?),
             "--file-menu" => a.file_menu = true,
+            "--camera" => {
+                let v = value("--camera")?;
+                a.camera = Some(match v.as_str() {
+                    "big" => false,
+                    "max" => true,
+                    _ => return Err(format!("--camera expects big or max, got \"{v}\"")),
+                });
+            }
             "-o" | "--output" => a.output = Some(PathBuf::from(value("--output")?)),
             "--quality" => a.quality = Some(value("--quality")?),
             "--filament" => a.filament = Some(value("--filament")?),
@@ -201,6 +214,7 @@ fn run_window(args: Args) -> ExitCode {
         device_page: args.device,
         tool: args.tool.clone(),
         file_menu: args.file_menu,
+        camera: args.camera,
     };
     match eframe::run_native(
         "PrintCraft",
