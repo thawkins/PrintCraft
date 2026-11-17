@@ -1,0 +1,91 @@
+# PrintCraft
+
+PrintCraft is a simpler desktop slicer for FDM 3D printers, written in Rust with
+[egui/eframe](https://github.com/emilk/egui). It turns STL, OBJ and 3MF models into
+G-code, shows a layer-by-layer preview, and sends the job to a printer over the network
+or a USB cable, then lets you watch and control the print.
+
+It is a clean-room project: it is built from written requirements and public protocol
+documentation only, not from any other slicer's code. It has no affiliation with any
+printer or slicer maker.
+
+## Features
+
+**Preparing models**
+- Import STL (binary and text), OBJ and 3MF. 3MF files from other slicers that keep each
+  object in its own part are supported.
+- Move, scale and rotate with on-screen handles; arrange, duplicate, lay flat, turn 90°.
+- Projects (`.printcraft`) save the plate, every setting and the printer in use. Passwords
+  are never saved.
+
+**Slicing**
+- Fine / Standard / Draft quality presets, plus layer height, walls, top and bottom
+  layers, infill density and speeds.
+- Infill patterns: lines, grid, triangles. Seam position: aligned, nearest, rear, random.
+- Supports (optionally only on the plate), skirt or brim, retraction, z-hop.
+- Ironing, fuzzy skin, a textured top surface and spiral vase mode.
+- Cooling slowdown for short layers and fan control.
+- Time, filament, weight and cost estimates, and a thumbnail picture in the G-code.
+
+**Printers**
+- Printer presets: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool), Creality
+  Ender-3 V3 KE, and four generic plate sizes.
+- Network printing to Creality's network service, Klipper (Moonraker) and PrusaLink.
+- USB printing to Marlin and Prusa firmware, with line numbers, checksums and resend.
+- Finds printers on the local network and remembers known ones.
+- Live status, temperatures, pause / resume / stop, camera view (Creality and Klipper
+  MJPEG cameras), and optional bed levelling before a print.
+
+[FEATURES.md](FEATURES.md) lists what is
+supported and what is not yet.
+
+## Building and running
+
+This folder holds the Rust project. You need a recent Rust toolchain; run these from
+here.
+
+```bash
+cargo run --release
+```
+
+Open models straight away by naming them:
+
+```bash
+cargo run --release -- model.stl other.3mf
+```
+
+Slice without opening a window:
+
+```bash
+cargo run --release -- --slice model.stl --output model.gcode --quality fine --filament petg
+```
+
+`printcraft --help` lists every option (printer preset, supports, brim, infill pattern,
+seam, ironing, vase mode, fuzzy skin and more).
+
+## Development
+
+```bash
+cargo test
+```
+
+```bash
+cargo fmt --check
+```
+
+```bash
+cargo clippy --all-targets
+```
+
+Further documentation:
+- [MECHANICS.md](MECHANICS.md): how slicing
+  works and every number it uses.
+- [PRINTER_LINK.md](PRINTER_LINK.md): how
+  each printer connection works.
+- [docs/REFACTOR_AUDIT.md](docs/REFACTOR_AUDIT.md):
+  the latest code audit and its open items.
+- [CHANGELOG.md](CHANGELOG.md): notable changes.
+
+## License
+
+MIT. See [LICENSE](../../LICENSE).
