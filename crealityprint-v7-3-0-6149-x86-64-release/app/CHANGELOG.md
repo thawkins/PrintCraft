@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-17
+
 ### Added
-- 18 more tests (139 in all), covering geometry, presets, saved printers, the slicing
-  pipeline, Klipper status, USB parsing, camera frames, the 3D view and base64.
+- Recent projects: the File menu lists the 5 projects opened or saved most recently,
+  greys out ones that were moved or deleted, and has "Clear recent projects".
+- Raft adhesion: 3 raft layers under the whole print, reaching 3 mm past it. Support
+  columns that reach the bed stand on their own small raft ("Raft under support" in
+  the Support section, on by default).
+- Drawn icons for the Move, Scale and Rotate tools.
+- More tests (146 in all), covering geometry, presets, saved printers, the slicing
+  pipeline, Klipper status, USB parsing, camera frames, the 3D view, base64, recent
+  projects and rafts.
 - Tests run with cargo-nextest (`cargo nextest run`), configured in
   `.config/nextest.toml`, with a `ci` profile that retries once and writes JUnit.
 - Opening a project saved by a newer PrintCraft warns that it may use features this
@@ -78,6 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value of the one before it; the Digest sign-in scheme is matched in any case.
 
 ### Security
+- The zip library used to read 3MF files is upgraded from 2.6 to 9.6, clearing six
+  RustSec advisories (RUSTSEC-2026-0367, -0368, -0369, -0429, -0545 and -0548).
+  PrintCraft only reads entries by name and was not known to be affected.
 - A long PrusaLink password is no longer sent in plain text as an API key on the first
   request. The key is only tried when the printer offers no Digest sign-in.
 
@@ -93,5 +105,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects (`.printcraft`) that save the plate, settings and printer.
 - Command-line slicing (`printcraft --slice`).
 
-[Unreleased]: https://github.com/thawkins/PrintCraft/compare/4a62057...HEAD
+[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/thawkins/PrintCraft/compare/4a62057...v0.0.2
 [0.0.1]: https://github.com/thawkins/PrintCraft/commit/4a62057

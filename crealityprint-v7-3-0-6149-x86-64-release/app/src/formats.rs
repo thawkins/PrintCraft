@@ -52,7 +52,11 @@ pub fn load_3mf(path: &Path) -> Result<Mesh, String> {
         .map_err(|_| "This 3MF file isn't a valid package.".to_string())?;
     // Every model part: slicers such as Bambu Studio and Orca keep each object's mesh in
     // its own part (3D/Objects/object_1.model) and point to it from the main model.
-    let names: Vec<String> = zip.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = zip
+        .file_names()
+        .map(|s| s.map(|s| s.to_string()))
+        .collect::<Result<_, _>>()
+        .map_err(|_| "This 3MF file isn't a valid package.".to_string())?;
     let mut parts: HashMap<String, String> = HashMap::new();
     for name in names
         .iter()

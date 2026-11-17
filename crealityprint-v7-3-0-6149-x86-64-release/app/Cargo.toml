@@ -1,6 +1,6 @@
 [package]
 name = "printcraft"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 description = "A simpler desktop slicer for 3D printers"
 
@@ -11,7 +11,7 @@ rfd = "0.15"
 serde_json = "1"
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
 ureq = { version = "2", default-features = false }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 md-5 = "0.10"
 serialport = { version = "4", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
