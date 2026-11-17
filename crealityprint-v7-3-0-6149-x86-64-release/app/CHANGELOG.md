@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-11-18
+
 ### Added
 
 - Printing to MakerBot / Sailfish printers over USB. The plate is translated to X3G and
@@ -73,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The README lists the new two-nozzle and retraction features and links makerbot.md,
+  BUILDSTATS.md and the AGENTS files. (76c848e)
 - Two-nozzle printers have a primary nozzle: a "Primary nozzle" setting in the printer
   editor, right (T0) by default, the firmware's tool 0. New parts, supports, the skirt and one-nozzle prints use
   it, and it has the main filament ("01"). The other nozzle is heated only when something
@@ -251,7 +255,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects (`.printcraft`) that save the plate, settings and printer.
 - Command-line slicing (`printcraft --slice`).
 
-[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/thawkins/PrintCraft/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/thawkins/PrintCraft/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/thawkins/PrintCraft/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/thawkins/PrintCraft/compare/4a62057...v0.0.2
