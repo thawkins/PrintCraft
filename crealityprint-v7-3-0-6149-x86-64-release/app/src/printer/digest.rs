@@ -18,7 +18,12 @@ fn hex_md5(s: &str) -> String {
 
 /// Reads a `WWW-Authenticate: Digest ...` header. None for other schemes.
 pub fn parse_challenge(header: &str) -> Option<Challenge> {
-    let rest = header.trim().strip_prefix("Digest")?.trim();
+    // Scheme names are case-insensitive (RFC 7235).
+    let header = header.trim();
+    let scheme = header
+        .get(..6)
+        .filter(|s| s.eq_ignore_ascii_case("digest"))?;
+    let rest = header[scheme.len()..].trim();
     let mut c = Challenge::default();
     let mut s = rest;
     while !s.is_empty() {

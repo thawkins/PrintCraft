@@ -6,7 +6,8 @@
 //! is added for them (see device_ui `levels_itself`).
 //!
 //! The step goes in once both the plate **and the nozzle** have reached the job's
-//! temperatures (after the nozzle wait), so the nozzle never cools down and heats up again
+//! temperatures (after whichever of the two waits comes later), so the plate is measured
+//! hot and the nozzle never cools down and heats up again
 //! around the measurement. Afterwards the job temperature is set again, waiting only if the
 //! nozzle has to heat back up (see heat.rs), in case the levelling routine changed it.
 
@@ -39,17 +40,14 @@ pub fn calibration_lines(klipper: bool, nozzle: Option<u32>) -> String {
     s
 }
 
-/// The print file with the calibration step added (once) after the nozzle-heat wait, or
-/// after the plate-heat wait, or after the first home move, or at the very start.
+/// The print file with the calibration step added (once) after the later of the nozzle-
+/// and plate-heat waits, or after the first home move, or at the very start.
 pub fn with_calibration(gcode: &str, klipper: bool) -> String {
-    let already = gcode.contains(KLIPPER_LEVEL)
-        || gcode.lines().any(|l| {
-            l.split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .starts_with(MARLIN_LEVEL)
-        });
+    // Only commands count: a comment mentioning the step does not mean it runs.
+    let already = gcode.lines().any(|l| {
+        let code = l.split(';').next().unwrap_or("").trim();
+        code.starts_with(MARLIN_LEVEL) || code.starts_with(KLIPPER_LEVEL)
+    });
     if already {
         return gcode.to_string();
     }
@@ -64,8 +62,14 @@ pub fn with_calibration(gcode: &str, klipper: bool) -> String {
         }
         None
     };
-    let at = after(&crate::heat::is_nozzle_wait)
-        .or_else(|| after(&crate::heat::is_bed_wait))
+    let heated = match (
+        after(&crate::heat::is_nozzle_wait),
+        after(&crate::heat::is_bed_wait),
+    ) {
+        (Some(nozzle), Some(bed)) => Some(nozzle.max(bed)),
+        (nozzle, bed) => nozzle.or(bed),
+    };
+    let at = heated
         .or_else(|| after(&|l: &str| l.trim_start().starts_with("G28")))
         .unwrap_or(0);
     let mut out = String::with_capacity(gcode.len() + lines.len() + 1);
@@ -81,6 +85,21 @@ pub fn with_calibration(gcode: &str, klipper: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waits_for_the_plate_too_when_it_heats_after_the_nozzle() {
+        let out = with_calibration("M109 S215\nM190 S60\nG1 X1\n", true);
+        let bed_wait = out.find("M190 S60").unwrap();
+        let cal = out.find(KLIPPER_LEVEL).unwrap();
+        assert!(cal > bed_wait, "{out}");
+    }
+
+    #[test]
+    fn a_comment_naming_the_step_does_not_count_as_calibrating() {
+        let g = "; BED_MESH_CALIBRATE disabled\nM190 S60\nM109 S210\nG1 X1\n";
+        let out = with_calibration(g, true);
+        assert_eq!(out.matches(KLIPPER_LEVEL).count(), 2, "{out}");
+    }
 
     #[test]
     fn calibrates_with_the_nozzle_already_at_job_temperature() {

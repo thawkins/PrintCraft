@@ -55,7 +55,7 @@ Slicing options:
   --supports                      add supports under overhangs
   --brim                          print a brim instead of a skirt
   --infill-pattern lines|grid|triangles
-  --seam nearest|rear|random
+  --seam aligned|nearest|rear|random
   --ironing                       smooth top surfaces with an ironing pass
   --vase                          spiral vase mode
   --fuzzy                         fuzzy skin on outer walls
@@ -91,7 +91,11 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
     let mut a = Args::default();
     let mut it = raw.peekable();
     while let Some(arg) = it.next() {
-        let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value"));
+        // The next word, unless it is another option ("--output --brim" is a mistake).
+        let mut value = |name: &str| {
+            it.next_if(|v| !v.starts_with("--"))
+                .ok_or_else(|| format!("{name} needs a value"))
+        };
         match arg.as_str() {
             "-h" | "--help" => return Ok(None),
             "-V" | "--version" => {
@@ -201,7 +205,7 @@ fn run_window(args: Args) -> ExitCode {
 fn slice_without_window(args: &Args) -> ExitCode {
     use profiles::{Adhesion, Filament, Printer, Quality};
     if args.models.is_empty() {
-        eprintln!("printcraft: --slice needs at least one STL file\n\n{USAGE}");
+        eprintln!("printcraft: --slice needs at least one model (STL, OBJ or 3MF)\n\n{USAGE}");
         return ExitCode::from(2);
     }
     let Some(output) = &args.output else {

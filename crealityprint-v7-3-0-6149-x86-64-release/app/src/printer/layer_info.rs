@@ -33,7 +33,10 @@ pub fn with_layer_info(gcode: &str) -> String {
                 out.push('\n');
             }
             if let Ok(i) = n.trim().parse::<usize>() {
-                out.push_str(&format!("SET_PRINT_STATS_INFO CURRENT_LAYER={}\n", i + 1));
+                out.push_str(&format!(
+                    "SET_PRINT_STATS_INFO CURRENT_LAYER={}\n",
+                    i.saturating_add(1)
+                ));
             }
         } else {
             out.push_str(line);

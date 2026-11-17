@@ -11,6 +11,8 @@
 
 /// Klipper waits until this close below the target (heaters hover around it).
 pub const WAIT_MARGIN_C: u32 = 1;
+/// Hotter than any hobby nozzle; a larger number in someone else's file is a typo.
+const MAX_PLAUSIBLE_C: f32 = 500.0;
 
 /// Set the nozzle target and wait while it heats up (not while it cools).
 pub fn wait_nozzle(t: u32, klipper: bool) -> String {
@@ -96,6 +98,7 @@ pub fn nozzle_target(gcode: &str) -> Option<u32> {
             rest.split_whitespace()
                 .find_map(|w| w.strip_prefix("MINIMUM="))
                 .and_then(|v| v.parse::<f32>().ok())
+                .filter(|v| (0.0..=MAX_PLAUSIBLE_C).contains(v))
                 .map(|v| v.round() as u32 + WAIT_MARGIN_C)
         })
         .or_else(|| codes().find_map(|c| s_value(c.strip_prefix("M104")?)))
@@ -116,6 +119,12 @@ pub fn is_bed_wait(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_absurd_wait_temperature_is_ignored_not_wrapped() {
+        let g = "TEMPERATURE_WAIT SENSOR=extruder MINIMUM=1e10\n";
+        assert_eq!(nozzle_target(g), None);
+    }
 
     #[test]
     fn klipper_waits_only_while_heating() {

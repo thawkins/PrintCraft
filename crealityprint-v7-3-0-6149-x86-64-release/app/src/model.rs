@@ -108,18 +108,27 @@ impl Mesh {
 
     fn parse_ascii_stl(data: &[u8]) -> Result<Mesh, String> {
         let text = String::from_utf8_lossy(data);
-        let mut verts = Vec::new();
+        // Corners are read loop by loop: a facet with a bad or missing corner is skipped
+        // whole, so it cannot shift the corners of every facet after it.
+        let mut triangles = Vec::new();
+        let mut corners: Vec<Option<Vec3>> = Vec::new();
         for line in text.lines() {
             let mut parts = line.split_whitespace();
-            if parts.next() == Some("vertex") {
-                let nums: Vec<f32> = parts.filter_map(|p| p.parse().ok()).collect();
-                if nums.len() == 3 {
-                    verts.push(Vec3::new(nums[0], nums[1], nums[2]));
+            match parts.next() {
+                Some("outer") => corners.clear(),
+                Some("vertex") => {
+                    let nums: Vec<f32> = parts.map_while(|p| p.parse().ok()).collect();
+                    corners.push((nums.len() == 3).then(|| Vec3::new(nums[0], nums[1], nums[2])));
                 }
+                Some("endloop") => {
+                    if let [Some(a), Some(b), Some(c)] = corners[..] {
+                        triangles.push([a, b, c]);
+                    }
+                    corners.clear();
+                }
+                _ => {}
             }
         }
-        // Every three vertices make a triangle (a trailing partial one is dropped).
-        let triangles = verts.as_chunks::<3>().0.to_vec();
         Ok(Mesh { triangles })
     }
 
@@ -312,10 +321,14 @@ impl PlacedObject {
         tris
     }
 
-    /// Turns the model so its largest flat face rests on the plate. Faces pointing the
-    /// same way (within about 1°) count together. Spin around the vertical is kept.
+    /// Turns the model so its largest flat face rests on the plate. Faces in the same
+    /// plane (pointing the same way within about 1°, at the same height within 0.1 mm)
+    /// count together; faces that merely point the same way, like the tops of steps, do
+    /// not. On a tie the face already pointing most downward wins, so the result never
+    /// depends on hash order. Spin around the vertical is kept.
     pub fn lay_flat(&mut self) {
-        let mut areas: std::collections::HashMap<(i32, i32, i32), (f32, Vec3)> = Default::default();
+        let mut areas: std::collections::HashMap<(i32, i32, i32, i64), (f32, Vec3)> =
+            Default::default();
         for t in &self.mesh.triangles {
             let c = (t[1] - t[0]).cross(t[2] - t[0]);
             let area = c.length() * 0.5;
@@ -327,15 +340,29 @@ impl PlacedObject {
                 (n.x * 60.0).round() as i32,
                 (n.y * 60.0).round() as i32,
                 (n.z * 60.0).round() as i32,
+                // The plane's distance from the origin along its normal.
+                (n.dot(t[0]) * 10.0).round() as i64,
             );
             let e = areas.entry(key).or_insert((0.0, Vec3::default()));
             e.0 += area;
             e.1 = e.1 + n * area;
         }
-        let Some((_, (_, sum))) = areas.into_iter().max_by(|a, b| a.1 .0.total_cmp(&b.1 .0)) else {
-            return;
-        };
-        let n = sum.normalized();
+        const SAME_AREA: f32 = 1.001;
+        let mut best: Option<(f32, Vec3)> = None;
+        let mut planes: Vec<_> = areas.into_iter().collect();
+        planes.sort_by_key(|(k, _)| *k);
+        for (_, (area, sum)) in planes {
+            let n = sum.normalized();
+            let better = match best {
+                None => true,
+                Some((a, _)) if area > a * SAME_AREA => true,
+                Some((a, m)) => area * SAME_AREA >= a && n.z < m.z,
+            };
+            if better {
+                best = Some((area, n));
+            }
+        }
+        let Some((_, n)) = best else { return };
         // Turn about X until the normal has no Y part, then about Y until it points down.
         let a = n.y.atan2(n.z);
         let r = (n.y * n.y + n.z * n.z).sqrt();
@@ -381,6 +408,29 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_ascii_stl_corner_drops_only_its_own_facet() {
+        let facet = |v: [&str; 3]| {
+            format!(
+                "facet normal 0 0 1\nouter loop\nvertex {}\nvertex {}\nvertex {}\nendloop\nendfacet\n",
+                v[0], v[1], v[2]
+            )
+        };
+        let stl = format!(
+            "solid t\n{}{}{}endsolid t\n",
+            facet(["0 0 0", "1 0 0", "0 1 0"]),
+            facet(["0 0 1", "1,5 0 1", "0 1 1"]),
+            facet(["0 0 2", "1 0 2", "0 1 2"])
+        );
+        let m = Mesh::parse_stl(stl.as_bytes()).unwrap();
+        assert_eq!(m.triangles.len(), 2);
+        assert!(
+            m.triangles[1].iter().all(|v| v.z == 2.0),
+            "{:?}",
+            m.triangles[1]
+        );
+    }
+
+    #[test]
     fn binary_stl_round_trips() {
         let cube = Mesh::cube(Vec3::new(10.0, 10.0, 10.0));
         let parsed = Mesh::parse_stl(&cube.to_binary_stl()).unwrap();
@@ -392,6 +442,62 @@ mod tests {
         let text = "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n";
         let m = Mesh::parse_stl(text.as_bytes()).unwrap();
         assert_eq!(m.triangles.len(), 1);
+    }
+
+    #[test]
+    fn lay_flat_settles_a_tie_the_same_way_every_time() {
+        // A 20 × 10 block with a 10 × 10 step on one half. Faces pointing up add up to the
+        // same area as those pointing down; the tie must not hang on hash order: the
+        // flat bottom, already facing down, stays down on every run.
+        let mut tris = Mesh::cube(Vec3::new(20.0, 10.0, 5.0)).triangles;
+        let step = Mesh::cube(Vec3::new(10.0, 10.0, 5.0));
+        let up = Vec3::new(-5.0, 0.0, 5.0);
+        tris.extend(step.triangles.iter().map(|t| t.map(|v| v + up)));
+        let area_on_plate = |o: &PlacedObject| -> f32 {
+            o.world_triangles()
+                .iter()
+                .filter(|t| t.iter().all(|v| v.z.abs() < 1e-3))
+                .map(|t| (t[1] - t[0]).cross(t[2] - t[0]).length() * 0.5)
+                .sum()
+        };
+        for _ in 0..8 {
+            let mut o = PlacedObject::new(
+                "step",
+                Mesh {
+                    triangles: tris.clone(),
+                },
+            );
+            o.lay_flat();
+            let on_plate = area_on_plate(&o);
+            assert!(
+                (on_plate - 200.0).abs() < 0.5,
+                "{on_plate} mm² on the plate"
+            );
+        }
+    }
+
+    #[test]
+    fn lay_flat_picks_the_one_flat_top_over_a_stepped_bottom() {
+        // Flat 20 × 10 top; the bottom is two 10 × 10 faces 2 mm apart. Only the top is
+        // one face of 200 mm², so the part is turned over onto it.
+        let mut tris: Vec<Triangle> = Vec::new();
+        let tall = Mesh::cube(Vec3::new(10.0, 10.0, 10.0));
+        let short = Mesh::cube(Vec3::new(10.0, 10.0, 8.0));
+        let (left, right) = (Vec3::new(-5.0, 0.0, 0.0), Vec3::new(5.0, 0.0, 2.0));
+        tris.extend(tall.triangles.iter().map(|t| t.map(|v| v + left)));
+        tris.extend(short.triangles.iter().map(|t| t.map(|v| v + right)));
+        let mut o = PlacedObject::new("stepped", Mesh { triangles: tris });
+        o.lay_flat();
+        let on_plate: f32 = o
+            .world_triangles()
+            .iter()
+            .filter(|t| t.iter().all(|v| v.z.abs() < 1e-3))
+            .map(|t| (t[1] - t[0]).cross(t[2] - t[0]).length() * 0.5)
+            .sum();
+        assert!(
+            (on_plate - 200.0).abs() < 0.5,
+            "{on_plate} mm² on the plate"
+        );
     }
 
     #[test]
