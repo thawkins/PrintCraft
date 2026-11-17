@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-11-18
+
 ### Fixed
 - X3G files, after a command-by-command comparison with GPX 2.6.8:
   * The part fan (`M106`/`M107`) now switches the board's "extra" output. Before, it
@@ -14,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * Heat waits no longer give up after 10 minutes and print cold.
   * Homing X and Y runs at the same speed as GPX.
   * A move far shorter than one step can no longer ask for a step rate above the axis's
-    limit. (uncommitted)
+    limit. (0f27131)
 
 ### Added
 - X3G export for MakerBot / Sailfish printers. The new "FlashForge Creator Pro
@@ -25,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bed's centre, heating and waits, homing, and progress on the printer's screen.
   * Steps per mm start from the Replicator 1 Dual family's values. Once the printer has
     been connected over USB, its own saved settings are used instead.
-  * Single nozzle for now. Not yet printed on a real printer. (uncommitted)
+  * Single nozzle for now. Not yet printed on a real printer. (6c6f163)
 - MakerBot-protocol (Sailfish) printers over USB, read-only. Under USB, choose the
   protocol "MakerBot / Sailfish" to connect to a FlashForge Creator Pro, early Creator
   Pro 2, Replicator or a clone. The app shows:
@@ -36,10 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It reads the machine's settings from its EEPROM (steps per mm, axis lengths, nozzle
   count, Ditto printing) and saves a copy as `sailfish-eeprom.bin`. Every packet goes
   into `usb-serial.log` in hex, with its meaning. Nothing that moves, heats or writes is
-  sent yet. Not yet confirmed on a real printer. (uncommitted)
+  sent yet. Not yet confirmed on a real printer. (91f4d92)
 - makerbot.md: the plan for X3G export, MakerBot/Sailfish printing, FlashForge printers
   and configurable dual extruders, with the protocol facts checked against the published
-  sources. (uncommitted)
+  sources. Dual-extruder printing itself is planned there, not yet built. (91f4d92)
+- BUILDSTATS.md: build times, disk use, line coverage per module and test totals from a
+  measured run. (2081fb6)
+- The ORBIT print-in-place planetary gear model (by albioli on Thingiverse, CC BY-NC-ND)
+  as a heavy test model in `assets/models`. (a9fc78f)
 
 ## [0.0.3] - 2026-11-18
 
@@ -172,7 +178,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects (`.printcraft`) that save the plate, settings and printer.
 - Command-line slicing (`printcraft --slice`).
 
-[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/thawkins/PrintCraft/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/thawkins/PrintCraft/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/thawkins/PrintCraft/compare/4a62057...v0.0.2
 [0.0.1]: https://github.com/thawkins/PrintCraft/commit/4a62057
