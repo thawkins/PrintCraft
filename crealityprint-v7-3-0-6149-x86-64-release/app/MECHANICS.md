@@ -172,8 +172,11 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   then drops back before un-retracting.
 * **Ironing.** 15 % of normal flow at 15 mm/s.
 * **Cooling slowdown.** Layer time = Σ(path length ÷ speed). If it is below the minimum
-  layer time, every printing speed on that layer is multiplied by (time ÷ minimum), but
-  never goes below 15 mm/s.
+  layer time, every printing speed on that layer is multiplied by (time ÷ minimum).
+* **Minimum printing speed.** No printing move goes slower than 15 mm/s
+  (`gcode.rs MIN_PRINT_SPEED`): not the cooling slowdown, and not a speed set in the
+  settings (the panel starts its speeds at 15 mm/s; a project file asking for less is
+  raised to 15). Ironing keeps its own 15 mm/s. Decided 2026-11-17.
 * **Spiral vase G-code.** In spiral layers there is no Z move at the layer start. Each
   outer-wall move carries Z rising from (layer top − layer height) to the layer top, in
   step with the distance printed.

@@ -7,7 +7,7 @@
 //!   and land in `/usr/data/printer_data/gcodes/`.
 //! * A heartbeat keeps the socket open.
 
-use super::link::Worker;
+use super::link::{ContactLog, Worker};
 use super::{
     fan_gcode, jog_gcode, json_number, multipart, Command, FoundPrinter, HistoryEntry, JobState,
     PrinterStatus, RemoteFile,
@@ -23,6 +23,8 @@ pub const GCODE_DIR: &str = "/usr/data/printer_data/gcodes/";
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(10);
 /// If nothing at all arrives for this long, the connection is treated as lost.
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+/// Wait between attempts to (re)connect.
+const RETRY_SECONDS: f32 = 3.0;
 
 #[cfg(test)]
 pub fn start_print_message(file: &str) -> String {
@@ -189,46 +191,52 @@ pub fn run(w: &Worker) {
     // A print start that could not be sent because the socket broke (typically after a
     // long upload); it goes out first on the next connection rather than being lost.
     let mut pending_start: Option<String> = None;
+    let mut contact = ContactLog::default();
     while !w.stopped() {
-        match open(&w.host) {
+        let problem = match open(&w.host) {
             Ok(mut ws) => {
-                w.update(|s| {
-                    s.connected = true;
-                    s.note("Connected.");
-                });
-                session(w, &mut ws, &mut pending_start);
+                contact.reached(w);
+                let ended = session(w, &mut ws, &mut pending_start);
                 let _ = ws.close(None);
+                ended
             }
-            Err(e) => w.update(|s| s.note(format!("Could not connect: {e}"))),
-        }
-        w.update(|s| s.connected = false);
-        if !w.stopped() {
-            w.update(|s| s.note("Connection lost. Reconnecting…"));
-            w.pause(3.0);
+            Err(e) => Some(e),
+        };
+        // No problem means we were asked to stop: nothing to report.
+        if let Some(problem) = problem {
+            contact.failed(w, &problem);
+            w.pause(RETRY_SECONDS);
         }
     }
+    w.update(|s| s.connected = false);
 }
 
-fn session(w: &Worker, ws: &mut WebSocket<TcpStream>, pending_start: &mut Option<String>) {
+/// Talks to the printer until asked to stop (None) or the connection fails (why).
+fn session(
+    w: &Worker,
+    ws: &mut WebSocket<TcpStream>,
+    pending_start: &mut Option<String>,
+) -> Option<String> {
+    const BROKEN: &str = "the connection broke";
     let mut last_beat = Instant::now() - HEARTBEAT_EVERY;
     let mut last_heard = Instant::now();
     if let Some(start) = pending_start.take() {
         if !send_start(w, ws, start, pending_start) {
-            return;
+            return Some(BROKEN.into());
         }
     }
     loop {
         if w.stopped() {
-            return;
+            return None;
         }
         if last_beat.elapsed() >= HEARTBEAT_EVERY {
             if ws.send(Message::text(heartbeat_message())).is_err() {
-                return;
+                return Some(BROKEN.into());
             }
             last_beat = Instant::now();
         }
         if last_heard.elapsed() > SILENCE_LIMIT {
-            return;
+            return Some("the printer stopped answering".into());
         }
         while let Ok(cmd) = w.rx.try_recv() {
             let began = Instant::now();
@@ -238,7 +246,7 @@ fn session(w: &Worker, ws: &mut WebSocket<TcpStream>, pending_start: &mut Option
                 Outgoing::Start(text) => send_start(w, ws, text, pending_start),
             };
             if !ok {
-                return;
+                return Some(BROKEN.into());
             }
             // An upload blocks this loop for as long as it takes; the printer was not
             // silent in that time, we just weren't listening.
@@ -272,7 +280,7 @@ fn session(w: &Worker, ws: &mut WebSocket<TcpStream>, pending_start: &mut Option
             }
             Ok(_) => last_heard = Instant::now(),
             Err(e) if would_block(&e) => {}
-            Err(_) => return,
+            Err(e) => return Some(e.to_string()),
         }
     }
 }

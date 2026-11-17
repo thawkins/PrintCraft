@@ -1,7 +1,7 @@
 //! Moonraker, Klipper's documented web API (port 7125). Many Ender-3 V3 KE owners
 //! install it; it is the best-documented way to talk to these printers.
 
-use super::link::Worker;
+use super::link::{ContactLog, Worker};
 use super::{
     bed_gcode, fan_gcode, jog_gcode, json_number, multipart, nozzle_gcode, url_encode, Command,
     FoundPrinter, HistoryEntry, JobState, PrinterStatus, RemoteFile,
@@ -191,7 +191,7 @@ pub fn upload_and_print(host: &str, name: &str, data: &[u8]) -> Result<(), Strin
 }
 
 pub fn run(w: &Worker) {
-    let mut was_connected = false;
+    let mut contact = ContactLog::default();
     while !w.stopped() {
         while let Ok(cmd) = w.rx.try_recv() {
             let result = match cmd {
@@ -229,24 +229,14 @@ pub fn run(w: &Worker) {
         }
         match get_json(&w.host, QUERY) {
             Ok(v) => {
-                if !was_connected {
-                    w.update(|s| s.note("Connected."));
-                }
-                was_connected = true;
+                contact.reached(w);
                 w.update(|s| {
-                    s.connected = true;
                     if let Some(st) = v.get("result").and_then(|r| r.get("status")) {
                         apply_status(&mut s.status, st);
                     }
                 });
             }
-            Err(e) => {
-                if was_connected {
-                    w.update(|s| s.note(format!("Lost contact: {e}")));
-                }
-                was_connected = false;
-                w.update(|s| s.connected = false);
-            }
+            Err(e) => contact.failed(w, &e),
         }
         w.pause(POLL_SECONDS);
     }

@@ -21,8 +21,10 @@ pub mod limits {
     pub const FUZZY_TOP_MM: RangeInclusive<f32> = 0.02..=0.3;
     pub const INFILL_PERCENT: RangeInclusive<f32> = 0.0..=100.0;
     pub const SUPPORT_ANGLE: RangeInclusive<f32> = 30.0..=80.0;
-    pub const PRINT_SPEED: RangeInclusive<f32> = 10.0..=500.0;
-    pub const FIRST_LAYER_SPEED: RangeInclusive<f32> = 5.0..=100.0;
+    // Printing never goes slower than gcode::MIN_PRINT_SPEED (15 mm/s), so the panel
+    // doesn't offer slower speeds that would have no effect.
+    pub const PRINT_SPEED: RangeInclusive<f32> = 15.0..=500.0;
+    pub const FIRST_LAYER_SPEED: RangeInclusive<f32> = 15.0..=100.0;
     pub const TRAVEL_SPEED: RangeInclusive<f32> = 20.0..=600.0;
     pub const MIN_LAYER_TIME: RangeInclusive<f32> = 0.0..=120.0;
     pub const Z_HOP: RangeInclusive<f32> = 0.0..=2.0;

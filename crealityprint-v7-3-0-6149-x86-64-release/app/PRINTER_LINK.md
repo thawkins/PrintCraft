@@ -260,6 +260,8 @@ has the same parts. The look is PrintCraft's own; nothing from the original prog
 itself was used.
 
 * **Printer tab:** `name_address` with a connection dot and a close (disconnect) button.
+  Disconnecting does not cancel an upload already in progress: the file finishes
+  sending and, for upload-and-print, the print still starts (decided 2026-11-17).
 * **Camera:** Refresh (reconnect the video) and Enlarge (a large window; clicking the
   picture also enlarges it).
 * **Current printing:**

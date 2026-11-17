@@ -6,7 +6,8 @@
 //! * the printer device it was connected to (address or USB port, never a password)
 //!
 //! The file is JSON. Missing or unknown values fall back to defaults, so files from
-//! older or newer versions still open.
+//! older or newer versions still open; a file from a newer version is flagged so the
+//! window can warn that it may use features this version doesn't support.
 
 use crate::codec::base64_decode;
 use crate::geometry::Vec3;
@@ -21,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 pub const EXTENSION: &str = "printcraft";
 const FORMAT: &str = "printcraft-project";
-const VERSION: u64 = 1;
+pub const VERSION: u64 = 1;
 
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -32,6 +33,21 @@ pub struct Project {
     pub objects: Vec<PlacedObject>,
     /// The printer device in use when the project was saved.
     pub device: Option<FoundPrinter>,
+}
+
+/// A project read from a file, with the format version it was written in.
+pub struct Opened {
+    pub project: Project,
+    /// The file's format version (`VERSION` when it doesn't say, as the first files didn't).
+    pub file_version: u64,
+}
+
+impl Opened {
+    /// Saved by a newer PrintCraft: it may hold settings this version can't read, which
+    /// are left out now and would be lost by saving it here.
+    pub fn is_from_newer_version(&self) -> bool {
+        self.file_version > VERSION
+    }
 }
 
 fn quality_name(q: Quality) -> &'static str {
@@ -114,12 +130,26 @@ pub fn to_json(p: &Project) -> String {
 }
 
 /// Reads a project. Values that are missing or of the wrong kind keep their defaults.
+/// The window uses `opened_from_json` / `open`; these two plain forms serve the tests.
+#[cfg(test)]
 pub fn from_json(text: &str) -> Result<Project, String> {
+    opened_from_json(text).map(|o| o.project)
+}
+
+/// Reads a project and the format version it was written in.
+pub fn opened_from_json(text: &str) -> Result<Opened, String> {
     let v: Value = serde_json::from_str(text)
         .map_err(|_| "This isn't a PrintCraft project file.".to_string())?;
     if v.get("format").and_then(|f| f.as_str()) != Some(FORMAT) {
         return Err("This isn't a PrintCraft project file.".into());
     }
+    Ok(Opened {
+        project: project_from(&v)?,
+        file_version: v.get("version").and_then(|x| x.as_u64()).unwrap_or(VERSION),
+    })
+}
+
+fn project_from(v: &Value) -> Result<Project, String> {
     let num = |o: &Value, k: &str, d: f32| {
         o.get(k)
             .and_then(|x| x.as_f64())
@@ -292,10 +322,16 @@ pub fn save(path: &Path, p: &Project) -> Result<(), String> {
         .map_err(|e| format!("Could not save the project: {e}"))
 }
 
+#[cfg(test)]
 pub fn load(path: &Path) -> Result<Project, String> {
+    open(path).map(|o| o.project)
+}
+
+/// Like `load`, keeping the file's format version (to warn about newer files).
+pub fn open(path: &Path) -> Result<Opened, String> {
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("Could not open the project: {e}"))?;
-    from_json(&text)
+    opened_from_json(&text)
 }
 
 pub fn is_project(path: &Path) -> bool {
@@ -498,6 +534,19 @@ mod tests {
         assert_eq!(
             p("/x/plate.PrintCraft"),
             PathBuf::from("/x/plate.PrintCraft")
+        );
+    }
+
+    #[test]
+    fn flags_a_file_from_a_newer_version() {
+        let open = |v: &str| {
+            opened_from_json(&format!(r#"{{"format":"printcraft-project"{v}}}"#)).unwrap()
+        };
+        assert!(open(&format!(r#","version":{}"#, VERSION + 1)).is_from_newer_version());
+        assert!(!open(&format!(r#","version":{VERSION}"#)).is_from_newer_version());
+        assert!(
+            !open("").is_from_newer_version(),
+            "the first files had no version"
         );
     }
 

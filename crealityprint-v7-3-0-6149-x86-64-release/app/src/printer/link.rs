@@ -53,6 +53,58 @@ pub struct Worker {
     pub wake: Wake,
 }
 
+/// Writes connection changes to the log the same way for every kind of printer:
+/// "Connected." when the printer answers, "Lost contact: …" when a working connection
+/// drops, and "Not connected: …" while it can't be reached or signed in to. Each problem is
+/// written once, not again on every retry.
+#[derive(Debug, Default)]
+pub struct ContactLog {
+    connected: bool,
+    last_problem: Option<String>,
+}
+
+impl ContactLog {
+    /// The printer answered. Marks the link connected.
+    pub fn reached(&mut self, w: &Worker) {
+        let note = self.reached_note();
+        w.update(|s| {
+            s.connected = true;
+            if let Some(n) = note {
+                s.note(n);
+            }
+        });
+    }
+
+    /// Contact failed or dropped because of `problem`. Marks the link disconnected.
+    pub fn failed(&mut self, w: &Worker, problem: &str) {
+        let note = self.failed_note(problem);
+        w.update(|s| {
+            s.connected = false;
+            if let Some(n) = note {
+                s.note(n);
+            }
+        });
+    }
+
+    fn reached_note(&mut self) -> Option<String> {
+        self.last_problem = None;
+        (!std::mem::replace(&mut self.connected, true)).then(|| "Connected.".to_string())
+    }
+
+    fn failed_note(&mut self, problem: &str) -> Option<String> {
+        let was_connected = std::mem::replace(&mut self.connected, false);
+        if !was_connected && self.last_problem.as_deref() == Some(problem) {
+            return None;
+        }
+        self.last_problem = Some(problem.to_string());
+        Some(if was_connected {
+            format!("Lost contact: {problem}")
+        } else {
+            format!("Not connected: {problem}")
+        })
+    }
+}
+
 impl Worker {
     pub fn stopped(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
@@ -206,6 +258,32 @@ pub fn detect_api(host: &str) -> Option<Api> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contact_changes_are_logged_once_each() {
+        let mut log = ContactLog::default();
+        assert_eq!(
+            log.failed_note("refused").as_deref(),
+            Some("Not connected: refused")
+        );
+        assert_eq!(
+            log.failed_note("refused"),
+            None,
+            "the same problem is not repeated"
+        );
+        assert_eq!(
+            log.failed_note("timed out").as_deref(),
+            Some("Not connected: timed out")
+        );
+        assert_eq!(log.reached_note().as_deref(), Some("Connected."));
+        assert_eq!(log.reached_note(), None);
+        assert_eq!(
+            log.failed_note("timed out").as_deref(),
+            Some("Lost contact: timed out")
+        );
+        assert_eq!(log.failed_note("timed out"), None);
+        assert_eq!(log.reached_note().as_deref(), Some("Connected."));
+    }
 
     #[test]
     fn connects_by_name_when_only_a_later_address_listens() {

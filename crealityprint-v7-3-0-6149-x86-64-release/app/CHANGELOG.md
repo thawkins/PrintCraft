@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opening a project saved by a newer PrintCraft warns that it may use features this
+  version doesn't support, and that saving it here drops them.
 - 3MF files in inches, centimetres, metres, feet or microns now load at the right size
   (the `unit` of the model was ignored before).
 - Setting ranges are defined once and shared by the settings panel and the project
@@ -16,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a dot.
 
 ### Changed
+- Every printer connection (Creality, Klipper, PrusaLink, USB) reports contact the same
+  way: "Connected.", "Lost contact: …" or "Not connected: …", each problem once instead
+  of on every retry.
+- Dialogs have 10 px more room between their edges and the text.
+- No printing move is slower than 15 mm/s, including speeds set in the settings; the
+  speed fields now start at 15 mm/s.
 - The window and the command-line slicer share one slicing pipeline, so the plate-fit
   check and line width can no longer differ between them.
 - The X and Y rotate rings now turn a model about the world axes they are drawn around,

@@ -9,7 +9,7 @@
 //! Klipper printers such as the Ender-3 V3 KE can't be driven this way: their USB socket
 //! leads to Klipper's own controller, not to a G-code host. Use the network instead.
 
-use super::link::Worker;
+use super::link::{ContactLog, Worker};
 use super::{bed_gcode, fan_gcode, jog_gcode, nozzle_gcode, Command, JobState, PrinterStatus};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
@@ -225,28 +225,36 @@ impl Streamer {
 
 pub fn run(w: &Worker) {
     let baud = w.printer.baud.unwrap_or(DEFAULT_BAUD);
+    let mut contact = ContactLog::default();
     while !w.stopped() {
-        match serialport::new(&w.host, baud)
+        let problem = match serialport::new(&w.host, baud)
             .timeout(Duration::from_millis(50))
             .open()
         {
             Ok(port) => {
                 w.update(|s| s.note(format!("Opened {} at {baud} baud.", w.host)));
-                session(w, port);
+                session(w, port, &mut contact)
             }
-            Err(e) => w.update(|s| s.note(format!("Could not open {}: {e}", w.host))),
-        }
-        w.update(|s| s.connected = false);
-        if !w.stopped() {
+            Err(e) => Some(format!("could not open {}: {e}", w.host)),
+        };
+        // No problem means we were asked to stop: nothing to report.
+        if let Some(problem) = problem {
+            contact.failed(w, &problem);
             w.pause(3.0);
         }
     }
+    w.update(|s| s.connected = false);
 }
 
 /// How often the job's progress is passed to the window while printing.
 const PROGRESS_REPORT_EVERY: Duration = Duration::from_millis(250);
 
-fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
+/// Streams to the printer until asked to stop (None) or the port fails (why).
+fn session(
+    w: &Worker,
+    mut port: Box<dyn serialport::SerialPort>,
+    contact: &mut ContactLog,
+) -> Option<String> {
     let opened = Instant::now();
     let mut st = Streamer::default();
     let mut buf: Vec<u8> = Vec::new();
@@ -268,7 +276,7 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
             for c in ["M104 S0", "M140 S0", "M84"] {
                 let _ = port.write_all(format!("{c}\n").as_bytes());
             }
-            return;
+            return None;
         }
         while let Ok(cmd) = w.rx.try_recv() {
             match cmd {
@@ -338,10 +346,7 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
             }
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(e) => {
-                w.update(|s| s.note(format!("USB connection lost: {e}")));
-                return;
-            }
+            Err(e) => return Some(e.to_string()),
         }
         let mut lines = Vec::new();
         while let Some(i) = buf.iter().position(|b| *b == b'\n') {
@@ -353,8 +358,9 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
             }
         }
         if !lines.is_empty() {
+            // Connected once the firmware answers, not when the port opens.
+            contact.reached(w);
             w.update(|s| {
-                s.connected = true;
                 for line in &lines {
                     parse_temps(line, &mut s.status);
                     if line.starts_with("Error") || line.starts_with("!!") {
@@ -377,9 +383,8 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
             if poll_due {
                 last_poll = Instant::now();
             }
-            if port.write_all(format!("{out}\n").as_bytes()).is_err() {
-                w.update(|s| s.note("USB connection lost while sending."));
-                return;
+            if let Err(e) = port.write_all(format!("{out}\n").as_bytes()) {
+                return Some(format!("sending failed: {e}"));
             }
         }
         if st.printing {
@@ -411,7 +416,6 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
         } else if !st.waiting_ok && !idle_reported {
             idle_reported = true;
             w.update(|s| {
-                s.connected = true;
                 if s.status.state == JobState::Unknown {
                     s.status.state = JobState::Idle;
                 }

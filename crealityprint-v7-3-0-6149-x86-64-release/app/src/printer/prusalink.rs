@@ -11,7 +11,7 @@
 //! * Upload and print: `PUT /api/v1/files/{storage}/{name}` with `Print-After-Upload: ?1`.
 
 use super::digest::{self, Challenge};
-use super::link::Worker;
+use super::link::{ContactLog, Worker};
 use super::{json_number, url_encode, Command, FoundPrinter, JobState, PrinterStatus, RemoteFile};
 use serde_json::Value;
 use std::time::Duration;
@@ -287,8 +287,7 @@ pub fn run(w: &Worker) {
         .or_else(|| Some((DEFAULT_USER.into(), String::new())));
     let mut client = Client::new(&w.host, login, 10);
     let mut last_id: Option<u64> = None;
-    let mut was_connected = false;
-    let mut last_error = String::new();
+    let mut contact = ContactLog::default();
     while !w.stopped() {
         while let Ok(cmd) = w.rx.try_recv() {
             let result = match cmd {
@@ -389,27 +388,15 @@ pub fn run(w: &Worker) {
                     Some((a, b)) => (Some(a), Some(b)),
                     None => (None, None),
                 };
-                if !was_connected {
-                    w.update(|s| s.note("Connected."));
-                }
-                was_connected = true;
-                last_error.clear();
+                contact.reached(w);
                 w.update(|s| {
-                    s.connected = true;
                     apply_status(&mut s.status, &v);
                     s.status.file = file;
                     s.status.file_path = file_path;
                 });
             }
             Ok(Reply::Empty) => {}
-            Err(e) => {
-                if e != last_error {
-                    w.update(|s| s.note(e.clone()));
-                    last_error = e;
-                }
-                was_connected = false;
-                w.update(|s| s.connected = false);
-            }
+            Err(e) => contact.failed(w, &e),
         }
         w.pause(POLL_SECONDS);
     }

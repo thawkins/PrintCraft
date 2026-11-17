@@ -32,3 +32,20 @@ pub fn row(ui: &mut Ui, label: &str, widget: impl egui::Widget) {
     ui.add(widget);
     ui.end_row();
 }
+
+/// Space added between a dialog's edge and its contents, on top of egui's own margin.
+const DIALOG_PADDING: i8 = 10;
+
+/// The frame for the app's dialogs (alerts and questions): egui's popup look with
+/// extra room around the text.
+pub fn dialog_frame(ctx: &egui::Context) -> egui::Frame {
+    let style = ctx.global_style();
+    let m = style.spacing.menu_margin;
+    let pad = |side: i8| side.saturating_add(DIALOG_PADDING);
+    egui::Frame::popup(&style).inner_margin(egui::Margin {
+        left: pad(m.left),
+        right: pad(m.right),
+        top: pad(m.top),
+        bottom: pad(m.bottom),
+    })
+}

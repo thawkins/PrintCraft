@@ -104,8 +104,8 @@ impl PrintCraftApp {
     }
 
     pub(super) fn open_project(&mut self, path: &Path) {
-        let p = match project::load(path) {
-            Ok(p) => p,
+        let opened = match project::open(path) {
+            Ok(o) => o,
             Err(e) => {
                 self.device.show_alert(
                     "Could not open the project",
@@ -114,10 +114,30 @@ impl PrintCraftApp {
                 return;
             }
         };
-        self.apply_project(p);
+        let newer = opened
+            .is_from_newer_version()
+            .then_some(opened.file_version);
+        self.apply_project(opened.project);
         self.project_path = Some(path.to_path_buf());
         self.saved_fingerprint = self.fingerprint();
         self.status = format!("Opened {}.", display_name(path));
+        if let Some(version) = newer {
+            self.status = format!(
+                "Opened {}: saved by a newer PrintCraft, some settings may be missing.",
+                display_name(path)
+            );
+            self.device.show_alert(
+                "Project from a newer PrintCraft",
+                format!(
+                    "{} was saved by a newer version of PrintCraft (project format {version}; \
+                     this version reads format {}).\n\nIt may use features this version \
+                     doesn't support. Those settings are left out, and saving the project \
+                     here will drop them.",
+                    display_name(path),
+                    project::VERSION
+                ),
+            );
+        }
         self.update_title();
     }
 
@@ -200,30 +220,32 @@ impl PrintCraftApp {
             return;
         };
         let mut answer: Option<u8> = None;
-        egui::Modal::new(egui::Id::new("unsaved_changes")).show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.heading("Save changes?");
-            ui.add_space(6.0);
-            ui.label("The plate or settings have changed since the project was last saved.");
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Save").color(Color32::WHITE))
-                            .fill(theme::ACCENT_DARK),
-                    )
-                    .clicked()
-                {
-                    answer = Some(0);
-                }
-                if ui.button("Don't save").clicked() {
-                    answer = Some(1);
-                }
-                if ui.button("Cancel").clicked() {
-                    answer = Some(2);
-                }
+        egui::Modal::new(egui::Id::new("unsaved_changes"))
+            .frame(crate::widgets::dialog_frame(ctx))
+            .show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.heading("Save changes?");
+                ui.add_space(6.0);
+                ui.label("The plate or settings have changed since the project was last saved.");
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Save").color(Color32::WHITE))
+                                .fill(theme::ACCENT_DARK),
+                        )
+                        .clicked()
+                    {
+                        answer = Some(0);
+                    }
+                    if ui.button("Don't save").clicked() {
+                        answer = Some(1);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        answer = Some(2);
+                    }
+                });
             });
-        });
         match answer {
             Some(0) => {
                 self.pending_project = None;

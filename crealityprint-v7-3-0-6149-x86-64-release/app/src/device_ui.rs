@@ -273,20 +273,22 @@ impl DevicePage {
             return;
         };
         let mut close = false;
-        egui::Modal::new(egui::Id::new("printcraft_alert")).show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.heading(title.as_str());
-            ui.add_space(6.0);
-            ui.label(body.as_str());
-            ui.add_space(10.0);
-            close = ui
-                .add(
-                    egui::Button::new(RichText::new("OK").color(Color32::WHITE))
-                        .fill(theme::ACCENT_DARK)
-                        .min_size(egui::vec2(80.0, 30.0)),
-                )
-                .clicked();
-        });
+        egui::Modal::new(egui::Id::new("printcraft_alert"))
+            .frame(crate::widgets::dialog_frame(ctx))
+            .show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.heading(title.as_str());
+                ui.add_space(6.0);
+                ui.label(body.as_str());
+                ui.add_space(10.0);
+                close = ui
+                    .add(
+                        egui::Button::new(RichText::new("OK").color(Color32::WHITE))
+                            .fill(theme::ACCENT_DARK)
+                            .min_size(egui::vec2(80.0, 30.0)),
+                    )
+                    .clicked();
+            });
         if close {
             self.alert = None;
         }
@@ -1577,31 +1579,33 @@ impl DevicePage {
         let printing = matches!(pending, Pending::Print(_));
         let self_levelling = levels_itself(self.api());
         let calibrate = &mut self.calibrate;
-        egui::Modal::new(egui::Id::new("printer_confirm")).show(ctx, |ui| {
-            ui.set_width(360.0);
-            ui.heading(title);
-            ui.add_space(6.0);
-            ui.label(body);
-            if printing {
+        egui::Modal::new(egui::Id::new("printer_confirm"))
+            .frame(crate::widgets::dialog_frame(ctx))
+            .show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.heading(title);
                 ui.add_space(6.0);
-                calibration_checkbox(ui, calibrate, self_levelling);
-            }
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(yes).color(Color32::WHITE))
-                            .fill(theme::ACCENT_DARK),
-                    )
-                    .clicked()
-                {
-                    answer = Some(true);
+                ui.label(body);
+                if printing {
+                    ui.add_space(6.0);
+                    calibration_checkbox(ui, calibrate, self_levelling);
                 }
-                if ui.button("Cancel").clicked() {
-                    answer = Some(false);
-                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(yes).color(Color32::WHITE))
+                                .fill(theme::ACCENT_DARK),
+                        )
+                        .clicked()
+                    {
+                        answer = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
         if let Some(yes) = answer {
             let pending = self.pending.take();
             if !yes || self.link.is_none() {
@@ -1623,38 +1627,41 @@ impl DevicePage {
         let mut answer = None;
         let self_levelling = levels_itself(self.api());
         let calibrate = &mut self.calibrate;
-        egui::Modal::new(egui::Id::new("print_again")).show(ctx, |ui| {
-            ui.set_width(360.0);
-            ui.heading("Print again?");
-            ui.add_space(6.0);
-            ui.label(format!(
-                "{name} has finished. Do you want to print it again?"
-            ));
-            ui.label(
-                RichText::new("Take the finished print off the plate first.").color(theme::WARNING),
-            );
-            ui.add_space(4.0);
-            calibration_checkbox(ui, calibrate, self_levelling);
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("Yes").color(Color32::WHITE))
-                            .fill(theme::ACCENT_DARK)
-                            .min_size(egui::vec2(80.0, 30.0)),
-                    )
-                    .clicked()
-                {
-                    answer = Some(true);
-                }
-                if ui
-                    .add(egui::Button::new("No").min_size(egui::vec2(80.0, 30.0)))
-                    .clicked()
-                {
-                    answer = Some(false);
-                }
+        egui::Modal::new(egui::Id::new("print_again"))
+            .frame(crate::widgets::dialog_frame(ctx))
+            .show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.heading("Print again?");
+                ui.add_space(6.0);
+                ui.label(format!(
+                    "{name} has finished. Do you want to print it again?"
+                ));
+                ui.label(
+                    RichText::new("Take the finished print off the plate first.")
+                        .color(theme::WARNING),
+                );
+                ui.add_space(4.0);
+                calibration_checkbox(ui, calibrate, self_levelling);
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new("Yes").color(Color32::WHITE))
+                                .fill(theme::ACCENT_DARK)
+                                .min_size(egui::vec2(80.0, 30.0)),
+                        )
+                        .clicked()
+                    {
+                        answer = Some(true);
+                    }
+                    if ui
+                        .add(egui::Button::new("No").min_size(egui::vec2(80.0, 30.0)))
+                        .clicked()
+                    {
+                        answer = Some(false);
+                    }
+                });
             });
-        });
         if let Some(yes) = answer {
             let again = self.again.take();
             if !yes {

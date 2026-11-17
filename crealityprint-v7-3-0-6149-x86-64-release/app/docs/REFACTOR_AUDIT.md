@@ -156,8 +156,10 @@ local `main`; nothing pushed.
 | 10 | Gizmo N8 | Done (`2760d85`) |
 | 11 | N2 rotate rings turn about world axes | Done (`06c573c`) |
 | — | `Plate` model out of `PrintCraftApp`; TZ-mutating test | Proposed: needs test edits enumerated |
-| — | Q1–Q3 | Blocked — decision |
-| — | Moonraker vs PrusaLink contact-error logging | Blocked — decision |
+| — | Q1 speed floor | Decided 2026-11-17: 15 mm/s floor for every printing speed (kept; documented, locked by a test, panel ranges start at 15) |
+| — | Q2 upload on disconnect | Decided 2026-11-17: an upload in progress is not cancelled (kept; documented in PRINTER_LINK.md) |
+| — | Q3 newer project files | Decided 2026-11-17: warn on open — Done |
+| — | Contact-error logging | Decided 2026-11-17: consistent — Done (`link::ContactLog`, all four connections) |
 
 ## Lessons for the next audit
 

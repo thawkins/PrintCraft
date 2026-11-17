@@ -20,8 +20,9 @@ const FUZZY_TOP_STEP_MM: f32 = 0.5;
 /// Ironing passes push out only this share of normal plastic, slowly.
 const IRONING_FLOW: f32 = 0.15;
 const IRONING_SPEED: f32 = 15.0;
-/// Cooling slowdown never goes below this speed (mm/s).
-const MIN_PRINT_SPEED: f32 = 15.0;
+/// No printing move is slower than this (mm/s): neither a speed set in the settings nor
+/// the cooling slowdown can go below it. Ironing has its own fixed speed.
+pub const MIN_PRINT_SPEED: f32 = 15.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Estimate {
@@ -1037,6 +1038,30 @@ mod tests {
         };
         let (_, out) = sliced_cube(&s);
         assert!(out.text.contains("; z-hop"));
+    }
+
+    #[test]
+    fn a_speed_set_below_the_minimum_prints_at_15_mm_s() {
+        let tris = PlacedObject::new("c", Mesh::cube(Vec3::new(20.0, 20.0, 2.0))).world_triangles();
+        let slow = PrintSettings {
+            print_speed: 10.0,
+            first_layer_speed: 5.0,
+            min_layer_time: 0.0,
+            ..PrintSettings::default()
+        };
+        let r = crate::slicer::slice(&tris, &slow, 0.42, &|_| {});
+        let out = generate(&r, &Printer::presets()[0], &Filament::presets()[0], &slow);
+        let feeds: Vec<f32> = out
+            .text
+            .lines()
+            .filter(|l| l.starts_with("G1 X"))
+            .filter_map(|l| l.rsplit_once(" F").and_then(|(_, f)| f.parse().ok()))
+            .collect();
+        assert!(!feeds.is_empty());
+        assert!(
+            feeds.iter().all(|f| *f >= MIN_PRINT_SPEED * 60.0),
+            "{feeds:?}"
+        );
     }
 
     #[test]
