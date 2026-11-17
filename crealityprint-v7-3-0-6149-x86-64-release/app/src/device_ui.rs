@@ -197,13 +197,13 @@ impl DevicePage {
     /// password, under the name and connection kind it reported.
     pub fn current_device(&self) -> Option<FoundPrinter> {
         let link = self.link.as_ref()?;
-        let s = link.state();
+        let (hostname, api) = link.with_state(|s| (s.status.hostname.clone(), s.api));
         let mut p = link.printer.clone();
         p.login = None;
-        if let Some(h) = s.status.hostname.filter(|h| !h.is_empty()) {
+        if let Some(h) = hostname.filter(|h| !h.is_empty()) {
             p.name = h;
         }
-        p.api = s.api.or(p.api);
+        p.api = api.or(p.api);
         Some(p)
     }
 
@@ -293,20 +293,24 @@ impl DevicePage {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.link.as_ref().is_some_and(|l| l.state().connected)
+        self.link
+            .as_ref()
+            .is_some_and(|l| l.with_state(|s| s.connected))
     }
 
     /// Short text for the status bar, e.g. "Printing 42 %".
     pub fn summary(&self) -> Option<String> {
         let link = self.link.as_ref()?;
-        let s = link.state();
-        if !s.connected {
-            return Some(format!("{}: not connected", link.printer.name));
-        }
-        Some(match (s.status.state, s.status.progress) {
-            (JobState::Printing, Some(p)) => format!("{}: printing {p:.0} %", link.printer.name),
-            (state, _) => format!("{}: {}", link.printer.name, state.label().to_lowercase()),
-        })
+        let name = &link.printer.name;
+        Some(link.with_state(|s| {
+            if !s.connected {
+                return format!("{name}: not connected");
+            }
+            match (s.status.state, s.status.progress) {
+                (JobState::Printing, Some(p)) => format!("{name}: printing {p:.0} %"),
+                (state, _) => format!("{name}: {}", state.label().to_lowercase()),
+            }
+        }))
     }
 
     /// Asks the person to confirm before anything is sent to the printer.
@@ -372,7 +376,7 @@ impl DevicePage {
 
     fn api(&self) -> Option<Api> {
         let link = self.link.as_ref()?;
-        link.state().api.or(link.printer.api)
+        link.with_state(|s| s.api).or(link.printer.api)
     }
 
     /// Sends a sliced plate, adding calibration and layer information as the printer needs.
@@ -849,23 +853,24 @@ impl DevicePage {
 
     fn update_camera_texture(&mut self, ctx: &egui::Context) {
         let Some(cam) = &self.camera else { return };
-        let latest = cam
-            .frame
-            .lock()
-            .ok()
-            .and_then(|f| f.as_ref().map(|(n, img)| (*n, img.clone())));
+        // Only a new picture is copied out and converted (the camera may be idle).
+        let seen = self.camera_frame;
+        let latest = cam.frame.lock().ok().and_then(|f| {
+            f.as_ref().filter(|(n, _)| *n != seen).map(|(n, rgba)| {
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                (
+                    *n,
+                    egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+                )
+            })
+        });
         if let Some((n, img)) = latest {
-            if n != self.camera_frame {
-                self.camera_frame = n;
-                match &mut self.camera_texture {
-                    Some(t) => t.set(img, egui::TextureOptions::LINEAR),
-                    None => {
-                        self.camera_texture = Some(ctx.load_texture(
-                            "printer-camera",
-                            img,
-                            egui::TextureOptions::LINEAR,
-                        ))
-                    }
+            self.camera_frame = n;
+            match &mut self.camera_texture {
+                Some(t) => t.set(img, egui::TextureOptions::LINEAR),
+                None => {
+                    self.camera_texture =
+                        Some(ctx.load_texture("printer-camera", img, egui::TextureOptions::LINEAR))
                 }
             }
         }

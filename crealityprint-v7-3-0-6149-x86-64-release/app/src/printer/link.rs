@@ -65,6 +65,25 @@ impl Worker {
         (self.wake)();
     }
 
+    /// Uploads a file that the printer starts printing as soon as it has it, showing
+    /// "Sending…" meanwhile and noting the outcome when it worked (the caller reports a
+    /// failure the way it reports any refused command).
+    pub fn sending(
+        &self,
+        name: &str,
+        upload: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.update(|s| s.busy = Some(format!("Sending {name} to the printer…")));
+        let sent = upload();
+        self.update(|s| {
+            s.busy = None;
+            if sent.is_ok() {
+                s.note(format!("Sent {name}. The print is starting."));
+            }
+        });
+        sent
+    }
+
     /// Waits up to `secs`, returning early when asked to stop.
     pub fn pause(&self, secs: f32) {
         let steps = (secs * 10.0) as u32;
@@ -126,8 +145,18 @@ impl PrinterLink {
         }
     }
 
+    /// A copy of everything known about the printer (log, files and history included).
     pub fn state(&self) -> LinkState {
-        self.shared.lock().map(|s| s.clone()).unwrap_or_default()
+        self.with_state(LinkState::clone)
+    }
+
+    /// Reads the state in place, without copying it: for small questions asked often,
+    /// such as "connected?" from every frame.
+    pub fn with_state<R>(&self, read: impl FnOnce(&LinkState) -> R) -> R {
+        match self.shared.lock() {
+            Ok(s) => read(&s),
+            Err(_) => read(&LinkState::default()),
+        }
     }
 
     pub fn send(&self, cmd: Command) {

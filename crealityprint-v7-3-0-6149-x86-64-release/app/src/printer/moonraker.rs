@@ -3,8 +3,8 @@
 
 use super::link::Worker;
 use super::{
-    fan_gcode, jog_gcode, json_number, multipart, url_encode, Command, FoundPrinter, HistoryEntry,
-    JobState, PrinterStatus, RemoteFile,
+    bed_gcode, fan_gcode, jog_gcode, json_number, multipart, nozzle_gcode, url_encode, Command,
+    FoundPrinter, HistoryEntry, JobState, PrinterStatus, RemoteFile,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -77,10 +77,7 @@ fn list_history(host: &str) -> Result<Vec<HistoryEntry>, String> {
 }
 
 fn agent(timeout_s: u64) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(3))
-        .timeout(Duration::from_secs(timeout_s))
-        .build()
+    super::http_agent(Duration::from_secs(3), Duration::from_secs(timeout_s))
 }
 
 fn get_json(host: &str, path: &str) -> Result<Value, String> {
@@ -199,15 +196,7 @@ pub fn run(w: &Worker) {
         while let Ok(cmd) = w.rx.try_recv() {
             let result = match cmd {
                 Command::UploadAndPrint { name, gcode } => {
-                    w.update(|s| s.busy = Some(format!("Sending {name} to the printer…")));
-                    let r = upload_and_print(&w.host, &name, gcode.as_bytes());
-                    w.update(|s| {
-                        s.busy = None;
-                        if r.is_ok() {
-                            s.note(format!("Sent {name}. The print is starting."));
-                        }
-                    });
-                    r
+                    w.sending(&name, || upload_and_print(&w.host, &name, gcode.as_bytes()))
                 }
                 Command::PrintFile(path) => post(
                     &w.host,
@@ -216,8 +205,8 @@ pub fn run(w: &Worker) {
                 Command::Pause => post(&w.host, "/printer/print/pause"),
                 Command::Resume => post(&w.host, "/printer/print/resume"),
                 Command::Stop => post(&w.host, "/printer/print/cancel"),
-                Command::SetNozzle(t) => gcode(&w.host, &format!("M104 S{:.0}", t)),
-                Command::SetBed(t) => gcode(&w.host, &format!("M140 S{:.0}", t)),
+                Command::SetNozzle(t) => gcode(&w.host, &nozzle_gcode(t)),
+                Command::SetBed(t) => gcode(&w.host, &bed_gcode(t)),
                 Command::SetFan(p) => gcode(&w.host, &fan_gcode(p)),
                 Command::SetSpeed(p) => gcode(&w.host, &format!("M220 S{p}")),
                 Command::Jog { axis, mm } => gcode(&w.host, &jog_gcode(axis, mm).join("\n")),

@@ -51,6 +51,29 @@ impl Api {
     }
 }
 
+impl Api {
+    /// The name saved in files (projects, the known-printers list).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::CrealityLan => "creality",
+            Self::Moonraker => "moonraker",
+            Self::PrusaLink => "prusalink",
+            Self::Usb => "usb",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Api> {
+        [
+            Self::CrealityLan,
+            Self::Moonraker,
+            Self::PrusaLink,
+            Self::Usb,
+        ]
+        .into_iter()
+        .find(|a| a.key() == key)
+    }
+}
+
 /// A printer found on the network or a USB port (or typed in by hand, `api` still unknown).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FoundPrinter {
@@ -63,6 +86,32 @@ pub struct FoundPrinter {
     pub login: Option<(String, String)>,
     /// USB speed in baud.
     pub baud: Option<u32>,
+}
+
+impl FoundPrinter {
+    /// The printer as saved in a file. The password is never written.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "host": self.host,
+            "name": self.name,
+            "model": self.model,
+            "api": self.api.map(Api::key),
+            "baud": self.baud,
+        })
+    }
+
+    /// A saved printer; None without a host. A missing name or model reads as empty.
+    pub fn from_json(v: &serde_json::Value) -> Option<FoundPrinter> {
+        let text = |k: &str| v.get(k).and_then(|x| x.as_str());
+        Some(FoundPrinter {
+            host: text("host")?.to_string(),
+            name: text("name").unwrap_or_default().to_string(),
+            model: text("model").unwrap_or_default().to_string(),
+            api: text("api").and_then(Api::from_key),
+            login: None,
+            baud: v.get("baud").and_then(|b| b.as_u64()).map(|b| b as u32),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -209,6 +258,24 @@ impl Api {
 pub fn jog_gcode(axis: char, mm: f32) -> Vec<String> {
     let feed = if axis == 'Z' { JOG_FEED_Z } else { JOG_FEED_XY };
     vec!["G91".into(), format!("G1 {axis}{mm} F{feed}"), "G90".into()]
+}
+
+/// G-code to set the nozzle temperature (no waiting).
+pub fn nozzle_gcode(celsius: f32) -> String {
+    format!("M104 S{celsius:.0}")
+}
+
+/// G-code to set the plate temperature (no waiting).
+pub fn bed_gcode(celsius: f32) -> String {
+    format!("M140 S{celsius:.0}")
+}
+
+/// A plain-HTTP client with a time limit to connect and one for the whole request.
+pub fn http_agent(connect: std::time::Duration, total: std::time::Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(connect)
+        .timeout(total)
+        .build()
 }
 
 /// G-code to set the model fan (0-100 %). `P0` picks the model fan on Creality firmware;

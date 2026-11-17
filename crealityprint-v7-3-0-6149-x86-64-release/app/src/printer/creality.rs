@@ -177,11 +177,7 @@ pub fn identify(host: &str) -> Option<FoundPrinter> {
 
 pub fn upload(host: &str, name: &str, data: &[u8]) -> Result<(), String> {
     let (content_type, body) = multipart(&[("file", Some(name), data)]);
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout(Duration::from_secs(300))
-        .build();
-    agent
+    super::http_agent(Duration::from_secs(5), Duration::from_secs(300))
         .post(&format!("http://{host}/upload/{name}"))
         .set("Content-Type", &content_type)
         .send_bytes(&body)

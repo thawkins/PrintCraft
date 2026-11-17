@@ -10,7 +10,7 @@
 //! leads to Klipper's own controller, not to a G-code host. Use the network instead.
 
 use super::link::Worker;
-use super::{fan_gcode, jog_gcode, Command, JobState, PrinterStatus};
+use super::{bed_gcode, fan_gcode, jog_gcode, nozzle_gcode, Command, JobState, PrinterStatus};
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
@@ -243,6 +243,9 @@ pub fn run(w: &Worker) {
     }
 }
 
+/// How often the job's progress is passed to the window while printing.
+const PROGRESS_REPORT_EVERY: Duration = Duration::from_millis(250);
+
 fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
     let opened = Instant::now();
     let mut st = Streamer::default();
@@ -252,6 +255,10 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
     let mut last_heard = Instant::now();
     let mut started_at: Option<Instant> = None;
     let mut file_name: Option<String> = None;
+    // Each update wakes the window, so progress is reported a few times a second rather
+    // than after every line, and "connected and idle" only once.
+    let mut last_progress_report = Instant::now() - PROGRESS_REPORT_EVERY;
+    let mut idle_reported = false;
     loop {
         if w.stopped() {
             if st.printing {
@@ -294,11 +301,11 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
                     });
                 }
                 Command::SetNozzle(t) => {
-                    st.send_now(&format!("M104 S{t:.0}"));
+                    st.send_now(&nozzle_gcode(t));
                     w.update(|s| s.status.nozzle_target = Some(t));
                 }
                 Command::SetBed(t) => {
-                    st.send_now(&format!("M140 S{t:.0}"));
+                    st.send_now(&bed_gcode(t));
                     w.update(|s| s.status.bed_target = Some(t));
                 }
                 Command::SetFan(p) => {
@@ -336,18 +343,23 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
                 return;
             }
         }
+        let mut lines = Vec::new();
         while let Some(i) = buf.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = buf.drain(..=i).collect();
             let line = String::from_utf8_lossy(&line).trim().to_string();
-            if line.is_empty() {
-                continue;
+            if !line.is_empty() {
+                st.on_line(&line);
+                lines.push(line);
             }
-            st.on_line(&line);
+        }
+        if !lines.is_empty() {
             w.update(|s| {
                 s.connected = true;
-                parse_temps(&line, &mut s.status);
-                if line.starts_with("Error") || line.starts_with("!!") {
-                    s.note(format!("Printer says: {line}"));
+                for line in &lines {
+                    parse_temps(line, &mut s.status);
+                    if line.starts_with("Error") || line.starts_with("!!") {
+                        s.note(format!("Printer says: {line}"));
+                    }
                 }
             });
         }
@@ -377,7 +389,10 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
             let done = st.finished();
             if done {
                 st.printing = false;
+            } else if last_progress_report.elapsed() < PROGRESS_REPORT_EVERY {
+                continue;
             }
+            last_progress_report = Instant::now();
             w.update(|s| {
                 s.status.progress = Some(progress);
                 s.status.layer = Some(layer);
@@ -393,7 +408,8 @@ fn session(w: &Worker, mut port: Box<dyn serialport::SerialPort>) {
                     ));
                 }
             });
-        } else if !st.waiting_ok {
+        } else if !st.waiting_ok && !idle_reported {
+            idle_reported = true;
             w.update(|s| {
                 s.connected = true;
                 if s.status.state == JobState::Unknown {

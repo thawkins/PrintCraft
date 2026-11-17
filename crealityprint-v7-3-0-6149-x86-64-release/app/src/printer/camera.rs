@@ -3,7 +3,7 @@
 //! addresses in turn and keep the newest picture.
 
 use super::Wake;
-use eframe::egui::ColorImage;
+use image::RgbaImage;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,7 +29,8 @@ pub enum CameraState {
 pub struct CameraFeed {
     pub state: Arc<Mutex<CameraState>>,
     /// Frame number and picture.
-    pub frame: Arc<Mutex<Option<(u64, ColorImage)>>>,
+    /// The latest picture, numbered so the window only uploads a new one.
+    pub frame: Arc<Mutex<Option<(u64, RgbaImage)>>>,
     stop: Arc<AtomicBool>,
 }
 
@@ -118,7 +119,7 @@ fn open_stream(host: &str, port: u16, path: &str) -> Result<(TcpStream, Vec<u8>)
 fn read_frames(
     mut s: TcpStream,
     mut buf: Vec<u8>,
-    frame: &Mutex<Option<(u64, ColorImage)>>,
+    frame: &Mutex<Option<(u64, RgbaImage)>>,
     stop: &AtomicBool,
     wake: &Wake,
 ) {
@@ -127,14 +128,9 @@ fn read_frames(
     while !stop.load(Ordering::Relaxed) {
         while let Some(jpeg) = take_jpeg(&mut buf) {
             if let Ok(img) = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg) {
-                let rgba = img.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
                 count += 1;
                 if let Ok(mut f) = frame.lock() {
-                    *f = Some((
-                        count,
-                        ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
-                    ));
+                    *f = Some((count, img.to_rgba8()));
                 }
                 wake();
             }

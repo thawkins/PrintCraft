@@ -11,7 +11,6 @@
 use crate::codec::base64_decode;
 use crate::geometry::Vec3;
 use crate::model::{Mesh, PlacedObject, Triangle};
-use crate::printer::known::{api_from, api_name};
 use crate::printer::FoundPrinter;
 use crate::profiles::{
     limits, Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
@@ -109,13 +108,7 @@ pub fn to_json(p: &Project) -> String {
             "min_layer_time": s.min_layer_time,
         },
         "objects": objects,
-        "device": p.device.as_ref().map(|d| json!({
-            "host": d.host,
-            "name": d.name,
-            "model": d.model,
-            "api": d.api.map(api_name),
-            "baud": d.baud,
-        })),
+        "device": p.device.as_ref().map(FoundPrinter::to_json),
     });
     serde_json::to_string_pretty(&v).unwrap_or_default()
 }
@@ -275,16 +268,13 @@ pub fn from_json(text: &str) -> Result<Project, String> {
         objects.push(obj);
     }
 
-    let device = v.get("device").filter(|d| !d.is_null()).and_then(|d| {
-        let host = text_of(d, "host")?;
-        Some(FoundPrinter {
-            name: text_of(d, "name").unwrap_or_else(|| format!("Printer at {host}")),
-            model: text_of(d, "model").unwrap_or_default(),
-            api: text_of(d, "api").as_deref().and_then(api_from),
-            baud: d.get("baud").and_then(|b| b.as_u64()).map(|b| b as u32),
-            login: None,
-            host,
-        })
+    let device = v.get("device").and_then(|d| {
+        let mut p = FoundPrinter::from_json(d)?;
+        // A project names its printer even when the file did not.
+        if text_of(d, "name").is_none() {
+            p.name = format!("Printer at {}", p.host);
+        }
+        Some(p)
     });
 
     Ok(Project {

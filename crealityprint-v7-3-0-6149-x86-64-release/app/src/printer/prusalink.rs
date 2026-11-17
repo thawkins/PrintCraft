@@ -46,10 +46,7 @@ impl Client {
             challenge: None,
             nc: 0,
             api_key: false,
-            agent: ureq::AgentBuilder::new()
-                .timeout_connect(Duration::from_secs(4))
-                .timeout(Duration::from_secs(timeout_s))
-                .build(),
+            agent: super::http_agent(Duration::from_secs(4), Duration::from_secs(timeout_s)),
         }
     }
 
@@ -150,10 +147,7 @@ fn looks_like_api_key(pass: &str) -> bool {
 /// Does this address look like a PrusaLink printer? A PrusaLink answers /api/version,
 /// or refuses it with its own sign-in realm.
 pub fn identify(host: &str) -> Option<FoundPrinter> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(800))
-        .timeout(Duration::from_secs(3))
-        .build();
+    let agent = super::http_agent(Duration::from_millis(800), Duration::from_secs(3));
     let found = |name: String| FoundPrinter {
         host: host.to_string(),
         name,
@@ -298,14 +292,12 @@ pub fn run(w: &Worker) {
     while !w.stopped() {
         while let Ok(cmd) = w.rx.try_recv() {
             let result = match cmd {
-                Command::UploadAndPrint { name, gcode } => {
-                    w.update(|s| s.busy = Some(format!("Sending {name} to the printer…")));
+                Command::UploadAndPrint { name, gcode } => w.sending(&name, || {
                     let store = storage(&mut client);
-                    let path = format!("/api/v1/files/{store}/{name}");
-                    let r = client
+                    client
                         .call_within(
                             "PUT",
-                            &path,
+                            &format!("/api/v1/files/{store}/{name}"),
                             &[
                                 ("Content-Type", "text/x.gcode"),
                                 ("Print-After-Upload", "?1"),
@@ -314,15 +306,8 @@ pub fn run(w: &Worker) {
                             Some(gcode.as_bytes()),
                             Some(UPLOAD_TIMEOUT),
                         )
-                        .map(|_| ());
-                    w.update(|s| {
-                        s.busy = None;
-                        if r.is_ok() {
-                            s.note(format!("Sent {name}. The print is starting."));
-                        }
-                    });
-                    r
-                }
+                        .map(|_| ())
+                }),
                 Command::PrintFile(path) => {
                     let path = if path.starts_with('/') {
                         path

@@ -4,7 +4,10 @@
 //! macOS `~/Library/Application Support/printcraft/…`, Windows `%APPDATA%\printcraft\…`.
 //! PrusaLink passwords are never stored.
 
-use super::{Api, FoundPrinter};
+use super::FoundPrinter;
+// The tests below name `Api` through `use super::*`.
+#[cfg(test)]
+use super::Api;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -21,25 +24,6 @@ pub struct KnownPrinters {
     /// Shows the saved list but never changes the file (used while taking screenshots).
     read_only: bool,
     pub list: Vec<KnownPrinter>,
-}
-
-pub(crate) fn api_name(api: Api) -> &'static str {
-    match api {
-        Api::CrealityLan => "creality",
-        Api::Moonraker => "moonraker",
-        Api::PrusaLink => "prusalink",
-        Api::Usb => "usb",
-    }
-}
-
-pub(crate) fn api_from(name: &str) -> Option<Api> {
-    match name {
-        "creality" => Some(Api::CrealityLan),
-        "moonraker" => Some(Api::Moonraker),
-        "prusalink" => Some(Api::PrusaLink),
-        "usb" => Some(Api::Usb),
-        _ => None,
-    }
 }
 
 impl KnownPrinters {
@@ -140,20 +124,9 @@ fn parse(v: &Value) -> Vec<KnownPrinter> {
             items
                 .iter()
                 .filter_map(|i| {
-                    let s = |k: &str| i.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let host = s("host");
-                    if host.is_empty() {
-                        return None;
-                    }
+                    let printer = FoundPrinter::from_json(i).filter(|p| !p.host.is_empty())?;
                     Some(KnownPrinter {
-                        printer: FoundPrinter {
-                            host,
-                            name: s("name"),
-                            model: s("model"),
-                            api: api_from(&s("api")),
-                            login: None,
-                            baud: i.get("baud").and_then(|b| b.as_u64()).map(|b| b as u32),
-                        },
+                        printer,
                         last_seen: i.get("last_seen").and_then(|t| t.as_i64()).unwrap_or(0),
                     })
                 })
@@ -166,14 +139,9 @@ fn to_json(list: &[KnownPrinter]) -> String {
     let printers: Vec<Value> = list
         .iter()
         .map(|k| {
-            json!({
-                "host": k.printer.host,
-                "name": k.printer.name,
-                "model": k.printer.model,
-                "api": k.printer.api.map(api_name),
-                "baud": k.printer.baud,
-                "last_seen": k.last_seen,
-            })
+            let mut v = k.printer.to_json();
+            v["last_seen"] = json!(k.last_seen);
+            v
         })
         .collect();
     serde_json::to_string_pretty(&json!({"version": 1, "printers": printers})).unwrap_or_default()
