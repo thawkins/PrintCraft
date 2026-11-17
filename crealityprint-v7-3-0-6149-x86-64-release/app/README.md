@@ -16,13 +16,13 @@ printer or slicer maker.
   object in its own part are supported.
 - Move, scale and rotate with on-screen handles; arrange, duplicate, lay flat, turn 90°.
 - Projects (`.printcraft`) save the plate, every setting and the printer in use. Passwords
-  are never saved.
+  are never saved. The File menu lists the 5 most recent projects.
 
 **Slicing**
 - Fine / Standard / Draft quality presets, plus layer height, walls, top and bottom
   layers, infill density and speeds.
 - Infill patterns: lines, grid, triangles. Seam position: aligned, nearest, rear, random.
-- Supports (optionally only on the plate), skirt or brim, retraction, z-hop.
+- Supports (optionally only on the plate), skirt, brim or raft, retraction, z-hop.
 - Ironing, fuzzy skin, a textured top surface and spiral vase mode.
 - Cooling slowdown for short layers and fan control.
 - Time, filament, weight and cost estimates, and a thumbnail picture in the G-code.
@@ -31,8 +31,12 @@ printer or slicer maker.
 - Printer presets: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool), Creality
   Ender-3 V3 KE, and four generic plate sizes.
 - Network printing to Creality's network service, Klipper (Moonraker) and PrusaLink.
-- USB printing to Marlin and Prusa firmware, with line numbers, checksums and resend.
-- Finds printers on the local network and remembers known ones.
+- USB printing to Marlin, Prusa and Repetier firmware, with line numbers, checksums and
+  resend. The printer page shows which protocol is in use ("Repetier-Firmware v1" or
+  "v2", or "Marlin-style protocol"), and every line sent and received is recorded in
+  `usb-serial.log` in the settings folder's `logs` folder, for diagnosing a printer.
+- Finds printers on the local network and remembers known ones, and finds a known
+  printer again when it has moved to a new address.
 - Live status, temperatures, pause / resume / stop, camera view (Creality and Klipper
   MJPEG cameras), and optional bed levelling before a print.
 
@@ -52,6 +56,16 @@ Open models straight away by naming them:
 
 ```bash
 cargo run --release -- model.stl other.3mf
+```
+
+Connect straight away to a network printer or a USB port:
+
+```bash
+cargo run --release -- --connect 192.168.1.50
+```
+
+```bash
+cargo run --release -- --connect /dev/ttyUSB0
 ```
 
 Slice without opening a window:
