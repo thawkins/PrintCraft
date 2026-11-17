@@ -1,0 +1,324 @@
+{
+  "id": "ev_5868ee377eed1b0927ac58f0a3154d6d8e3d45e74031a4e9323db56e35393b0e",
+  "subject": {
+    "kind": "website",
+    "name": "https://reprap.org/wiki/Repetier-Firmware"
+  },
+  "operation": "web_site_capture",
+  "params": {
+    "include_html": true,
+    "max_height": 12000,
+    "noise_pass": false,
+    "visitor_view": false,
+    "widths": [
+      1440
+    ]
+  },
+  "result": {
+    "counts": {
+      "forms": 1,
+      "headings": 12,
+      "images": 4,
+      "links": 83,
+      "outline": 127
+    },
+    "design": {
+      "backgrounds": [
+        {
+          "count": 6,
+          "value": "#ffffff"
+        },
+        {
+          "count": 5,
+          "value": "#f3f3f3"
+        },
+        {
+          "count": 1,
+          "value": "#f6f6f6"
+        },
+        {
+          "count": 1,
+          "value": "#eeeeee"
+        },
+        {
+          "count": 1,
+          "value": "#009200"
+        },
+        {
+          "count": 1,
+          "value": "#f8f9fa"
+        }
+      ],
+      "css_variables": {},
+      "font_faces": [],
+      "font_sizes": [
+        {
+          "count": 66,
+          "value": "14px"
+        },
+        {
+          "count": 29,
+          "value": "11.9px"
+        },
+        {
+          "count": 25,
+          "value": "12px"
+        },
+        {
+          "count": 6,
+          "value": "11.2px"
+        },
+        {
+          "count": 5,
+          "value": "12.8px"
+        },
+        {
+          "count": 1,
+          "value": "28.8px"
+        },
+        {
+          "count": 1,
+          "value": "14.7px"
+        },
+        {
+          "count": 1,
+          "value": "18.2px"
+        },
+        {
+          "count": 1,
+          "value": "24px"
+        },
+        {
+          "count": 1,
+          "value": "20.48px"
+        }
+      ],
+      "font_weights": [
+        {
+          "count": 121,
+          "value": "400"
+        },
+        {
+          "count": 15,
+          "value": "700"
+        }
+      ],
+      "fonts": [
+        {
+          "count": 135,
+          "value": "sans-serif"
+        },
+        {
+          "count": 1,
+          "value": "\"Linux Libertine\", Georgia, Times, serif"
+        }
+      ],
+      "max_widths": [
+        {
+          "count": 1,
+          "value": "320px"
+        }
+      ],
+      "radii": [
+        {
+          "count": 1,
+          "value": "15px"
+        },
+        {
+          "count": 1,
+          "value": "0px 0px 10px 10px"
+        }
+      ],
+      "shadows": [],
+      "spacing": [
+        {
+          "count": 67,
+          "value": "1px"
+        },
+        {
+          "count": 48,
+          "value": "3px"
+        },
+        {
+          "count": 31,
+          "value": "1.4px"
+        },
+        {
+          "count": 18,
+          "value": "7px"
+        },
+        {
+          "count": 14,
+          "value": "5.6px"
+        },
+        {
+          "count": 12,
+          "value": "5px"
+        },
+        {
+          "count": 11,
+          "value": "6.4px"
+        },
+        {
+          "count": 8,
+          "value": "4px"
+        },
+        {
+          "count": 6,
+          "value": "1.75px"
+        },
+        {
+          "count": 6,
+          "value": "16px"
+        },
+        {
+          "count": 5,
+          "value": "20px"
+        },
+        {
+          "count": 4,
+          "value": "5.88px"
+        },
+        {
+          "count": 4,
+          "value": "6px"
+        },
+        {
+          "count": 4,
+          "value": "4.8px"
+        },
+        {
+          "count": 3,
+          "value": "24px"
+        },
+        {
+          "count": 3,
+          "value": "10px"
+        },
+        {
+          "count": 3,
+          "value": "13px"
+        },
+        {
+          "count": 3,
+          "value": "2.6px"
+        },
+        {
+          "count": 2,
+          "value": "11.9px"
+        },
+        {
+          "count": 2,
+          "value": "5.95px"
+        },
+        {
+          "count": 2,
+          "value": "4.2px"
+        },
+        {
+          "count": 2,
+          "value": "40px"
+        },
+        {
+          "count": 1,
+          "value": "-80px"
+        },
+        {
+          "count": 1,
+          "value": "-1px"
+        }
+      ],
+      "text_colors": [
+        {
+          "count": 43,
+          "value": "#0645ad"
+        },
+        {
+          "count": 41,
+          "value": "#222222"
+        },
+        {
+          "count": 28,
+          "value": "#ba0000"
+        },
+        {
+          "count": 13,
+          "value": "#000000"
+        },
+        {
+          "count": 3,
+          "value": "#3366bb"
+        },
+        {
+          "count": 3,
+          "value": "#444444"
+        },
+        {
+          "count": 2,
+          "value": "#ffffff"
+        },
+        {
+          "count": 2,
+          "value": "#333333"
+        },
+        {
+          "count": 1,
+          "value": "#a55858"
+        }
+      ]
+    },
+    "files": [
+      "README.md",
+      "capture.json"
+    ],
+    "html_bytes": 28363,
+    "output_directory": "/home/thawkins/Projects/PrintCraft/crealityprint-v7-3-0-6149-x86-64-release/app/shots/repetier_wiki",
+    "screenshots": [
+      {
+        "css_width": 1440,
+        "cut": false,
+        "file": "screenshot-1440.png",
+        "height": 1420,
+        "sha256": "5628092e8c4c047da2290add21189a999a26c46ad97716f696c624746c523e23",
+        "width": 1440
+      }
+    ],
+    "title": "Repetier-Firmware - RepRap",
+    "url": "https://reprap.org/wiki/Repetier-Firmware"
+  },
+  "summary": "Captured https://reprap.org/wiki/Repetier-Firmware: 1 screenshot(s), 127 outline items, 12 headings, 4 images, 83 links, 1 forms → /home/thawkins/Projects/PrintCraft/crealityprint-v7-3-0-6149-x86-64-release/app/shots/repetier_wiki.",
+  "confidence": "observed",
+  "authority": "our-run",
+  "environment": {
+    "clean_room": false,
+    "engine": "cdp",
+    "engine_version": "1.3",
+    "host": "linux-x86_64"
+  },
+  "limitations": [
+    {
+      "code": "one_state",
+      "message": "One state of the page: menus, dialogs and content behind interactions are not opened."
+    },
+    {
+      "code": "cross_origin_css",
+      "message": "CSS custom properties and breakpoints from cross-origin stylesheets can't be read."
+    }
+  ],
+  "coverage": {
+    "status": "complete",
+    "examined": 1,
+    "total": 1
+  },
+  "locations": [
+    {
+      "kind": "url",
+      "value": "https://reprap.org/wiki/Repetier-Firmware"
+    },
+    {
+      "kind": "path",
+      "value": "/home/thawkins/Projects/PrintCraft/crealityprint-v7-3-0-6149-x86-64-release/app/shots/repetier_wiki"
+    }
+  ],
+  "links": []
+}

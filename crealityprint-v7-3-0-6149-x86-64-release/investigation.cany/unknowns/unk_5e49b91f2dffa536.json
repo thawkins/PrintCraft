@@ -1,0 +1,16 @@
+{
+  "id": "unk_5e49b91f2dffa536",
+  "revision": 1,
+  "question": "On a real printer running Repetier-Firmware over USB: does it answer \"ok\" after a resend, does its screen show the M531 name and M532 progress, and does G32 suit its probe setup?",
+  "severity": "medium",
+  "domain": "printer-link",
+  "status": "open",
+  "probes": [
+    "Connect a Repetier printer by USB, send a sliced cube with calibration on, and watch its screen and the Device page notes"
+  ],
+  "evidence_for": [
+    "ev_35f2714353a499d9a06cf939041e9192f3b0ab4ec4a477d77e6484e7af5692d1",
+    "ev_adf578cde4ecdea725bd4c5738790faf5c0e65bd89d927207213aef332811bd5"
+  ],
+  "evidence_against": []
+}

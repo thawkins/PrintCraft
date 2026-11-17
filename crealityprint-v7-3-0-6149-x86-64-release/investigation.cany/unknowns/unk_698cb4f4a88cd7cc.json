@@ -1,0 +1,15 @@
+{
+  "id": "unk_698cb4f4a88cd7cc",
+  "revision": 2,
+  "question": "What exact default values (layer height, speeds, temperatures, infill, bed sizes) and slicing rules does the original use?",
+  "severity": "medium",
+  "domain": "mechanics",
+  "status": "blocked",
+  "probes": [
+    "The person supplies screenshots or exported profile files into reference/",
+    "The person lifts the clean-room rule in AGENTS.md so the program can be studied"
+  ],
+  "evidence_for": [],
+  "evidence_against": [],
+  "resolution": "Blocked by the project's clean-room rule (AGENTS.md forbids reading the AppImage). Used common 3D-printing defaults instead; every value is marked estimated in app/MECHANICS.md and app/mechanics.json."
+}

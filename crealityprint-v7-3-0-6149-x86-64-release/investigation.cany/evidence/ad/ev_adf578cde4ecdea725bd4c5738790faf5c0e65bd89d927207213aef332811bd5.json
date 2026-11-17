@@ -1,0 +1,303 @@
+{
+  "id": "ev_adf578cde4ecdea725bd4c5738790faf5c0e65bd89d927207213aef332811bd5",
+  "subject": {
+    "kind": "website",
+    "name": "https://reprap.org/wiki/G-code"
+  },
+  "operation": "web_site_capture",
+  "params": {
+    "include_html": true,
+    "max_height": 600,
+    "noise_pass": false,
+    "visitor_view": false,
+    "widths": [
+      1440
+    ]
+  },
+  "result": {
+    "counts": {
+      "forms": 1,
+      "headings": 33,
+      "images": 3,
+      "links": 400,
+      "outline": 900
+    },
+    "design": {
+      "backgrounds": [
+        {
+          "count": 2149,
+          "value": "#eaecf0"
+        },
+        {
+          "count": 1196,
+          "value": "#ff9999"
+        },
+        {
+          "count": 758,
+          "value": "#f8f9fa"
+        },
+        {
+          "count": 550,
+          "value": "#99ff99"
+        },
+        {
+          "count": 275,
+          "value": "#ffffff"
+        },
+        {
+          "count": 14,
+          "value": "#ffffbb"
+        },
+        {
+          "count": 2,
+          "value": "#dfdfff"
+        },
+        {
+          "count": 1,
+          "value": "#f6f6f6"
+        },
+        {
+          "count": 1,
+          "value": "#a2a9b1"
+        },
+        {
+          "count": 1,
+          "value": "#fff0f0"
+        }
+      ],
+      "css_variables": {},
+      "font_faces": [],
+      "font_sizes": [
+        {
+          "count": 5850,
+          "value": "14px"
+        },
+        {
+          "count": 1317,
+          "value": "13.3px"
+        },
+        {
+          "count": 156,
+          "value": "11.6667px"
+        },
+        {
+          "count": 29,
+          "value": "11.9px"
+        },
+        {
+          "count": 12,
+          "value": "21px"
+        },
+        {
+          "count": 2,
+          "value": "12.502px"
+        },
+        {
+          "count": 1,
+          "value": "28.8px"
+        }
+      ],
+      "font_weights": [
+        {
+          "count": 4854,
+          "value": "400"
+        },
+        {
+          "count": 2513,
+          "value": "700"
+        }
+      ],
+      "fonts": [
+        {
+          "count": 6699,
+          "value": "sans-serif"
+        },
+        {
+          "count": 655,
+          "value": "monospace, Courier"
+        },
+        {
+          "count": 13,
+          "value": "\"Linux Libertine\", Georgia, Times, serif"
+        }
+      ],
+      "max_widths": [],
+      "radii": [
+        {
+          "count": 539,
+          "value": "2px"
+        }
+      ],
+      "shadows": [],
+      "spacing": [
+        {
+          "count": 8645,
+          "value": "2.8px"
+        },
+        {
+          "count": 8470,
+          "value": "5.6px"
+        },
+        {
+          "count": 1079,
+          "value": "1px"
+        },
+        {
+          "count": 1078,
+          "value": "4px"
+        },
+        {
+          "count": 892,
+          "value": "7px"
+        },
+        {
+          "count": 848,
+          "value": "14px"
+        },
+        {
+          "count": 658,
+          "value": "1.33px"
+        },
+        {
+          "count": 658,
+          "value": "6.65px"
+        },
+        {
+          "count": 524,
+          "value": "1.4px"
+        },
+        {
+          "count": 125,
+          "value": "4.2px"
+        },
+        {
+          "count": 13,
+          "value": "13px"
+        },
+        {
+          "count": 12,
+          "value": "21px"
+        },
+        {
+          "count": 12,
+          "value": "5.25px"
+        },
+        {
+          "count": 3,
+          "value": "24px"
+        },
+        {
+          "count": 2,
+          "value": "11.9px"
+        },
+        {
+          "count": 2,
+          "value": "5.95px"
+        },
+        {
+          "count": 2,
+          "value": "3.99px"
+        },
+        {
+          "count": 1,
+          "value": "-80px"
+        },
+        {
+          "count": 1,
+          "value": "20px"
+        },
+        {
+          "count": 1,
+          "value": "-1px"
+        },
+        {
+          "count": 1,
+          "value": "7.2px"
+        },
+        {
+          "count": 1,
+          "value": "13.3px"
+        },
+        {
+          "count": 1,
+          "value": "3.325px"
+        }
+      ],
+      "text_colors": [
+        {
+          "count": 3822,
+          "value": "#222222"
+        },
+        {
+          "count": 2727,
+          "value": "#0645ad"
+        },
+        {
+          "count": 788,
+          "value": "#000000"
+        },
+        {
+          "count": 17,
+          "value": "#ba0000"
+        },
+        {
+          "count": 13,
+          "value": "#3366bb"
+        }
+      ]
+    },
+    "files": [
+      "README.md",
+      "capture.json"
+    ],
+    "html_bytes": 2585950,
+    "output_directory": "/home/thawkins/Projects/PrintCraft/crealityprint-v7-3-0-6149-x86-64-release/app/shots/gcode_wiki",
+    "screenshots": [
+      {
+        "css_width": 1440,
+        "cut": true,
+        "file": "screenshot-1440.png",
+        "height": 600,
+        "sha256": "d8a75ff2624a9003b0b7afeb95bd62ba5edcf9b829bb57e815436d752b9b64bb",
+        "width": 1440
+      }
+    ],
+    "title": "G-code - RepRap",
+    "url": "https://reprap.org/wiki/G-code"
+  },
+  "summary": "Captured https://reprap.org/wiki/G-code: 1 screenshot(s), 900 outline items, 33 headings, 3 images, 400 links, 1 forms → /home/thawkins/Projects/PrintCraft/crealityprint-v7-3-0-6149-x86-64-release/app/shots/gcode_wiki.",
+  "confidence": "observed",
+  "authority": "our-run",
+  "environment": {
+    "clean_room": false,
+    "engine": "cdp",
+    "engine_version": "1.3",
+    "host": "linux-x86_64"
+  },
+  "limitations": [
+    {
+      "code": "one_state",
+      "message": "One state of the page: menus, dialogs and content behind interactions are not opened."
+    },
+    {
+      "code": "cross_origin_css",
+      "message": "CSS custom properties and breakpoints from cross-origin stylesheets can't be read."
+    }
+  ],
+  "coverage": {
+    "status": "complete",
+    "examined": 1,
+    "total": 1
+  },
+  "locations": [
+    {
+      "kind": "url",
+      "value": "https://reprap.org/wiki/G-code"
+    },
+    {
+      "kind": "path",
+      "value": "/home/thawkins/Projects/PrintCraft/crealityprint-v7-3-0-6149-x86-64-release/app/shots/gcode_wiki"
+    }
+  ],
+  "links": []
+}

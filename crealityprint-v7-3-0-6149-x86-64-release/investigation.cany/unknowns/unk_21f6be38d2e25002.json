@@ -1,0 +1,14 @@
+{
+  "id": "unk_21f6be38d2e25002",
+  "revision": 1,
+  "question": "Does the KE's own pre-print preparation (bed levelling) read the job temperature from the print file header, and which key? The person saw the nozzle set to 0 °C before levelling.",
+  "severity": "medium",
+  "domain": "printer-link",
+  "status": "open",
+  "probes": [
+    "Send a fresh print from PrintCraft (files now carry nozzle_temperature_initial_layer, Cura-style INITIAL_TEMPERATURE and a CONFIG_BLOCK) and watch whether the nozzle still drops to 0 °C",
+    "If it still does, the KE probably cools the nozzle on purpose for probing; check the printer's own print-calibration setting"
+  ],
+  "evidence_for": [],
+  "evidence_against": []
+}

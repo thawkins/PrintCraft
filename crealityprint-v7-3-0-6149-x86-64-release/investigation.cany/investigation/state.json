@@ -1,0 +1,21 @@
+{
+  "revision": 22,
+  "brief": {
+    "question": "Build a simpler desktop 3D-printing slicer with the same core features as the target (load models, place on a build plate, choose printer/filament/quality, slice, preview layers, export G-code).",
+    "purpose": "A simpler replacement app for a person who doesn't code",
+    "targets": [
+      "/home/thawkins/bin/CrealityPrint-V7.3.0.6149-x86_64-Release.AppImage"
+    ],
+    "constraints": [
+      "Clean room per project AGENTS.md: never inspect, extract or decompile the AppImage; build only from the written request and reference/ (empty)",
+      "Rust + egui/eframe desktop app in app/",
+      "Must support --screenshot <file.png>"
+    ],
+    "done_when": "App builds, opens a window with a 3D plate view, loads STL, slices into layers, previews, exports G-code, and the screenshot option saves a non-blank PNG."
+  },
+  "plan": [],
+  "hypotheses": [],
+  "findings": [],
+  "handoff": "Round: Repetier-Firmware support over USB. Sources: the RepRap wiki pages \"Repetier-Firmware\" and \"G-code\", captured as shots/repetier_wiki and shots/gcode_wiki (evidence ev_35f2…, ev_adf5…).\n- printer/mod.rs: Firmware enum {Marlin, Klipper, Repetier} with from_name and level_command (G29 / BED_MESH_CALIBRATE / G32). New firmware_name(M115 line) parser. New PrinterStatus.firmware.\n- calibration.rs: calibration_lines and with_calibration take a Firmware; added REPETIER_LEVEL \"G32\".\n- device_ui:\n  - firmware() is Klipper when the API is Klipper, otherwise the detected status.firmware.\n  - send_job uses it.\n  - The USB note now says \"Marlin, Prusa or Repetier\".\n- usb.rs:\n  - The session sends M115 first; Notice parsing (Firmware / Restarted \"start\" / Fatal / Error).\n  - Streamer has a firmware field; start(gcode, name).\n  - Repetier: M530 S1 L / M531 name (cleaned, 40 chars) / M532 X.x L on each 0.1% or new layer / M530 S0 at the end and on stop; no M155; M105 every 3 s while printing.\n  - All firmwares: resend forms rs:N, N:, and \"wait\" clears waiting_ok.\n- Tests: 5 new usb tests, calibration repetier_printers_get_g32, and an end-to-end test (printer/tests.rs) with a pretend Repetier printer on a TTYPort::pair pty. nextest 153 pass.\n- Docs: PRINTER_LINK.md 3b/3c/6/7 and FEATURES.md.\n- Unknown recorded: real Repetier behaviour. Repetier-Server (network) is not supported.\n- Clean room kept: the protected AppImage was never read; only public reprap.org pages.",
+  "updated": "2026-11-17T10:44:07Z"
+}

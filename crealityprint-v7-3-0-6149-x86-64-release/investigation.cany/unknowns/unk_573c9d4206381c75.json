@@ -1,0 +1,17 @@
+{
+  "id": "unk_573c9d4206381c75",
+  "revision": 2,
+  "question": "Which features does the PrusaSlicer product page list? The page returned a 403 bot check (\"Just a moment...\") to the automated browser.",
+  "severity": "medium",
+  "domain": "features",
+  "status": "blocked",
+  "probes": [
+    "The person saves the page (or a screenshot of it) into reference/",
+    "Read PrusaSlicer's public release notes or knowledge base instead"
+  ],
+  "evidence_for": [
+    "ev_0a93191a0357e6ca75724ab0c9390fa2c9f73053a5feb38bf3c16fb89f9a56b3"
+  ],
+  "evidence_against": [],
+  "resolution": "The page returned a 403 bot check twice and was not bypassed. Worked from PrusaSlicer's widely documented public feature set instead; app/FEATURES.md lists each feature as done, simpler or not yet. If the page lists anything else, the person can save it into reference/."
+}

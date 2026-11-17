@@ -1,0 +1,61 @@
+{
+  "id": "ev_35f2714353a499d9a06cf939041e9192f3b0ab4ec4a477d77e6484e7af5692d1",
+  "subject": {
+    "kind": "website",
+    "name": "https://reprap.org/wiki/Repetier-Firmware"
+  },
+  "operation": "web_site_open",
+  "params": {
+    "height": 900,
+    "url": "https://reprap.org/wiki/Repetier-Firmware",
+    "width": 1440
+  },
+  "result": {
+    "browser": "Chrome/157.0.8103.78",
+    "facts": {
+      "elements": 330,
+      "forms": 1,
+      "height": 1420,
+      "images": 4,
+      "lang": "en",
+      "links": 83,
+      "ready": "complete",
+      "title": "Repetier-Firmware - RepRap",
+      "url": "https://reprap.org/wiki/Repetier-Firmware",
+      "width": 1425
+    },
+    "health": {
+      "errors": [],
+      "failed_requests": []
+    },
+    "title": "Repetier-Firmware - RepRap",
+    "url": "https://reprap.org/wiki/Repetier-Firmware"
+  },
+  "summary": "Opened https://reprap.org/wiki/Repetier-Firmware: \"Repetier-Firmware - RepRap\".",
+  "confidence": "observed",
+  "authority": "our-run",
+  "environment": {
+    "clean_room": false,
+    "engine": "cdp",
+    "engine_version": "1.3",
+    "host": "linux-x86_64"
+  },
+  "limitations": [
+    {
+      "code": "private_profile",
+      "message": "A fresh private browser: pages behind a login show their signed-out state."
+    }
+  ],
+  "coverage": {
+    "status": "complete",
+    "examined": 1,
+    "total": 1
+  },
+  "locations": [
+    {
+      "kind": "url",
+      "value": "https://reprap.org/wiki/Repetier-Firmware"
+    }
+  ],
+  "links": []
+}

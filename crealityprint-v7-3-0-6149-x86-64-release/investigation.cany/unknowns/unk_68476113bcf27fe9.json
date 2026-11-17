@@ -1,0 +1,15 @@
+{
+  "id": "unk_68476113bcf27fe9",
+  "revision": 3,
+  "question": "Does a real Ender-3 V3 KE on stock firmware accept the upload address (POST /upload/<name>), the opGcodeFile start command, the pause/stop messages and the camera stream on port 8080 exactly as implemented?",
+  "severity": "high",
+  "domain": "printer-link",
+  "status": "resolved",
+  "probes": [
+    "Connect the app to the person's real printer and send a small test print",
+    "Check whether the printer's firmware version needs a login or token"
+  ],
+  "evidence_for": [],
+  "evidence_against": [],
+  "resolution": "Confirmed by the person's own message (no tool evidence record): on their real Ender-3 V3 KE, upload via POST works, the camera stream works, and the job can be watched while printing. Pause/stop on the real printer were not separately reported."
+}

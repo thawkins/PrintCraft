@@ -1,0 +1,14 @@
+{
+  "id": "unk_f9e24e49bed9023e",
+  "revision": 4,
+  "question": "What does the original's main window look like (layout, colours, panel order)? reference/ is empty and the clean-room rule forbids running or reading the program.",
+  "severity": "medium",
+  "domain": "look",
+  "status": "resolved",
+  "probes": [
+    "Screenshots of the original's Prepare and Preview pages in reference/"
+  ],
+  "evidence_for": [],
+  "evidence_against": [],
+  "resolution": "The person added reference/picture-2.png (main Prepare window) and picture-1.png (Device page). PrintCraft follows both layouts in its own style (no logos): centred page tabs, a Printer box top-left over the 3D view, a tool row, Top/Front/Home, Slice plate / Send print bottom-right, and Filament + Process (Global/Objects, Advanced, grouped settings) on the right; defaults KE printer, 0.20 mm, Seam Aligned. The original's Preview page is still unseen."
+}

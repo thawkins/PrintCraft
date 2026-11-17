@@ -1,0 +1,14 @@
+{
+  "id": "unk_397d784e2e52840d",
+  "revision": 1,
+  "question": "Does the KE's Creality network service accept \"enableSelfTest\" (as a set command and/or a parameter next to opGcodeFile) to skip its own pre-print calibration when Enable Calibration is off?",
+  "severity": "medium",
+  "domain": "printer-link",
+  "status": "open",
+  "probes": [
+    "Untick Enable Calibration on the Device page, send a small print, and watch whether the KE still levels the bed",
+    "Check whether the Device page shows 'The printer reports: calibration on/off' (meaning the status field name is right)"
+  ],
+  "evidence_for": [],
+  "evidence_against": []
+}
