@@ -4,7 +4,7 @@
 //!   printcraft [MODEL.stl ...]                      open the app (optionally with models)
 //!   printcraft --screenshot OUT.png [MODEL.stl ...] open, draw ~120 frames, save a picture, quit
 //!   printcraft --slice MODEL.stl [...] --output OUT.gcode [--quality fine|standard|draft]
-//!              [--filament pla|petg|abs|tpu] [--printer 1-10] [--supports] [--brim]
+//!              [--filament pla|petg|abs|tpu] [--printer 1-11] [--supports] [--brim]
 //!                                                   slice without a window
 //!
 //! `printcraft --help` lists every option (preview, printer connection and more).
@@ -52,14 +52,17 @@ Usage:
                                               show the printer's camera enlarged or maximised
   printcraft --screenshot OUT.png [MODEL.stl ...]
   printcraft --slice MODEL.stl [MODEL.stl ...] --output OUT.gcode [options]
+  printcraft --slice MODEL.stl [...] --output OUT.x3g --printer 11 [options]
+                                              an X3G file for a MakerBot / Sailfish printer
 
 Slicing options:
   --quality fine|standard|draft   (default standard)
   --filament pla|petg|abs|tpu     (default pla)
-  --printer 1-10                  printer preset (default 1, 220 x 220 mm):
+  --printer 1-11                  printer preset (default 1, 220 x 220 mm):
                                   1-4 generic, 5 Prusa MK4S, 6 Prusa Core One,
                                   7 Prusa MK3S+, 8 Prusa MINI+, 9 Prusa XL,
-                                  10 Creality Ender-3 V3 KE
+                                  10 Creality Ender-3 V3 KE,
+                                  11 FlashForge Creator Pro (Sailfish, X3G)
   --supports                      add supports under overhangs (where they reach the
                                   plate they stand on a small raft)
   --no-support-raft               no raft under supports
@@ -347,8 +350,40 @@ fn slice_without_window(args: &Args) -> ExitCode {
         triangles.extend(obj.world_triangles());
     }
 
-    let out = pipeline::slice_plate(&triangles, &printer, &filament, &settings, &|_| {}).gcode;
-    if let Err(e) = std::fs::write(output, &out.text) {
+    let sliced = pipeline::slice_plate(&triangles, &printer, &filament, &settings, &|_| {});
+    let out = sliced.gcode;
+    let wants_x3g = output
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("x3g"));
+    let bytes = if wants_x3g {
+        if !printer.x3g {
+            eprintln!(
+                "printcraft: an .x3g file is for a MakerBot / Sailfish printer; the {} \
+                 isn't one. Use --printer 11 (FlashForge Creator Pro).",
+                printer.name
+            );
+            return ExitCode::from(2);
+        }
+        let job = output
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "print".into());
+        match x3g::export(&out.text, &printer, &job, sliced.result.layers.len()) {
+            Ok((bytes, warnings)) => {
+                for w in warnings {
+                    eprintln!("printcraft: note: {w}");
+                }
+                bytes
+            }
+            Err(e) => {
+                eprintln!("printcraft: could not make the X3G file: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        out.text.clone().into_bytes()
+    };
+    if let Err(e) = std::fs::write(output, &bytes) {
         eprintln!("printcraft: could not write {}: {e}", output.display());
         return ExitCode::FAILURE;
     }

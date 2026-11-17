@@ -37,8 +37,8 @@ printer or slicer maker.
   `usb-serial.log` in the settings folder's `logs` folder, for diagnosing a printer.
 - MakerBot-protocol printers over USB (Sailfish: FlashForge Creator Pro, early Creator
   Pro 2, Replicator), read-only for now: firmware, temperatures, the printer's own SD
-  prints and its machine settings. Printing to them and X3G export are planned in
-  makerbot.md.
+  prints and its machine settings. Their print files can be exported as X3G (preset
+  "FlashForge Creator Pro (Sailfish)"); printing over USB is planned in makerbot.md.
 - Finds printers on the local network and remembers known ones, and finds a known
   printer again when it has moved to a new address.
 - Live status, temperatures, pause / resume / stop, camera view (Creality and Klipper
@@ -76,6 +76,13 @@ Slice without opening a window:
 
 ```bash
 cargo run --release -- --slice model.stl --output model.gcode --quality fine --filament petg
+```
+
+For a MakerBot / Sailfish printer (FlashForge Creator Pro, early Creator Pro 2), write an
+X3G file instead:
+
+```bash
+cargo run --release -- --slice model.stl --output model.x3g --printer 11
 ```
 
 `printcraft --help` lists every option (printer preset, supports, brim, infill pattern,

@@ -43,6 +43,9 @@ pub struct Printer {
     pub purge_mm: f32,
     /// Runs Klipper firmware (heat waits are written Klipper's way; see heat.rs).
     pub klipper: bool,
+    /// A MakerBot-protocol printer (Sailfish: FlashForge Creator Pro, Replicator): print
+    /// files are X3G, translated from the G-code (src/x3g).
+    pub x3g: bool,
 }
 
 /// Filament for the purge lines: about what common start routines for this size of
@@ -62,6 +65,7 @@ impl Printer {
             purge_mm: DEFAULT_PURGE_MM,
             // The KE runs Klipper (Creality OS); the others here run Marlin or Prusa firmware.
             klipper: name.contains("Ender-3 V3 KE"),
+            x3g: name.contains("Sailfish"),
         };
         // Build volumes of named printers are their makers' published specifications;
         // retraction values are common starting points (estimated).
@@ -76,6 +80,15 @@ impl Printer {
             p("Prusa MINI+", 180.0, 180.0, 180.0, 3.2),
             p("Prusa XL (one tool)", 360.0, 360.0, 360.0, 0.7),
             p("Creality Ender-3 V3 KE", 220.0, 220.0, 240.0, 0.8),
+            // GPX's axis lengths for this family (Replicator 1 Dual, which GPX uses for the
+            // Creator Pro); the early Creator Pro 2 is a clone. Retraction estimated.
+            p(
+                "FlashForge Creator Pro (Sailfish)",
+                227.0,
+                148.0,
+                150.0,
+                1.0,
+            ),
         ]
     }
 }

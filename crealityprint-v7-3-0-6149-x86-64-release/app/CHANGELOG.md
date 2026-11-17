@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- X3G export for MakerBot / Sailfish printers. The new "FlashForge Creator Pro
+  (Sailfish)" preset, or the "MakerBot / Sailfish" printer setting, makes Export save an
+  `.x3g` file for the printer's SD card. The command line does the same with
+  `--output OUT.x3g --printer 11`.
+  * The G-code is translated to MakerBot S3G commands: moves in motor steps from the
+    bed's centre, heating and waits, homing, and progress on the printer's screen.
+  * Steps per mm start from the Replicator 1 Dual family's values. Once the printer has
+    been connected over USB, its own saved settings are used instead.
+  * Single nozzle for now. Not yet printed on a real printer. (uncommitted)
 - MakerBot-protocol (Sailfish) printers over USB, read-only. Under USB, choose the
   protocol "MakerBot / Sailfish" to connect to a FlashForge Creator Pro, early Creator
   Pro 2, Replicator or a clone. The app shows:

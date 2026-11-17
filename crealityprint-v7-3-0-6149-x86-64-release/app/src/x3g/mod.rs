@@ -10,7 +10,65 @@
 //! the payload. The printer answers every packet with a packet whose first payload byte
 //! is a [`Reply`] code. Integers are little-endian.
 
+pub mod command;
+pub mod machine;
 pub mod query;
+pub mod translate;
+
+/// Makes an `.x3g` file from a sliced plate's G-code for a MakerBot-protocol printer
+/// profile. Returns the file and anything the printer can't do that was left out.
+///
+/// The machine is the FlashForge Creator Pro family (the only one so far). Once the
+/// printer has been connected over USB, its own settings (the EEPROM copy saved then)
+/// replace the family's values, and a note says so.
+pub fn export(
+    gcode: &str,
+    printer: &crate::profiles::Printer,
+    job_name: &str,
+    layers: usize,
+) -> Result<(Vec<u8>, Vec<String>), String> {
+    let options = translate::Options {
+        bed_mm: (printer.bed_x as f64, printer.bed_y as f64),
+        job_name: job_name.to_string(),
+        total_layers: layers as u32,
+    };
+    let (machine, note) = export_machine();
+    let t = translate::translate(gcode, &machine, &options).map_err(|e| e.to_string())?;
+    let mut notes = t.warnings;
+    notes.extend(note);
+    Ok((translate::to_x3g(&t.actions), notes))
+}
+
+/// The Creator Pro family's values, with the connected printer's own settings in their
+/// place when a copy of its EEPROM has been saved.
+fn export_machine() -> (machine::Machine, Option<String>) {
+    let base = machine::Machine::creator_pro();
+    // Tests must not depend on a printer once connected on this computer.
+    if cfg!(test) {
+        return (base, None);
+    }
+    let Some(path) = crate::fsutil::settings_dir().map(|d| {
+        d.join("logs")
+            .join(crate::printer::sailfish::EEPROM_FILE_NAME)
+    }) else {
+        return (base, None);
+    };
+    match std::fs::read(&path) {
+        // Up to the end of the axis settings (FREE_EEPROM_STARTS in Sailfish's map).
+        Ok(e) if e.len() >= 0x020C => {
+            let settings = query::MachineSettings::from_eeprom(&e);
+            (
+                base.with_settings(&settings),
+                Some(format!(
+                    "Steps per mm, speeds and home settings were taken from the printer's \
+                     own settings ({}).",
+                    path.display()
+                )),
+            )
+        }
+        _ => (base, None),
+    }
+}
 
 /// First byte of every packet.
 pub const START: u8 = 0xD5;

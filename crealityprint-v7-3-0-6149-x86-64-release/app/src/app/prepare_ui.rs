@@ -177,6 +177,11 @@ impl PrintCraftApp {
                             );
                             ui.checkbox(&mut self.printer.klipper, "");
                             ui.end_row();
+                            ui.label("MakerBot / Sailfish").on_hover_text(
+                                "FlashForge Creator Pro, early Creator Pro 2, Replicator and clones: Export saves an X3G file for the printer's SD card",
+                            );
+                            ui.checkbox(&mut self.printer.x3g, "");
+                            ui.end_row();
                             ui.label("Purge amount")
                                 .on_hover_text("Filament pushed through the two purge lines at the left edge before printing, to clear the nozzle");
                             ui.add(

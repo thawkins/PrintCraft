@@ -88,6 +88,7 @@ pub fn to_json(p: &Project) -> String {
             "retract_speed": p.printer.retract_speed,
             "purge_mm": p.printer.purge_mm,
             "klipper": p.printer.klipper,
+            "x3g": p.printer.x3g,
         },
         "filament": {
             "name": p.filament.name,
@@ -192,6 +193,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
         retract_speed: num(pr, "retract_speed", base.retract_speed).max(1.0),
         purge_mm: num_in(pr, "purge_mm", base.purge_mm, limits::PURGE_MM),
         klipper: flag(pr, "klipper", base.klipper),
+        x3g: flag(pr, "x3g", base.x3g),
     };
 
     let fi = v.get("filament").unwrap_or(&empty);

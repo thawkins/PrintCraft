@@ -528,15 +528,39 @@ impl PrintCraftApp {
             .first()
             .map(|o| o.name.clone())
             .unwrap_or_else(|| "print".into());
+        // A MakerBot / Sailfish printer takes X3G: translate first, so a problem shows
+        // before the file dialog does.
+        let (bytes, kind, ext, notes) = if self.printer.x3g {
+            match crate::x3g::export(
+                &sliced.gcode.text,
+                &self.printer,
+                &name,
+                sliced.result.layers.len(),
+            ) {
+                Ok((bytes, warnings)) => (bytes, "X3G", "x3g", warnings),
+                Err(e) => {
+                    self.status = format!("Could not make the X3G file: {e}");
+                    return;
+                }
+            }
+        } else {
+            (
+                sliced.gcode.text.clone().into_bytes(),
+                "G-code",
+                "gcode",
+                Vec::new(),
+            )
+        };
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("G-code", &["gcode"])
-            .set_file_name(format!("{name}.gcode"))
+            .add_filter(kind, &[ext])
+            .set_file_name(format!("{name}.{ext}"))
             .save_file()
         else {
             return;
         };
-        self.status = match std::fs::write(&path, &sliced.gcode.text) {
-            Ok(()) => format!("Saved {}.", display_name(&path)),
+        self.status = match std::fs::write(&path, &bytes) {
+            Ok(()) if notes.is_empty() => format!("Saved {}.", display_name(&path)),
+            Ok(()) => format!("Saved {}. Note: {}", display_name(&path), notes.join(" ")),
             Err(e) => format!("Could not save the file: {e}"),
         };
     }

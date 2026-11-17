@@ -4,6 +4,9 @@ Status, 2026-11-18:
 * **Phase 0** (checking the facts) is done.
 * **Step 3a** (the read-only Sailfish connection) is written and tested against a
   pretend printer. It has **not yet been run on the real printer**.
+* **Steps 3b and 3c** (the translator and X3G export, single nozzle) are written and
+  checked by tests and an independent decode of an exported file. **No X3G file has
+  been printed yet.**
 PrintCraft version at the time: 0.0.3.
 
 ## What phase 0 found
@@ -335,8 +338,8 @@ Steps:
 | Step | Work | Done when |
 |---|---|---|
 | 3a | **Written, not yet run on the printer** (`src/x3g/`, `src/printer/sailfish.rs`). Read-only connection: version (0, 27), temperatures (10), motherboard status (23), build statistics (24), position (21), the whole EEPROM (12), saved as `sailfish-eeprom.bin` and summarised in the log. Badge "MakerBot protocol · Sailfish x.y". Never sends 3 or 7 (Sailfish restarts the board on both). | The test printer's versions, temperatures and EEPROM values are in the log, and the machine values are written into this file. |
-| 3b | S3G encoding, machine definition for the test printer, and the G-code → S3G translator (single nozzle). | Unit tests, and the GPX oracle where GPX supports the machine. |
-| 3c | X3G export (Export button, `--output .x3g`). | A cube exported as X3G prints from the SD card on the test printer. |
+| 3b | **Written, not yet printed** (`src/x3g/command.rs`, `machine.rs`, `translate.rs`). S3G action commands; the Creator Pro machine definition (GPX `r1d` values, replaced by the printer's EEPROM copy when one has been saved); the G-code → S3G translator for single-nozzle prints. X/Y/Z are absolute steps from the bed's centre. The extruder is relative and negative (as GPX writes it), with rounding carried over. Speeds are capped at each axis's limit. G29/G32 are dropped with a note, and fan speeds become on/off. An unknown command is an error naming its line. The GPX comparison test isn't written: GPX isn't installed here. | Unit tests, and the GPX oracle where GPX supports the machine. |
+| 3c | **Written, not yet printed.** The "FlashForge Creator Pro (Sailfish)" preset (227 × 148 × 150) and a "MakerBot / Sailfish" printer setting. Export saves `.x3g` for such a printer, and `printcraft --slice … --output OUT.x3g --printer 11` does the same. An exported test model decodes cleanly with an independent decoder. Its extrusion total matches the slicer's filament estimate (2501.6 mm vs 2.50 m). The purge line sits at X −112 mm, 1.5 mm inside the edge GPX gives: to check on the printer. | A cube exported as X3G prints from the SD card on the test printer. |
 | 3d | Streaming over USB: print, progress, pause, stop, jog, home, heaters. | The cube prints over USB. Stop leaves both heaters off. |
 | 3e | Upload to the SD card (14 capture, the job, 15 end; then 16 to print it) and the SD file list (18). | A job uploaded from PrintCraft prints from the card. |
 | 3f | Two nozzles (after track 1): tool changes (134), the nozzle offset from EEPROM, and Ditto printing (the plate limit and preview copy). | A two-colour or PLA + PVA print succeeds with the colours lined up, and a Ditto print gives two matching parts. |
