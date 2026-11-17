@@ -2,3 +2,6 @@
 # versions the app is built and audited with.
 *.lock
 !Cargo.lock
+
+# Agent session transcripts: large, and they contain personal details.
+agent-session.jsonl
