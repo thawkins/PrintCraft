@@ -121,7 +121,7 @@ layer_info, discovery, digest, model, thumbnail, theme, CLI) was not dry:
 | ID | Defect | Car |
 |---|---|---|
 | N1 | Lay flat summed faces by direction only, so step tops tied with the bottom; ties broken by HashMap order (non-deterministic) | 9 |
-| N2 | X/Y rotate rings turn about the model's own axes once it is turned about Z (rotation applied X, then Y, then Z) | open, needs `app.rs` (after car 8b) |
+| N2 | X/Y rotate rings turn about the model's own axes once it is turned about Z (rotation applied X, then Y, then Z) | 11 |
 | N3 | Calibration inserted after the nozzle wait even when the plate heats later (cold-plate levelling) | 9 |
 | N4 | `BED_MESH_CALIBRATE` in a comment counted as "already calibrating" | 9 |
 | N5 | One bad ASCII-STL corner shifted every later triangle | 9 |
@@ -137,7 +137,8 @@ repeat the same port-order chain.
 
 ## Cleanup train ledger
 
-Status at the end of the drain. Local branches `refactor/car-N-*`, fast-forwarded into
+Status at the end of the drain (gates on `main`: `cargo test` 118 passed, `cargo build`
+0 warnings, `cargo fmt --check` clean, clippy 3 warnings, all in device_ui test code). Local branches `refactor/car-N-*`, fast-forwarded into
 local `main`; nothing pushed.
 
 | Car | Scope | Status |
@@ -149,11 +150,11 @@ local `main`; nothing pushed.
 | 5 | Core helpers R1, R12, R14, P1 (sphere.stl 0.39 s → 0.24 s, `/usr/bin/time`) | Done (`1ecd305`) |
 | 6 | Shared pipeline + object actions + widgets: R2, R6, R7 | Done (`0b5f673`) |
 | 7 | Printer helpers and perf: R5, R8, R13, P2, P4 | Done (`72d5da1`); Moonraker/PrusaLink poll-loop logging left different (decision) |
-| 8a | `gcode::generate`, `slicer::slice` split; per-frame camera view (R9, R10, P3) | In progress |
-| 8b | UI god-functions split in place (R11) | In progress |
+| 8a | `gcode::generate`, `slicer::slice` split; per-frame camera view (R9, R10, P3) | Done (`04e5b9f`); G-code byte-identical on 8 option mixes; `perf stat -e instructions:u` 3.581e9 → 3.578e9 |
+| 8b | UI god-functions split in place (R11) | Done (`dd2dbba`); none over 62 lines; screenshots pixel-identical; Device cards that need a live printer checked by literal/diff review only |
 | 9 | Second-pass fixes N1, N3–N7, N9 | Done (`d87b002`) |
 | 10 | Gizmo N8 | Done (`2760d85`) |
-| — | N2 rotate rings (world axes) | Approved, after 8b |
+| 11 | N2 rotate rings turn about world axes | Done (`06c573c`) |
 | — | `Plate` model out of `PrintCraftApp`; TZ-mutating test | Proposed: needs test edits enumerated |
 | — | Q1–Q3 | Blocked — decision |
 | — | Moonraker vs PrusaLink contact-error logging | Blocked — decision |
