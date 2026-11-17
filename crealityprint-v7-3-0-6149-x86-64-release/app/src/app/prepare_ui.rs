@@ -147,28 +147,28 @@ impl PrintCraftApp {
                                 ui,
                                 "Plate width",
                                 egui::DragValue::new(&mut self.printer.bed_x)
-                                    .range(50.0..=1000.0)
+                                    .range(limits::PLATE_MM)
                                     .suffix(" mm"),
                             );
                             row(
                                 ui,
                                 "Plate depth",
                                 egui::DragValue::new(&mut self.printer.bed_y)
-                                    .range(50.0..=1000.0)
+                                    .range(limits::PLATE_MM)
                                     .suffix(" mm"),
                             );
                             row(
                                 ui,
                                 "Max height",
                                 egui::DragValue::new(&mut self.printer.max_z)
-                                    .range(50.0..=1000.0)
+                                    .range(limits::PLATE_MM)
                                     .suffix(" mm"),
                             );
                             row(
                                 ui,
                                 "Retraction",
                                 egui::DragValue::new(&mut self.printer.retract_length)
-                                    .range(0.0..=10.0)
+                                    .range(limits::RETRACT_MM)
                                     .speed(0.05)
                                     .suffix(" mm"),
                             );
@@ -181,7 +181,7 @@ impl PrintCraftApp {
                                 .on_hover_text("Filament pushed through the two purge lines at the left edge before printing, to clear the nozzle");
                             ui.add(
                                 egui::DragValue::new(&mut self.printer.purge_mm)
-                                    .range(0.0..=100.0)
+                                    .range(limits::PURGE_MM)
                                     .speed(0.5)
                                     .fixed_decimals(0)
                                     .suffix(" mm"),
@@ -258,9 +258,7 @@ impl PrintCraftApp {
                         .add_enabled(has, egui::Button::new("Clear plate"))
                         .clicked()
                     {
-                        self.objects.clear();
-                        self.plate.clear();
-                        self.selected = None;
+                        self.clear_plate();
                         self.status = "Cleared the plate.".into();
                     }
                 });
@@ -319,8 +317,10 @@ impl PrintCraftApp {
                 self.mode = Mode::Printer;
             }
             None => {
-                self.send_after_slice = true;
                 self.start_slice();
+                // Send when the slice finishes; a refused slice must not leave the
+                // request behind to surprise the next ordinary "Slice plate".
+                self.send_after_slice = self.job.is_some();
             }
         }
     }
@@ -412,20 +412,21 @@ impl PrintCraftApp {
                         ui,
                         "Nozzle temp",
                         egui::DragValue::new(&mut self.filament.nozzle_temp)
-                            .range(150..=300)
+                            .range(limits::NOZZLE_TEMP)
                             .suffix(" °C"),
                     );
                     row(
                         ui,
                         "Plate temp",
                         egui::DragValue::new(&mut self.filament.bed_temp)
-                            .range(0..=120)
+                            .range(limits::BED_TEMP)
                             .suffix(" °C"),
                     );
                     row(
                         ui,
                         "Cooling fan",
-                        egui::Slider::new(&mut self.filament.fan_percent, 0..=100).suffix(" %"),
+                        egui::Slider::new(&mut self.filament.fan_percent, limits::FAN_PERCENT)
+                            .suffix(" %"),
                     );
                 });
             });
@@ -461,13 +462,13 @@ impl PrintCraftApp {
             row(
                 ui,
                 "Layer height",
-                mm(&mut s.layer_height, 0.04..=0.4, 0.01),
+                mm(&mut s.layer_height, limits::LAYER_HEIGHT, 0.01),
             );
             if advanced {
                 row(
                     ui,
                     "First layer height",
-                    mm(&mut s.first_layer_height, 0.08..=0.4, 0.01),
+                    mm(&mut s.first_layer_height, limits::FIRST_LAYER_HEIGHT, 0.01),
                 );
             }
         });
@@ -486,17 +487,17 @@ impl PrintCraftApp {
             row(
                 ui,
                 "Walls",
-                egui::DragValue::new(&mut s.walls).range(1..=10),
+                egui::DragValue::new(&mut s.walls).range(limits::WALLS),
             );
             row(
                 ui,
                 "Top layers",
-                egui::DragValue::new(&mut s.top_layers).range(0..=20),
+                egui::DragValue::new(&mut s.top_layers).range(limits::SOLID_LAYERS),
             );
             row(
                 ui,
                 "Bottom layers",
-                egui::DragValue::new(&mut s.bottom_layers).range(0..=20),
+                egui::DragValue::new(&mut s.bottom_layers).range(limits::SOLID_LAYERS),
             );
             row(
                 ui,
@@ -512,7 +513,7 @@ impl PrintCraftApp {
                 row(
                     ui,
                     "Fuzzy top amount",
-                    mm(&mut s.fuzzy_top_mm, 0.02..=0.3, 0.01),
+                    mm(&mut s.fuzzy_top_mm, limits::FUZZY_TOP_MM, 0.01),
                 );
             }
             if advanced {
@@ -528,7 +529,7 @@ impl PrintCraftApp {
                 ui,
                 "Density",
                 egui::DragValue::new(&mut s.infill_percent)
-                    .range(0.0..=100.0)
+                    .range(limits::INFILL_PERCENT)
                     .speed(1.0)
                     .fixed_decimals(0)
                     .suffix(" %"),
@@ -554,7 +555,7 @@ impl PrintCraftApp {
                     ui,
                     "Overhang angle",
                     egui::DragValue::new(&mut s.support_angle)
-                        .range(30.0..=80.0)
+                        .range(limits::SUPPORT_ANGLE)
                         .speed(1.0)
                         .suffix("°"),
                 );
@@ -581,7 +582,7 @@ impl PrintCraftApp {
                 ui,
                 "Print speed",
                 egui::DragValue::new(&mut s.print_speed)
-                    .range(10.0..=500.0)
+                    .range(limits::PRINT_SPEED)
                     .speed(1.0)
                     .suffix(" mm/s"),
             );
@@ -590,7 +591,7 @@ impl PrintCraftApp {
                     ui,
                     "First layer speed",
                     egui::DragValue::new(&mut s.first_layer_speed)
-                        .range(5.0..=100.0)
+                        .range(limits::FIRST_LAYER_SPEED)
                         .speed(1.0)
                         .suffix(" mm/s"),
                 );
@@ -598,7 +599,7 @@ impl PrintCraftApp {
                     ui,
                     "Travel speed",
                     egui::DragValue::new(&mut s.travel_speed)
-                        .range(20.0..=600.0)
+                        .range(limits::TRAVEL_SPEED)
                         .speed(1.0)
                         .suffix(" mm/s"),
                 );
@@ -610,11 +611,11 @@ impl PrintCraftApp {
                     ui,
                     "Minimum layer time",
                     egui::DragValue::new(&mut s.min_layer_time)
-                        .range(0.0..=120.0)
+                        .range(limits::MIN_LAYER_TIME)
                         .speed(0.5)
                         .suffix(" s"),
                 );
-                row(ui, "Z-hop", mm(&mut s.z_hop, 0.0..=2.0, 0.05));
+                row(ui, "Z-hop", mm(&mut s.z_hop, limits::Z_HOP, 0.05));
             });
             group(ui, "Special mode", |ui| {
                 row(

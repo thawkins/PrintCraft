@@ -11,7 +11,7 @@ use crate::geometry::Vec3;
 use crate::gizmo;
 use crate::model::{Mesh, PlacedObject, SampleShape, Triangle};
 use crate::profiles::{
-    Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
+    limits, Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
 };
 use crate::slicer::{self, PathKind, SliceResult};
 use crate::theme;
@@ -411,6 +411,21 @@ impl PrintCraftApp {
         });
         self.job = Some(SliceJob { progress, rx });
         self.status = "Slicing…".into();
+    }
+
+    /// Empties the plate, dropping anything that pointed into it (selection, drag, slice).
+    fn clear_plate(&mut self) {
+        self.objects.clear();
+        self.plate.clear();
+        self.selected = None;
+        self.drag = Drag::None;
+        self.cancel_slice();
+    }
+
+    /// Forgets a slice in progress (its plate is gone); the worker's result is dropped.
+    fn cancel_slice(&mut self) {
+        self.job = None;
+        self.send_after_slice = false;
     }
 
     fn poll_slice(&mut self, ctx: &egui::Context) {

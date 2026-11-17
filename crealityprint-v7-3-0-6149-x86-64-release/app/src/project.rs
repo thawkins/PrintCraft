@@ -13,10 +13,11 @@ use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::known::{api_from, api_name};
 use crate::printer::FoundPrinter;
 use crate::profiles::{
-    Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
+    limits, Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
 };
 use serde_json::{json, Value};
-use std::path::Path;
+use std::ops::RangeInclusive;
+use std::path::{Path, PathBuf};
 
 pub const EXTENSION: &str = "printcraft";
 const FORMAT: &str = "printcraft-project";
@@ -134,8 +135,15 @@ pub fn from_json(text: &str) -> Result<Project, String> {
     let int = |o: &Value, k: &str, d: u32| {
         o.get(k)
             .and_then(|x| x.as_u64())
-            .map(|x| x as u32)
+            .map(|x| x.min(u32::MAX as u64) as u32)
             .unwrap_or(d)
+    };
+    // A hand-edited or damaged file is held to what the settings panel allows.
+    let num_in = |o: &Value, k: &str, d: f32, r: RangeInclusive<f32>| {
+        num(o, k, d).clamp(*r.start(), *r.end())
+    };
+    let int_in = |o: &Value, k: &str, d: u32, r: RangeInclusive<u32>| {
+        int(o, k, d).clamp(*r.start(), *r.end())
     };
     let flag = |o: &Value, k: &str, d: bool| o.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
     let text_of = |o: &Value, k: &str| o.get(k).and_then(|x| x.as_str()).map(str::to_string);
@@ -145,13 +153,19 @@ pub fn from_json(text: &str) -> Result<Project, String> {
     let base = Printer::presets().into_iter().next().expect("presets");
     let printer = Printer {
         name: text_of(pr, "name").unwrap_or(base.name.clone()),
-        bed_x: num(pr, "bed_x", base.bed_x).clamp(10.0, 2000.0),
-        bed_y: num(pr, "bed_y", base.bed_y).clamp(10.0, 2000.0),
-        max_z: num(pr, "max_z", base.max_z).clamp(10.0, 2000.0),
+        bed_x: num_in(pr, "bed_x", base.bed_x, limits::PLATE_MM),
+        bed_y: num_in(pr, "bed_y", base.bed_y, limits::PLATE_MM),
+        max_z: num_in(pr, "max_z", base.max_z, limits::PLATE_MM),
         nozzle_diameter: num(pr, "nozzle_diameter", base.nozzle_diameter).clamp(0.1, 2.0),
-        retract_length: num(pr, "retract_length", base.retract_length),
-        retract_speed: num(pr, "retract_speed", base.retract_speed),
-        purge_mm: num(pr, "purge_mm", base.purge_mm),
+        retract_length: num_in(
+            pr,
+            "retract_length",
+            base.retract_length,
+            limits::RETRACT_MM,
+        ),
+        // Not in the panel; only kept from dividing the time estimate by zero.
+        retract_speed: num(pr, "retract_speed", base.retract_speed).max(1.0),
+        purge_mm: num_in(pr, "purge_mm", base.purge_mm, limits::PURGE_MM),
         klipper: flag(pr, "klipper", base.klipper),
     };
 
@@ -159,29 +173,45 @@ pub fn from_json(text: &str) -> Result<Project, String> {
     let fbase = Filament::presets().into_iter().next().expect("presets");
     let filament = Filament {
         name: text_of(fi, "name").unwrap_or(fbase.name.clone()),
-        nozzle_temp: int(fi, "nozzle_temp", fbase.nozzle_temp),
-        bed_temp: int(fi, "bed_temp", fbase.bed_temp),
-        diameter: num(fi, "diameter", fbase.diameter),
-        density: num(fi, "density", fbase.density),
-        fan_percent: int(fi, "fan_percent", fbase.fan_percent).min(100),
-        price_per_kg: num(fi, "price_per_kg", fbase.price_per_kg),
+        nozzle_temp: int_in(fi, "nozzle_temp", fbase.nozzle_temp, limits::NOZZLE_TEMP),
+        bed_temp: int_in(fi, "bed_temp", fbase.bed_temp, limits::BED_TEMP),
+        // Not in the panel; kept physical so filament maths stays finite.
+        diameter: num(fi, "diameter", fbase.diameter).clamp(1.0, 3.0),
+        density: num(fi, "density", fbase.density).max(0.1),
+        fan_percent: int_in(fi, "fan_percent", fbase.fan_percent, limits::FAN_PERCENT),
+        price_per_kg: num(fi, "price_per_kg", fbase.price_per_kg).max(0.0),
     };
 
     let st = v.get("settings").unwrap_or(&empty);
     let d = PrintSettings::default();
     let pick = |k: &str| text_of(st, k).unwrap_or_default();
     let settings = PrintSettings {
-        layer_height: num(st, "layer_height", d.layer_height),
-        first_layer_height: num(st, "first_layer_height", d.first_layer_height),
-        walls: int(st, "walls", d.walls).max(1),
-        top_layers: int(st, "top_layers", d.top_layers),
-        bottom_layers: int(st, "bottom_layers", d.bottom_layers),
-        infill_percent: num(st, "infill_percent", d.infill_percent),
-        print_speed: num(st, "print_speed", d.print_speed),
-        first_layer_speed: num(st, "first_layer_speed", d.first_layer_speed),
-        travel_speed: num(st, "travel_speed", d.travel_speed),
+        layer_height: num_in(st, "layer_height", d.layer_height, limits::LAYER_HEIGHT),
+        first_layer_height: num_in(
+            st,
+            "first_layer_height",
+            d.first_layer_height,
+            limits::FIRST_LAYER_HEIGHT,
+        ),
+        walls: int_in(st, "walls", d.walls, limits::WALLS),
+        top_layers: int_in(st, "top_layers", d.top_layers, limits::SOLID_LAYERS),
+        bottom_layers: int_in(st, "bottom_layers", d.bottom_layers, limits::SOLID_LAYERS),
+        infill_percent: num_in(
+            st,
+            "infill_percent",
+            d.infill_percent,
+            limits::INFILL_PERCENT,
+        ),
+        print_speed: num_in(st, "print_speed", d.print_speed, limits::PRINT_SPEED),
+        first_layer_speed: num_in(
+            st,
+            "first_layer_speed",
+            d.first_layer_speed,
+            limits::FIRST_LAYER_SPEED,
+        ),
+        travel_speed: num_in(st, "travel_speed", d.travel_speed, limits::TRAVEL_SPEED),
         supports: flag(st, "supports", d.supports),
-        support_angle: num(st, "support_angle", d.support_angle),
+        support_angle: num_in(st, "support_angle", d.support_angle, limits::SUPPORT_ANGLE),
         supports_on_plate_only: flag(st, "supports_on_plate_only", d.supports_on_plate_only),
         adhesion: Adhesion::ALL
             .into_iter()
@@ -198,10 +228,15 @@ pub fn from_json(text: &str) -> Result<Project, String> {
         ironing: flag(st, "ironing", d.ironing),
         fuzzy_skin: flag(st, "fuzzy_skin", d.fuzzy_skin),
         fuzzy_top: flag(st, "fuzzy_top", d.fuzzy_top),
-        fuzzy_top_mm: num(st, "fuzzy_top_mm", d.fuzzy_top_mm),
+        fuzzy_top_mm: num_in(st, "fuzzy_top_mm", d.fuzzy_top_mm, limits::FUZZY_TOP_MM),
         vase_mode: flag(st, "vase_mode", d.vase_mode),
-        z_hop: num(st, "z_hop", d.z_hop),
-        min_layer_time: num(st, "min_layer_time", d.min_layer_time),
+        z_hop: num_in(st, "z_hop", d.z_hop, limits::Z_HOP),
+        min_layer_time: num_in(
+            st,
+            "min_layer_time",
+            d.min_layer_time,
+            limits::MIN_LAYER_TIME,
+        ),
     };
     let quality = v
         .get("quality")
@@ -276,6 +311,18 @@ pub fn load(path: &Path) -> Result<Project, String> {
 pub fn is_project(path: &Path) -> bool {
     path.extension()
         .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION))
+}
+
+/// The path with ".printcraft" added when it lacks it. Appended, never replacing what
+/// follows a dot: "v1.2" becomes "v1.2.printcraft", not "v1.printcraft".
+pub fn with_project_extension(path: PathBuf) -> PathBuf {
+    if is_project(&path) {
+        return path;
+    }
+    let mut name = path.into_os_string();
+    name.push(".");
+    name.push(EXTENSION);
+    PathBuf::from(name)
 }
 
 fn mesh_bytes(tris: &[Triangle]) -> Vec<u8> {
@@ -470,6 +517,35 @@ mod tests {
         }
         assert!(base64_decode("abc").is_none());
         assert!(base64_decode("a=bc").is_none());
+    }
+
+    #[test]
+    fn out_of_range_values_are_held_to_the_settings_limits() {
+        let p = from_json(
+            r#"{"format":"printcraft-project","version":1,
+            "printer":{"bed_x":5,"retract_speed":0},
+            "filament":{"nozzle_temp":1000,"bed_temp":4294967297},
+            "settings":{"walls":4000000,"print_speed":0,"travel_speed":-3}}"#,
+        )
+        .unwrap();
+        assert_eq!(p.printer.bed_x, *limits::PLATE_MM.start());
+        assert!(p.printer.retract_speed >= 1.0);
+        assert_eq!(p.filament.nozzle_temp, *limits::NOZZLE_TEMP.end());
+        assert_eq!(p.filament.bed_temp, *limits::BED_TEMP.end(), "no u32 wrap");
+        assert_eq!(p.settings.walls, *limits::WALLS.end());
+        assert_eq!(p.settings.print_speed, *limits::PRINT_SPEED.start());
+        assert_eq!(p.settings.travel_speed, *limits::TRAVEL_SPEED.start());
+    }
+
+    #[test]
+    fn save_as_appends_the_extension_instead_of_replacing_a_dotted_name() {
+        let p = |s: &str| with_project_extension(PathBuf::from(s));
+        assert_eq!(p("/x/v1.2"), PathBuf::from("/x/v1.2.printcraft"));
+        assert_eq!(p("/x/plate"), PathBuf::from("/x/plate.printcraft"));
+        assert_eq!(
+            p("/x/plate.PrintCraft"),
+            PathBuf::from("/x/plate.PrintCraft")
+        );
     }
 
     #[test]

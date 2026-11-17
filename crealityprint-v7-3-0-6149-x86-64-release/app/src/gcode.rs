@@ -100,6 +100,34 @@ fn path_length(points: &[Point2], closed: bool) -> f32 {
     }
 }
 
+/// The absolute extruder position (M82) and the filament pushed so far. Kept in f64:
+/// E grows for the whole print, and an f32 at a 1 kg print's E (~330 m) only resolves
+/// ~0.03 mm, which would swallow or double the short moves of fuzzy skin.
+#[derive(Debug, Default)]
+struct Extruder {
+    e: f64,
+    extruded: f64,
+}
+
+impl Extruder {
+    /// Pushes `mm` of filament; returns the new absolute E.
+    fn extrude(&mut self, mm: f32) -> f64 {
+        self.e += mm as f64;
+        self.extruded += mm as f64;
+        self.e
+    }
+
+    fn retract(&mut self, mm: f32) -> f64 {
+        self.e -= mm as f64;
+        self.e
+    }
+
+    fn unretract(&mut self, mm: f32) -> f64 {
+        self.e += mm as f64;
+        self.e
+    }
+}
+
 /// Index of the point a closed loop should start from.
 #[cfg(test)]
 pub fn seam_start(pts: &[Point2], nozzle: Point2, seam: SeamPosition, salt: usize) -> usize {
@@ -328,8 +356,7 @@ pub fn generate(
     let prime_e = purge.filament_mm;
     let _ = writeln!(g, "G92 E0");
 
-    let mut e = 0.0f32;
-    let mut total_e = prime_e;
+    let mut ext = Extruder::default();
     let mut seconds = WARMUP_SECONDS + purge.seconds;
     let mut pos = Point2::new(purge.end.x - ox, purge.end.y - oy);
     let mut retracted = false;
@@ -391,7 +418,7 @@ pub fn generate(
             if travel > 0.01 {
                 let retract = travel > RETRACT_MIN_TRAVEL_MM && printer.retract_length > 0.0;
                 if retract && !retracted {
-                    e -= printer.retract_length;
+                    let e = ext.retract(printer.retract_length);
                     let _ = writeln!(g, "G1 E{:.5} F{:.0}", e, printer.retract_speed * 60.0);
                     retracted = true;
                     seconds += printer.retract_length / printer.retract_speed * 2.0;
@@ -413,7 +440,7 @@ pub fn generate(
                 if s.z_hop > 0.0 {
                     let _ = writeln!(g, "G1 Z{:.3} F600", layer.z);
                 }
-                e += printer.retract_length;
+                let e = ext.unretract(printer.retract_length);
                 let _ = writeln!(g, "G1 E{:.5} F{:.0}", e, printer.retract_speed * 60.0);
                 retracted = false;
             }
@@ -440,8 +467,7 @@ pub fn generate(
                 }
                 done_len += len;
                 let de = filament_for(len, lw, layer.height, filament.diameter) * flow;
-                e += de;
-                total_e += de;
+                let e = ext.extrude(de);
                 seconds += len / speed;
                 let z = if climb {
                     format!(
@@ -481,7 +507,7 @@ pub fn generate(
 
     let top = result.layers.last().map(|l| l.z).unwrap_or(0.0);
     let _ = writeln!(g, ";END");
-    let _ = writeln!(g, "G1 E{:.5} F2400 ; retract", e - 2.0);
+    let _ = writeln!(g, "G1 E{:.5} F2400 ; retract", ext.e - 2.0);
     let _ = writeln!(g, "G0 Z{:.2} F600", (top + 10.0).min(printer.max_z));
     let _ = writeln!(
         g,
@@ -495,6 +521,7 @@ pub fn generate(
     let _ = writeln!(g, "M84 ; motors off");
 
     let seconds = seconds * ACCELERATION_ALLOWANCE;
+    let total_e = (prime_e as f64 + ext.extruded) as f32;
     let volume_cm3 = total_e * std::f32::consts::PI * (filament.diameter / 2.0).powi(2) / 1000.0;
     let grams = volume_cm3 * filament.density;
     let estimate = Estimate {
@@ -527,6 +554,22 @@ mod tests {
         // 100 mm of 0.4 x 0.2 line = 8 mm³ → 8 / 2.405 mm² ≈ 3.326 mm of 1.75 filament.
         let e = filament_for(100.0, 0.4, 0.2, 1.75);
         assert!((e - 3.326).abs() < 0.01);
+    }
+
+    #[test]
+    fn extruder_keeps_short_moves_exact_late_in_a_long_print() {
+        let mut ext = Extruder {
+            e: 330_000.0,
+            extruded: 330_000.0,
+        };
+        let before = ext.e;
+        let after = ext.extrude(0.0175);
+        assert!(
+            ((after - before) - 0.0175).abs() < 1e-6,
+            "{}",
+            after - before
+        );
+        assert_eq!(ext.retract(0.8), after - 0.8f32 as f64);
     }
 
     /// Every Z written while printing a layer, by layer number.

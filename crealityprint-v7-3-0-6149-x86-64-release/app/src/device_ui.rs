@@ -511,22 +511,27 @@ impl DevicePage {
 
     fn poll_scan(&mut self, ctx: &egui::Context) {
         let Some(scan) = &self.scan else { return };
-        if let Ok(found) = scan.rx.try_recv() {
-            // Every printer found is kept in the known list for next time.
-            let now = chrono::Utc::now().timestamp();
-            let mut changed = false;
-            for p in &found {
-                changed |= self.known.remember(p, now);
+        let found = match scan.rx.try_recv() {
+            Ok(found) => found,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                return;
             }
-            if changed {
-                let _ = self.known.save();
-            }
-            self.found = found;
-            self.scan = None;
-            self.scanned_once = true;
-        } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            // The search thread ended without an answer: stop spinning, nothing found.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        // Every printer found is kept in the known list for next time.
+        let now = chrono::Utc::now().timestamp();
+        let mut changed = false;
+        for p in &found {
+            changed |= self.known.remember(p, now);
         }
+        if changed {
+            let _ = self.known.save();
+        }
+        self.found = found;
+        self.scan = None;
+        self.scanned_once = true;
     }
 
     /// Once a connection works, keeps the printer in the known list under the name it
@@ -1404,11 +1409,7 @@ impl DevicePage {
                             cmds.push(Command::RefreshHistory);
                         }
                     }
-                    let mut rows: Vec<HistoryEntry> = self.records.clone();
-                    if let Some(h) = &s.history {
-                        rows.extend(h.iter().cloned());
-                    }
-                    rows.sort_by(|a, b| b.ended.cmp(&a.ended));
+                    let rows = merge_records(&self.records, s.history.as_deref().unwrap_or(&[]));
                     if rows.is_empty() {
                         let text = if from_printer && s.history.is_none() {
                             "Asking the printer for its records…"
@@ -1780,9 +1781,47 @@ fn file_size(bytes: u64) -> String {
     }
 }
 
+/// How far apart this app's and the printer's end times may be for one print.
+const SAME_PRINT_SECONDS: i64 = 300;
+
+/// This app's records plus the printer's history, newest first. A print the printer
+/// also lists (same name, ended within a few minutes) is shown once, as the printer has it.
+fn merge_records(app: &[HistoryEntry], printer: &[HistoryEntry]) -> Vec<HistoryEntry> {
+    let on_printer = |r: &HistoryEntry| {
+        printer.iter().any(|p| {
+            p.name == r.name
+                && matches!((p.ended, r.ended), (Some(a), Some(b)) if (a - b).abs() <= SAME_PRINT_SECONDS)
+        })
+    };
+    let mut rows: Vec<HistoryEntry> = app.iter().filter(|r| !on_printer(r)).cloned().collect();
+    rows.extend(printer.iter().cloned());
+    rows.sort_by(|a, b| b.ended.cmp(&a.ended));
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_print_the_printer_also_lists_is_shown_once() {
+        let entry = |name: &str, ended: i64| HistoryEntry {
+            name: name.into(),
+            outcome: "Finished".into(),
+            ended: Some(ended),
+            duration_s: None,
+        };
+        let app = [entry("cube.gcode", 1_000), entry("only-here.gcode", 500)];
+        let printer = [entry("cube.gcode", 1_030), entry("older.gcode", 100)];
+        let rows = merge_records(&app, &printer);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["cube.gcode", "only-here.gcode", "older.gcode"]);
+        assert_eq!(
+            rows[0].ended,
+            Some(1_030),
+            "the printer's own entry is kept"
+        );
+    }
 
     #[test]
     fn times_read_like_the_printer_screen() {

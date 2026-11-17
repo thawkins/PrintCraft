@@ -4,8 +4,10 @@
 //!   printcraft [MODEL.stl ...]                      open the app (optionally with models)
 //!   printcraft --screenshot OUT.png [MODEL.stl ...] open, draw ~120 frames, save a picture, quit
 //!   printcraft --slice MODEL.stl [...] --output OUT.gcode [--quality fine|standard|draft]
-//!              [--filament pla|petg|abs|tpu] [--printer 1-4] [--supports] [--brim]
+//!              [--filament pla|petg|abs|tpu] [--printer 1-10] [--supports] [--brim]
 //!                                                   slice without a window
+//!
+//! `printcraft --help` lists every option (preview, printer connection and more).
 
 mod app;
 mod device_ui;
@@ -268,7 +270,14 @@ fn slice_without_window(args: &Args) -> ExitCode {
         {
             Some(x) => settings.seam = *x,
             None => {
-                eprintln!("printcraft: unknown seam \"{p}\" (use nearest, rear or random)");
+                let names: Vec<String> = profiles::SeamPosition::ALL
+                    .iter()
+                    .map(|x| x.label().to_ascii_lowercase())
+                    .collect();
+                eprintln!(
+                    "printcraft: unknown seam \"{p}\" (use {})",
+                    names.join(", ")
+                );
                 return ExitCode::from(2);
             }
         }

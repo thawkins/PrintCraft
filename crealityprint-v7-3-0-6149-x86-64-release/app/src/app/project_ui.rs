@@ -82,10 +82,7 @@ impl PrintCraftApp {
     }
 
     fn new_project(&mut self) {
-        self.objects.clear();
-        self.plate.clear();
-        self.selected = None;
-        self.drag = Drag::None;
+        self.clear_plate();
         self.sliced = None;
         self.project_path = None;
         self.mode = Mode::Prepare;
@@ -139,6 +136,7 @@ impl PrintCraftApp {
         self.selected = None;
         self.drag = Drag::None;
         self.sliced = None;
+        self.cancel_slice();
         self.mode = Mode::Prepare;
         // The printer device: looked for, then selected only if it is there.
         match p.device {
@@ -165,15 +163,12 @@ impl PrintCraftApp {
             .map(|s| s.to_string_lossy().into_owned())
             .or_else(|| self.objects.first().map(|o| o.name.clone()))
             .unwrap_or_else(|| "plate".into());
-        if let Some(mut path) = rfd::FileDialog::new()
+        if let Some(path) = rfd::FileDialog::new()
             .add_filter("PrintCraft project", &[project::EXTENSION])
             .set_file_name(format!("{name}.{}", project::EXTENSION))
             .save_file()
         {
-            if !project::is_project(&path) {
-                path.set_extension(project::EXTENSION);
-            }
-            self.save_to(&path);
+            self.save_to(&project::with_project_extension(path));
         }
     }
 

@@ -3,6 +3,31 @@
 //! Every number here is an estimate from common 3D-printing practice (clean-room build:
 //! the original program was not studied). See MECHANICS.md.
 
+/// The allowed range of each setting a person can change. The settings panel offers
+/// exactly these, and a project file is held to them when it is opened.
+pub mod limits {
+    use std::ops::RangeInclusive;
+
+    pub const PLATE_MM: RangeInclusive<f32> = 50.0..=1000.0;
+    pub const RETRACT_MM: RangeInclusive<f32> = 0.0..=10.0;
+    pub const PURGE_MM: RangeInclusive<f32> = 0.0..=100.0;
+    pub const NOZZLE_TEMP: RangeInclusive<u32> = 150..=300;
+    pub const BED_TEMP: RangeInclusive<u32> = 0..=120;
+    pub const FAN_PERCENT: RangeInclusive<u32> = 0..=100;
+    pub const LAYER_HEIGHT: RangeInclusive<f32> = 0.04..=0.4;
+    pub const FIRST_LAYER_HEIGHT: RangeInclusive<f32> = 0.08..=0.4;
+    pub const WALLS: RangeInclusive<u32> = 1..=10;
+    pub const SOLID_LAYERS: RangeInclusive<u32> = 0..=20;
+    pub const FUZZY_TOP_MM: RangeInclusive<f32> = 0.02..=0.3;
+    pub const INFILL_PERCENT: RangeInclusive<f32> = 0.0..=100.0;
+    pub const SUPPORT_ANGLE: RangeInclusive<f32> = 30.0..=80.0;
+    pub const PRINT_SPEED: RangeInclusive<f32> = 10.0..=500.0;
+    pub const FIRST_LAYER_SPEED: RangeInclusive<f32> = 5.0..=100.0;
+    pub const TRAVEL_SPEED: RangeInclusive<f32> = 20.0..=600.0;
+    pub const MIN_LAYER_TIME: RangeInclusive<f32> = 0.0..=120.0;
+    pub const Z_HOP: RangeInclusive<f32> = 0.0..=2.0;
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Printer {
     pub name: String,

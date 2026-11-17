@@ -154,10 +154,11 @@ fn compose(a: &Transform, b: &Transform) -> Transform {
     [x.x, x.y, x.z, y.x, y.y, y.z, z.x, z.y, z.z, o.x, o.y, o.z]
 }
 
-/// Reads the core 3MF model XML: object meshes, components and build items.
-/// What one model part holds.
+/// What one model part holds: object meshes, components and build items.
 #[derive(Default)]
 struct ModelPart {
+    /// Millimetres per model unit, from `<model unit="…">` (None when not given: mm).
+    mm_per_unit: Option<f32>,
     meshes: HashMap<String, Vec<Triangle>>,
     /// Object id → its components: (part the child lives in, child object id, transform).
     components: HashMap<String, Vec<(Option<String>, String, Transform)>>,
@@ -173,12 +174,26 @@ fn attr_any<'a>(t: &Tag<'a>, local: &str) -> Option<&'a str> {
         .map(|(_, v)| *v)
 }
 
+/// The 3MF core spec's units, in millimetres.
+fn mm_per_unit(unit: &str) -> Option<f32> {
+    Some(match unit {
+        "micron" => 0.001,
+        "millimeter" => 1.0,
+        "centimeter" => 10.0,
+        "inch" => 25.4,
+        "foot" => 304.8,
+        "meter" => 1000.0,
+        _ => return None,
+    })
+}
+
 fn parse_part(xml: &str) -> ModelPart {
     let mut part = ModelPart::default();
     let mut current: Option<String> = None;
     let mut verts: Vec<Vec3> = Vec::new();
     for t in tags(xml) {
         match t.name {
+            "model" => part.mm_per_unit = attr(&t, "unit").and_then(mm_per_unit),
             "object" => {
                 current = attr(&t, "id").map(str::to_string);
                 verts.clear();
@@ -273,6 +288,12 @@ pub fn parse_3mf_package(root: &str, parts: &HashMap<String, String>) -> Result<
     if triangles.is_empty() {
         return Err("The 3MF file has no triangles in it.".into());
     }
+    // The main model's unit covers the whole package; slicing works in millimetres.
+    if let Some(scale) = main.mm_per_unit.filter(|s| *s != 1.0) {
+        for v in triangles.iter_mut().flatten() {
+            *v = Vec3::new(v.x * scale, v.y * scale, v.z * scale);
+        }
+    }
     Ok(Mesh { triangles })
 }
 
@@ -287,6 +308,22 @@ pub fn parse_3mf_model(xml: &str) -> Result<Mesh, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn honours_the_3mf_model_unit() {
+        let model = |unit: &str| {
+            format!(
+                r#"<model unit="{unit}"><resources><object id="1"><mesh><vertices>
+                <vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="2"/>
+                </vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object>
+                </resources><build><item objectid="1"/></build></model>"#
+            )
+        };
+        let height = |unit: &str| parse_3mf_model(&model(unit)).unwrap().bounds().size().z;
+        assert!((height("millimeter") - 2.0).abs() < 1e-5);
+        assert!((height("inch") - 50.8).abs() < 1e-3);
+        assert!((height("centimeter") - 20.0).abs() < 1e-4);
+    }
 
     #[test]
     fn obj_face_with_a_bad_corner_is_skipped_not_refanned() {
