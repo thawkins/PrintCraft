@@ -1,18 +1,15 @@
 # Handoff
 
-Round: Repetier-Firmware support over USB. Sources: the RepRap wiki pages "Repetier-Firmware" and "G-code", captured as shots/repetier_wiki and shots/gcode_wiki (evidence ev_35f2…, ev_adf5…).
-- printer/mod.rs: Firmware enum {Marlin, Klipper, Repetier} with from_name and level_command (G29 / BED_MESH_CALIBRATE / G32). New firmware_name(M115 line) parser. New PrinterStatus.firmware.
-- calibration.rs: calibration_lines and with_calibration take a Firmware; added REPETIER_LEVEL "G32".
-- device_ui:
-  - firmware() is Klipper when the API is Klipper, otherwise the detected status.firmware.
-  - send_job uses it.
-  - The USB note now says "Marlin, Prusa or Repetier".
-- usb.rs:
-  - The session sends M115 first; Notice parsing (Firmware / Restarted "start" / Fatal / Error).
-  - Streamer has a firmware field; start(gcode, name).
-  - Repetier: M530 S1 L / M531 name (cleaned, 40 chars) / M532 X.x L on each 0.1% or new layer / M530 S0 at the end and on stop; no M155; M105 every 3 s while printing.
-  - All firmwares: resend forms rs:N, N:, and "wait" clears waiting_ok.
-- Tests: 5 new usb tests, calibration repetier_printers_get_g32, and an end-to-end test (printer/tests.rs) with a pretend Repetier printer on a TTYPort::pair pty. nextest 153 pass.
-- Docs: PRINTER_LINK.md 3b/3c/6/7 and FEATURES.md.
-- Unknown recorded: real Repetier behaviour. Repetier-Server (network) is not supported.
-- Clean room kept: the protected AppImage was never read; only public reprap.org pages.
+Round: maximise button on the enlarged camera window.
+- device_ui camera_window:
+  - Custom title bar (title_bar(false)) with drawn window_button icons: Maximise (square), Restore (two squares) and Close (cross; red when hovered).
+  - Maximised uses a separate window id "camera_max" with fixed_rect(content_rect.shrink(6)), not movable or resizable; restore returns to the "camera_window" id's own size and place.
+  - Double-clicking the title toggles; Esc restores.
+  - New fields camera_max and camera_wanted (opens the camera once its first frame arrives); show_camera_when_ready().
+- New option --camera big|max (main.rs, StartOptions.camera).
+- New test escape_restores_a_maximised_camera_and_closing_resets_it.
+- Fixed a flaky Repetier USB test: the pretend board no longer closes its pty right after the last line; it passed 6 runs in a row.
+- Checks: nextest 156 pass. Clippy shows only the 3 old warnings.
+- Screenshots: shots/camera_big.png and shots/camera_max.png, taken against shots/fake/fake_printer.py (127.0.0.1:7125 and :8080, runs 40 s).
+- Docs: PRINTER_LINK.md 4a Camera line.
+- Clean room kept.

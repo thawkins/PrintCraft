@@ -10,7 +10,7 @@
   "status": "ready",
   "note": "Ready: 2 of 3 checks pass; 1 comparison remains unverified. 5 questions about the original are still open.",
   "created_ms": 1794757102676,
-  "updated_ms": 1794912259197,
+  "updated_ms": 1794921373069,
   "checks": [
     {
       "round": 1,
@@ -683,6 +683,70 @@
       "unknowns": [
         "Mechanics behavior has not been measured against app/mechanics.json."
       ]
+    },
+    {
+      "round": 22,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794919026523
+    },
+    {
+      "round": 22,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794919028900
+    },
+    {
+      "round": 22,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 131 values (37 with a source, 94 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794919028914,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
+    },
+    {
+      "round": 23,
+      "check": "build",
+      "passed": true,
+      "similarity": null,
+      "note": "Build succeeded.",
+      "artifacts": [],
+      "at_ms": 1794921354089
+    },
+    {
+      "round": 23,
+      "check": "app-screenshot",
+      "passed": true,
+      "similarity": null,
+      "note": "The program starts and draws (1912×1048). It looks about 53% like reference/picture-3.png.",
+      "artifacts": [
+        "checks/round-0/screenshot.png"
+      ],
+      "at_ms": 1794921356407
+    },
+    {
+      "round": 23,
+      "check": "mechanics",
+      "passed": true,
+      "similarity": null,
+      "note": "app/mechanics.json has 131 values (37 with a source, 94 estimated). The sheet is readable; its behavior is unverified. No runtime measurement was compared with these values. A source literal or a core-loop self-test alone cannot establish that the build uses them.",
+      "artifacts": [],
+      "at_ms": 1794921356421,
+      "unknowns": [
+        "Mechanics behavior has not been measured against app/mechanics.json."
+      ]
     }
   ],
   "agent_session": "f1695ce9-5b54-4b25-aa0b-1d2f83a226e7",
@@ -693,7 +757,7 @@
     "tool:web_site_open",
     "tool:build_command_run"
   ],
-  "last_reply": "I decided to keep the clean room, so I haven't opened, decompiled or read the CrealityPrint program, and the build is unchanged. The project's rules forbid reading that program, so everything comes from your requests, the reference pictures and public documentation such as the RepRap wiki. If you want values taken from the original, tell me plainly that the AppImage rule is lifted; otherwise switch Deep mode off in Craft Anything's settings and this request will stop appearing.",
+  "last_reply": "I decided to keep the clean room, so I haven't opened, decompiled or read the CrealityPrint program and the build hasn't changed. The project's rules forbid reading that program, so everything comes from your requests, the reference pictures and public documentation. If you want values taken from the original, tell me plainly that the AppImage rule is lifted; otherwise switch Deep mode off in Craft Anything's settings and this request will stop appearing.",
   "asset_budget_usd": 5.0,
   "generate_assets": false
 }
