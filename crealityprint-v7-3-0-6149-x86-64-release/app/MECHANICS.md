@@ -212,6 +212,12 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     after Eberly) is filled by ear clipping. The lower part gets the cap facing up, the
     upper part the same cap facing down, and is then turned half a turn about X.
 
+17. **Split to objects** (`src/split.rs`, gap plan M3.6). Triangles sharing a corner
+    (the same point exactly) are joined with a union-find; each group is a piece. A
+    piece with negative volume (an inside wall) joins the smallest outward piece whose
+    box holds it. Each piece becomes an object centred where it stood, with the turn and
+    scale built in; pieces always rest on the plate.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

@@ -68,6 +68,7 @@ enum ObjectAction {
     Duplicate,
     Delete,
     Cut,
+    Split,
 }
 
 struct Sliced {
@@ -444,7 +445,28 @@ impl PrintCraftApp {
             ObjectAction::Duplicate => self.duplicate_selected(),
             ObjectAction::Delete => self.delete_selected(),
             ObjectAction::Cut => self.cut_selected(),
+            ObjectAction::Split => self.split_selected(),
         }
+    }
+
+    /// Replaces the selected object with one object per separate piece of it, each left
+    /// where it stood (the first selected).
+    fn split_selected(&mut self) {
+        let Some(i) = self.selected.filter(|&i| i < self.objects.len()) else {
+            return;
+        };
+        let parts = self.objects[i].split();
+        let name = self.objects[i].name.clone();
+        if parts.len() < 2 {
+            self.status = format!("{name} is one piece: there is nothing to split.");
+            return;
+        }
+        let count = parts.len();
+        self.drag = Drag::None;
+        self.objects.splice(i..=i, parts);
+        self.selected = Some(i);
+        self.refresh_plate();
+        self.status = format!("Split {name} into {count} objects.");
     }
 
     /// Cuts the selected object at `cut_z`, replacing it with the parts `cut_keep` asks
@@ -2184,6 +2206,13 @@ fn object_buttons(ui: &mut Ui, o: &mut PlacedObject) -> (bool, Option<ObjectActi
         if ui.button("Delete").clicked() {
             action = Some(ObjectAction::Delete);
         }
+        if ui
+            .button("Split")
+            .on_hover_text("Make each separate piece of this part an object of its own")
+            .clicked()
+        {
+            action = Some(ObjectAction::Split);
+        }
     });
     (changed, action)
 }
@@ -2550,6 +2579,37 @@ mod tests {
 
     fn cube(name: &str) -> PlacedObject {
         PlacedObject::new(name, Mesh::cube(Vec3::new(10.0, 10.0, 10.0)))
+    }
+
+    #[test]
+    fn test_split_selected_object_into_its_pieces() {
+        let mut app = PrintCraftApp::for_tests();
+        let mut tris = Mesh::cube(Vec3::new(10.0, 10.0, 10.0)).triangles;
+        tris.extend(
+            Mesh::cube(Vec3::new(4.0, 4.0, 4.0))
+                .triangles
+                .iter()
+                .map(|t| t.map(|v| v + Vec3::new(20.0, 0.0, 0.0))),
+        );
+        app.add_object(PlacedObject::new("pair", Mesh { triangles: tris }));
+        app.note_changes(true);
+        app.apply_to_selected(ObjectAction::Split);
+        assert_eq!(app.status, "Split pair into 2 objects.");
+        assert_eq!(app.objects.len(), 2);
+        assert_eq!(app.plate.len(), 2);
+        // The pieces stay 20 mm apart, as they were.
+        let gap = app.object_bounds(1).center().x - app.object_bounds(0).center().x;
+        assert!((gap - 20.0).abs() < 1e-3, "{gap}");
+        app.note_changes(true);
+        app.undo();
+        assert_eq!(app.objects.len(), 1);
+        // A part in one piece is left alone.
+        app.selected = Some(0);
+        app.objects[0] = PlacedObject::new("box", Mesh::cube(Vec3::new(5.0, 5.0, 5.0)));
+        app.refresh_plate();
+        app.apply_to_selected(ObjectAction::Split);
+        assert_eq!(app.objects.len(), 1);
+        assert_eq!(app.status, "box is one piece: there is nothing to split.");
     }
 
     #[test]

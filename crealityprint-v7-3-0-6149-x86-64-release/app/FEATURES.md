@@ -26,6 +26,7 @@ Status:
 | Lay on face | **Yes (new)**: the Face tool (F) highlights the flat face under the mouse in orange and lays the part on it with a click; "Lay flat" still puts the biggest flat face down |
 | Mesh repair | **Yes (new)**: on import, merges points less than 0.0001 mm apart, removes collapsed faces, turns faces the right way out and closes simple holes; the status bar says what was fixed |
 | Cut tool | **Yes (new)**: horizontal cut at a chosen height ("Cut at" on the Objects tab), keeping both parts, the lower or the upper; cut faces are closed and the upper part is turned onto its cut face |
+| Split to objects | **Yes (new)**: Split in the Selected object card makes each separate piece its own object, where it stood |
 | Modifiers, height range modifiers, per-object settings | Not yet |
 | Variable layer height | Not yet |
 | Multiple plates, sequential (one-at-a-time) printing | Not yet |

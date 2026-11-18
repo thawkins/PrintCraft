@@ -468,6 +468,23 @@ impl PlacedObject {
         Bounds::of(self.world_triangles().iter().flatten().copied())
     }
 
+    /// One object per separate piece (shell) of this one, with its turn and scale built
+    /// in, each standing where that piece stood (on the plate: a piece above another
+    /// drops onto it). One piece gives one object.
+    pub fn split(&self) -> Vec<PlacedObject> {
+        let shells = crate::split::shells(&self.world_triangles());
+        shells
+            .into_iter()
+            .enumerate()
+            .map(|(n, m)| {
+                let c = m.bounds().center();
+                let mut o = PlacedObject::new(format!("{} {}", self.name, n + 1), m);
+                (o.x, o.y, o.extruder) = (c.x, c.y, self.extruder);
+                o
+            })
+            .collect()
+    }
+
     /// The parts of this object below and above `z` mm over the plate, as new objects
     /// with its turn and scale built in, standing where it stood. The upper part is
     /// turned over so its cut face rests on the plate. Empty parts are left out, as
@@ -668,6 +685,50 @@ mod tests {
     fn world_normal(o: &PlacedObject, i: usize) -> Vec3 {
         let t = o.world_triangles()[i];
         (t[1] - t[0]).cross(t[2] - t[0]).normalized()
+    }
+
+    #[test]
+    fn test_split_object_gives_one_object_per_piece_where_it_stood() {
+        // Two boxes side by side in one mesh, the part turned a quarter turn and moved.
+        let mut tris = Mesh::cube(Vec3::new(10.0, 10.0, 10.0)).triangles;
+        tris.extend(
+            Mesh::cube(Vec3::new(4.0, 4.0, 4.0))
+                .triangles
+                .iter()
+                .map(|t| t.map(|v| v + Vec3::new(20.0, 0.0, 0.0))),
+        );
+        let mut o = PlacedObject::new("pair", Mesh { triangles: tris });
+        o.rotation.z = 90.0;
+        (o.x, o.y) = (50.0, 0.0);
+        let before: Vec<Bounds> = {
+            let world = o.world_triangles();
+            vec![
+                Bounds::of(world[..12].iter().flatten().copied()),
+                Bounds::of(world[12..].iter().flatten().copied()),
+            ]
+        };
+        let parts = o.split();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].name, "pair 1");
+        assert_eq!(parts[1].name, "pair 2");
+        for (p, b) in parts.iter().zip(&before) {
+            let now = p.world_bounds();
+            assert!(
+                (now.center().x - b.center().x).abs() < 1e-3,
+                "{now:?} vs {b:?}"
+            );
+            assert!(
+                (now.center().y - b.center().y).abs() < 1e-3,
+                "{now:?} vs {b:?}"
+            );
+            assert!((now.size().z - b.size().z).abs() < 1e-3);
+        }
+        assert_eq!(
+            PlacedObject::new("box", Mesh::cube(Vec3::new(5.0, 5.0, 5.0)))
+                .split()
+                .len(),
+            1
+        );
     }
 
     #[test]

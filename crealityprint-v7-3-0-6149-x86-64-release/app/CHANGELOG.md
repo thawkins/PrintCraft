@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Split to objects (gap plan task M3.6): a Split button in the Selected object card
+  makes each separate piece of a part an object of its own, left where it stood (a
+  print-in-place model's gears, for example). The inside wall of a hollow stays with
+  the piece around it. Undo puts the part back together.
 - Planar cut (gap plan task M3.5). The Selected object card on the Objects tab has a
   "Cut at" row: a height, which parts to keep (both, lower or upper) and a Cut button.
   While the mouse is over the row, an orange plane shows where the cut goes. The part

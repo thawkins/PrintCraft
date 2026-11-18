@@ -32,6 +32,7 @@ mod recent;
 mod repair;
 mod settings_registry;
 mod slicer;
+mod split;
 mod theme;
 mod thumbnail;
 mod tool_icons;

@@ -79,7 +79,7 @@ Goal: a model can be fixed, cut and placed without another tool.
 | M3.3 | **Done.** **Lay flat on a picked face.** In "Lay flat" mode, hovering highlights the coplanar face group under the cursor and a click puts it down. | Test: picking each face of a rotated cube lands it flat. Screenshot. | 2 |
 | M3.4 | **Done.** **Mesh repair.** On import: merge duplicate vertices, fix inconsistent winding, close simple holes (fan fill), drop degenerate triangles. Report what was fixed in the status line. | Tests: a cube with a missing face and flipped normals slices to the same layers as a clean cube. | 2.5 |
 | M3.5 | **Done.** **Planar cut.** Cut at a Z height (horizontal plane first), keep upper, lower or both parts, cap the cut faces, and lay the parts flat. | Test: cutting a cube at half height gives two closed meshes of half the volume. | 3 |
-| M3.6 | **Split to objects.** Split a mesh with disconnected shells into separate objects. | Test: a two-shell mesh becomes 2 objects. | 1 |
+| M3.6 | **Done.** **Split to objects.** Split a mesh with disconnected shells into separate objects. | Test: a two-shell mesh becomes 2 objects. | 1 |
 
 ## M4: Per-object and per-region settings (0.4.0)
 
