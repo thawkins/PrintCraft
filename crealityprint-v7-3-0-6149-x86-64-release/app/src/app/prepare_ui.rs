@@ -914,7 +914,8 @@ fn auto_row(
     changed
 }
 
-/// Minimum layer time, z-hop, and bridge flow and fan (Advanced only).
+/// Minimum layer time, z-hop, avoid crossing walls, and bridge flow and fan (Advanced
+/// only).
 fn cooling_and_travel_group(ui: &mut Ui, s: &mut PrintSettings) {
     group(ui, "Cooling and travel", |ui| {
         row(
@@ -926,6 +927,11 @@ fn cooling_and_travel_group(ui: &mut Ui, s: &mut PrintSettings) {
                 .suffix(" s"),
         );
         row(ui, "Z-hop", mm(&mut s.z_hop, limits::Z_HOP, 0.05));
+        ui.label("Avoid crossing walls").on_hover_text(
+            "Travel along the inside of the outer wall instead of out over air or across holes, and retract only when a travel must leave the part",
+        );
+        ui.checkbox(&mut s.avoid_crossing_walls, "");
+        ui.end_row();
         ui.label("Bridge flow")
             .on_hover_text("Plastic on bridge lines, as a share of a normal line");
         ui.add(

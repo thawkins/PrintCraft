@@ -182,6 +182,16 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   (M82) is used.
 * **Retraction.** Before any travel longer than 2 mm, retract by the printer's retraction
   length, then un-retract before printing.
+* **Avoid crossing walls** (`travel.rs`, gap plan M1.6; Advanced, off by default, as in
+  PrusaSlicer). The layer's outer wall loops, widened by 0.45 line width to the part's
+  surface, are the boundaries. A travel that leaves the part through a loop and comes
+  back through the same loop (across a slot, round a concave bay, over a hole) instead
+  walks along that outer wall loop, the shorter way round, between the points nearest
+  where it went out and came back in. Such a travel stays inside and is **not
+  retracted** (and gets no z-hop or wipe). A travel that starts or ends outside the part,
+  goes to another island, or whose route is more than **2×** the straight distance, is
+  made as before: straight, retracted when over 2 mm. On the ORBIT fixture this cuts the
+  retraction lines from 18,208 to 6,720.
 * **Speeds.** The first layer prints at the first-layer speed. After that, each kind of
   line has its own speed (Advanced: outer wall, inner wall, sparse infill, solid infill,
   top surface, support, bridge). Each starts on "Auto": outer walls and bridges at 50 %

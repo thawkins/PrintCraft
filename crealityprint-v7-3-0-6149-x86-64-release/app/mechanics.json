@@ -31,6 +31,8 @@
     {"name": "bridge speed (Auto)", "group": "speed", "value": 50, "unit": "% of print speed", "estimated": true},
     {"name": "bridge flow", "group": "quality", "value": 95, "unit": "% of a normal line, 50-150", "estimated": true},
     {"name": "bridge fan", "group": "cooling", "value": 100, "unit": "%", "estimated": true},
+    {"name": "avoid crossing walls: longest detour", "group": "travel", "value": 2, "unit": "x straight distance", "estimated": true},
+    {"name": "avoid crossing walls: surface from outer wall", "group": "travel", "value": 0.45, "unit": "x line width", "estimated": true},
     {"name": "smallest gap filled", "group": "quality", "value": 0.3, "unit": "x line width", "estimated": true},
     {"name": "widest gap-fill line", "group": "quality", "value": 1.5, "unit": "x line width", "estimated": true},
     {"name": "bridge directions tried", "group": "quality", "value": 12, "unit": "every 15 degrees", "estimated": true},

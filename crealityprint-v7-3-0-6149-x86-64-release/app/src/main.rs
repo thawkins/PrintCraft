@@ -29,6 +29,7 @@ mod slicer;
 mod theme;
 mod thumbnail;
 mod tool_icons;
+mod travel;
 mod view3d;
 mod widgets;
 mod x3g;

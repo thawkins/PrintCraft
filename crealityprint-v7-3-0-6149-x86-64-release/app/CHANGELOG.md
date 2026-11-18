@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thin walls and slots are no longer left hollow. Walls too thin for even one wall loop
   get a gap-fill line too. Models without such spaces slice exactly as before.
 
+- Avoid crossing walls (gap plan task M1.6), in Advanced, off by default. A travel that
+  would leave the part and come back (across a slot, a bay or a hole) goes round along
+  the inside of the outer wall instead, and isn't retracted. Travels that must leave
+  the part, or whose detour is over twice as long, are made as before. On the ORBIT
+  fixture this cuts retractions by 63 %. With it off, the G-code is unchanged.
+
 ### Changed
 
 - The time estimate now times every line with the printer's acceleration and corner

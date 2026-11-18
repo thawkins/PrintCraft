@@ -346,6 +346,9 @@ pub struct PrintSettings {
     pub bridge_flow: f32,
     /// The part fan while printing bridge lines (%).
     pub bridge_fan: u32,
+    /// Route travels along the inside of the outer wall instead of out over air, and
+    /// retract only for travels that must leave the part.
+    pub avoid_crossing_walls: bool,
     pub supports: bool,
     /// Overhangs steeper than this (degrees from vertical) get supports.
     pub support_angle: f32,
@@ -602,6 +605,7 @@ impl Quality {
             accels: FeatureAccels::default(),
             bridge_flow: DEFAULT_BRIDGE_FLOW,
             bridge_fan: DEFAULT_BRIDGE_FAN,
+            avoid_crossing_walls: false,
             supports: false,
             support_angle: 50.0,
             supports_on_plate_only: false,

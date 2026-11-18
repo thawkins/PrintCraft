@@ -75,6 +75,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Skirt and brim | Yes |
 | Raft | **Yes (new)**. Adhesion "Raft" puts 3 raft layers under the whole print, reaching 3 mm past it, with a 0.15 mm gap to the model. With supports on, support columns that reach the bed stand on their own small raft, even without the Raft option. A "Raft under support" switch in the Support section (on by default) turns this off. |
 | Retraction | Yes: before travels over a set length (2 mm by default). Optional: on every layer change, and a wipe back along the last line while retracting. These are set in the printer editor. |
+| Avoid crossing walls on travel | **Yes (new)**, in Advanced (off by default): travels go round inside the part instead of over air, and those aren't retracted |
 | Z-hop (lift on retraction) | **Yes (new)** |
 | Cooling: slow down short layers (minimum layer time) | **Yes (new)**: default 15 s, never below 15 mm/s |
 | Fan control | Yes (filament fan %, off on the first layer) |

@@ -4,6 +4,7 @@ use crate::geometry::Point2;
 use crate::motion;
 use crate::profiles::{AccelFeature, Filament, PrintSettings, Printer, SeamPosition, SpeedFeature};
 use crate::slicer::{Layer, PathKind, SliceResult, ToolPath};
+use crate::travel;
 use std::fmt::Write;
 
 /// Extra time per layer for slowing down, turning and layer changes.
@@ -570,6 +571,9 @@ struct Writer<'a> {
     /// The part fan now (%): off on the first layer, the filament's from the second, the
     /// bridge fan while printing bridges.
     fan_now: u32,
+    /// This layer's outer wall loops, for routing travels inside the part (only kept
+    /// with "avoid crossing walls" on).
+    walls: Vec<Vec<Point2>>,
 }
 
 /// Time for a tool change: retract, switch, prime.
@@ -721,6 +725,7 @@ impl<'a> Writer<'a> {
             by_tool,
             accel_now: [None; 2],
             fan_now: 0,
+            walls: Vec::new(),
         }
     }
 
@@ -1004,6 +1009,14 @@ impl<'a> Writer<'a> {
     /// The layer marker, the Z move (skipped while spiralling), and the part fan from
     /// the second layer on. Returns whether this layer is part of the vase spiral.
     fn begin_layer(&mut self, li: usize, layer: &Layer) -> bool {
+        if self.s.avoid_crossing_walls {
+            self.walls = layer
+                .paths
+                .iter()
+                .filter(|p| p.kind == PathKind::OuterWall && p.closed)
+                .map(|p| p.points.clone())
+                .collect();
+        }
         let _ = writeln!(self.g, ";LAYER:{li}");
         // Vase mode: above the solid bottom, the wall climbs continuously instead.
         let spiral = self.s.vase_mode && li >= self.s.bottom_layers as usize && li > 0;
@@ -1105,6 +1118,16 @@ impl<'a> Writer<'a> {
     fn travel_to(&mut self, to: Point2, z: f32) {
         let p = self.printer;
         let travel = self.pos.distance(to);
+        // Avoid crossing walls: a travel that can stay inside the part follows the route
+        // and needs no retraction; any other travel is handled as before.
+        if self.s.avoid_crossing_walls && travel > 0.01 {
+            let route = travel::inside_route(self.pos, to, &self.walls, self.line_width);
+            if let Some(route) = route {
+                self.travel_through(&route);
+                self.unretract_now();
+                return;
+            }
+        }
         let mut hopped = false;
         if travel > 0.01 {
             let retract = travel > p.retract_min_travel && p.retract_length > 0.0;
@@ -1133,6 +1156,30 @@ impl<'a> Writer<'a> {
         }
         // The next line starts un-retracted (after a travel or layer-change retraction).
         self.unretract_now();
+    }
+
+    /// Travels through `route` (G0 to each point) without retracting.
+    fn travel_through(&mut self, route: &[Point2]) {
+        let accel = self
+            .s
+            .accels
+            .accel(AccelFeature::Travel, self.printer.acceleration);
+        self.set_accel(accel, true);
+        let mut pts = vec![self.pos];
+        for q in route {
+            let _ = writeln!(
+                self.g,
+                "G0 X{:.3} Y{:.3} F{:.0}",
+                q.x + self.ox,
+                q.y + self.oy,
+                self.travel_f
+            );
+            pts.push(*q);
+        }
+        self.seconds += motion::line_time(&pts, self.s.travel_speed, accel);
+        if let Some(last) = route.last() {
+            self.pos = *last;
+        }
     }
 
     /// Prints along `pts`: one G1 per segment, with a rising Z on vase-spiral walls and
@@ -2121,6 +2168,147 @@ mod tests {
         // Gap fill is written as WALL-INNER (there is no inner wall in this strip).
         let ratio = mean("WALL-INNER") / mean("WALL-OUTER");
         assert!((ratio - 0.6).abs() < 0.08, "{ratio}");
+    }
+
+    /// A C opening to +X: 30 x 30 mm with an 8 mm wide slot cut in from the right.
+    fn c_shape() -> Vec<Point2> {
+        [
+            (-15.0, -15.0),
+            (15.0, -15.0),
+            (15.0, -7.0),
+            (-7.0, -7.0),
+            (-7.0, 7.0),
+            (15.0, 7.0),
+            (15.0, 15.0),
+            (-15.0, 15.0),
+        ]
+        .into_iter()
+        .map(|(x, y)| Point2::new(x, y))
+        .collect()
+    }
+
+    #[test]
+    fn test_travel_goes_round_the_inside_of_a_c() {
+        let (from, to) = (Point2::new(-3.0, -11.0), Point2::new(-3.0, 11.0));
+        // The outer wall runs half a line width inside the surface.
+        let wall = crate::slicer::offset_left(&c_shape(), 0.21).unwrap();
+        let route = travel::inside_route(from, to, &[wall], 0.42).expect("a route");
+        assert_eq!(*route.last().unwrap(), to);
+        let pts: Vec<Point2> = std::iter::once(from).chain(route.iter().copied()).collect();
+        let length: f32 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
+        assert!(length > 22.5 && length < 2.0 * 22.0, "{length}");
+        // Every leg stays inside the C (checked along each leg).
+        for w in pts.windows(2) {
+            for k in 0..=10 {
+                let f = k as f32 / 10.0;
+                let p = Point2::new(
+                    w[0].x + (w[1].x - w[0].x) * f,
+                    w[0].y + (w[1].y - w[0].y) * f,
+                );
+                assert!(
+                    crate::slicer::contains(&c_shape(), p),
+                    "{p:?} is outside the C"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_travel_no_route_out_of_the_part_or_round_a_long_way() {
+        let c = [crate::slicer::offset_left(&c_shape(), 0.21).unwrap()];
+        // Out to a point beyond the part: it has to cross the wall.
+        assert!(
+            travel::inside_route(Point2::new(0.0, -11.0), Point2::new(30.0, 0.0), &c, 0.42)
+                .is_none()
+        );
+        // Between the tips of the arms: round the inside is far more than twice as long.
+        let tips = (Point2::new(13.0, -11.0), Point2::new(13.0, 11.0));
+        assert!(travel::inside_route(tips.0, tips.1, &c, 0.42).is_none());
+        // A travel inside one arm needs no detour.
+        let (a, b) = (Point2::new(-10.0, -11.0), Point2::new(10.0, -11.0));
+        assert_eq!(travel::inside_route(a, b, &c, 0.42), Some(vec![b]));
+    }
+
+    /// Lines that pull the filament back (or push it forward again) after a travel.
+    fn retractions(text: &str) -> usize {
+        text.lines()
+            .filter(|l| l.starts_with("G1 E") && !l.contains(';'))
+            .count()
+    }
+
+    #[test]
+    fn test_travel_avoiding_walls_stays_inside_and_retracts_less() {
+        // The C as a 2 mm prism (side faces only: layer outlines come from them).
+        let c = c_shape();
+        let n = c.len();
+        let mut tris: Vec<Triangle> = Vec::new();
+        for i in 0..n {
+            let (a, b) = (c[i], c[(i + 1) % n]);
+            let v = |p: Point2, z: f32| Vec3::new(p.x, p.y, z);
+            tris.push([v(a, 0.0), v(b, 0.0), v(b, 2.0)]);
+            tris.push([v(a, 0.0), v(b, 2.0), v(a, 2.0)]);
+        }
+        let plain = PrintSettings::default();
+        let avoid = PrintSettings {
+            avoid_crossing_walls: true,
+            ..PrintSettings::default()
+        };
+        let printer = &Printer::presets()[0];
+        let (ox, oy) = (printer.bed_x / 2.0, printer.bed_y / 2.0);
+        let r = crate::slicer::slice(&tris, &avoid, 0.42, &|_| {});
+        let out = generate(&r, printer, &Filament::presets()[0], &avoid);
+        let before = generate(&r, printer, &Filament::presets()[0], &plain);
+        assert!(retractions(&out.text) < retractions(&before.text));
+        // Every travel that isn't after a retraction stays inside the C.
+        let (mut x, mut y, mut retracted, mut layer) = (0f32, 0f32, false, 0usize);
+        let mut checked = 0;
+        for l in out.text.lines() {
+            if l == ";END" {
+                break;
+            }
+            if let Some(k) = l.strip_prefix(";LAYER:") {
+                layer = k.parse().unwrap_or(0);
+            }
+            if l.starts_with("G1 E") && !l.contains(';') {
+                retracted = !retracted;
+            }
+            let word = |c: char| {
+                l.split_whitespace()
+                    .find_map(|w| w.strip_prefix(c).and_then(|v| v.parse::<f32>().ok()))
+            };
+            if !(l.starts_with("G0 X") || l.starts_with("G1 X")) {
+                continue;
+            }
+            let (nx, ny) = (word('X').unwrap_or(x), word('Y').unwrap_or(y));
+            if l.starts_with("G0 X") && !retracted && layer > 0 {
+                let mid = Point2::new((x + nx) / 2.0 - ox, (y + ny) / 2.0 - oy);
+                assert!(crate::slicer::contains(&c, mid), "travel over air: {l}");
+                checked += 1;
+            }
+            (x, y) = (nx, ny);
+        }
+        assert!(checked > 10, "{checked}");
+    }
+
+    #[test]
+    fn test_travel_avoiding_walls_retracts_less_on_orbit() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/models/ORBIT_ Print-in-Place Herringbone Planetary Fidget _ 5 Gears, ",
+            "0 Supports, Spins Off the Bed - 7430885/files/ORBIT-Mini_print-in-place.stl"
+        );
+        let mesh = Mesh::load(std::path::Path::new(path)).unwrap();
+        let tris = PlacedObject::new("orbit", mesh).world_triangles();
+        let plain = PrintSettings::default();
+        let avoid = PrintSettings {
+            avoid_crossing_walls: true,
+            ..PrintSettings::default()
+        };
+        let r = crate::slicer::slice(&tris, &plain, 0.42, &|_| {});
+        let printer = &Printer::presets()[0];
+        let before = retractions(&generate(&r, printer, &Filament::presets()[0], &plain).text);
+        let after = retractions(&generate(&r, printer, &Filament::presets()[0], &avoid).text);
+        assert!(after < before * 9 / 10, "{after} vs {before}");
     }
 
     #[test]
