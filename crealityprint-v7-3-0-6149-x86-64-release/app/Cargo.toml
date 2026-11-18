@@ -1,6 +1,6 @@
 [package]
 name = "printcraft"
-version = "0.0.7"
+version = "0.0.8"
 edition = "2021"
 description = "A simpler desktop slicer for 3D printers"
 
