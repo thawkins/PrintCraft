@@ -3,7 +3,7 @@
 //! `Kind` asks for. Adding a print setting to the registry adds its row here.
 
 use super::*;
-use crate::modifier::{Modifier, ModifierShape, PER_MODIFIER};
+use crate::modifier::{Modifier, ModifierKind, ModifierShape, PER_MODIFIER};
 use crate::overrides;
 use crate::settings_registry::{self, AutoContext, Group, Kind, Level, Setting, Value};
 
@@ -447,14 +447,17 @@ impl PrintCraftApp {
             egui::ComboBox::from_id_salt("add_modifier")
                 .selected_text("Add modifier...")
                 .show_ui(ui, |ui| {
-                    for shape in ModifierShape::ALL {
-                        if ui.selectable_label(false, shape.label()).clicked() {
-                            modifier_edit = Some(ModifierEdit::Add(shape));
+                    for kind in ModifierKind::ALL {
+                        if ui.selectable_label(false, kind.label()).clicked() {
+                            modifier_edit = Some(ModifierEdit::Add(kind));
                         }
                     }
                 })
                 .response
-                .on_hover_text("A volume inside which this part's infill differs");
+                .on_hover_text(
+                    "A volume inside which this part's infill differs, or that stops or \
+                     forces supports",
+                );
         });
         let part = self.objects[i].overrides.apply(&self.settings);
         if let Some(e) = own_edit {
@@ -476,7 +479,9 @@ impl PrintCraftApp {
         }
         let mods = &mut self.objects[i].modifiers;
         match modifier_edit {
-            Some(ModifierEdit::Add(shape)) => mods.push(Modifier::around_middle(shape, size)),
+            Some(ModifierEdit::Add(kind)) => {
+                mods.push(Modifier::around_middle(kind, ModifierShape::Box, size));
+            }
             Some(ModifierEdit::Remove(j)) => {
                 mods.remove(j);
             }
@@ -492,7 +497,7 @@ impl PrintCraftApp {
 
 /// A change to a part's modifiers.
 enum ModifierEdit {
-    Add(ModifierShape),
+    Add(ModifierKind),
     Remove(usize),
     Shape(usize, ModifierShape),
     Place(usize, Vec3, Vec3),
@@ -509,6 +514,7 @@ fn modifier_rows(
 ) -> Option<ModifierEdit> {
     let mut edit = None;
     ui.horizontal(|ui| {
+        ui.label(RichText::new(m.kind.label()).color(modifier_colour(m.kind)));
         let mut shape = m.shape;
         egui::ComboBox::from_id_salt(("modifier_shape", j))
             .selected_text(shape.label())
@@ -561,9 +567,36 @@ fn modifier_rows(
     if moved {
         edit = Some(ModifierEdit::Place(j, size, at));
     }
-    let id = format!("modifier{j}");
-    if let Some(e) = overrides_editor(ui, &id, &m.overrides, &PER_MODIFIER, part, "the part's") {
-        edit = Some(ModifierEdit::Settings(j, e));
+    match m.kind {
+        ModifierKind::Infill => {
+            let id = format!("modifier{j}");
+            if let Some(e) =
+                overrides_editor(ui, &id, &m.overrides, &PER_MODIFIER, part, "the part's")
+            {
+                edit = Some(ModifierEdit::Settings(j, e));
+            }
+        }
+        ModifierKind::SupportBlocker => {
+            ui.label(RichText::new("No supports for overhangs inside it.").color(theme::TEXT_DIM));
+        }
+        ModifierKind::SupportEnforcer => {
+            ui.label(
+                RichText::new(
+                    "Supports under every surface facing down inside it, even with supports \
+                     off.",
+                )
+                .color(theme::TEXT_DIM),
+            );
+        }
     }
     edit
+}
+
+/// The colour a modifier of `kind` is drawn in (see-through in the 3D view).
+pub(super) fn modifier_colour(kind: ModifierKind) -> Color32 {
+    match kind {
+        ModifierKind::Infill => theme::MODIFIER,
+        ModifierKind::SupportBlocker => theme::SUPPORT_BLOCKER,
+        ModifierKind::SupportEnforcer => theme::SUPPORT_ENFORCER,
+    }
 }

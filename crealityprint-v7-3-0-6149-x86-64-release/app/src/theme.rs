@@ -24,6 +24,9 @@ pub const WARNING: Color32 = Color32::from_rgb(240, 170, 70);
 /// Modifier volumes: a see-through blue drawn over the parts (premultiplied: about
 /// (90, 160, 255) at a third opacity).
 pub const MODIFIER: Color32 = Color32::from_rgba_premultiplied(30, 53, 85, 85);
+/// Support blockers (red) and enforcers (green), see-through like modifiers.
+pub const SUPPORT_BLOCKER: Color32 = Color32::from_rgba_premultiplied(85, 25, 25, 85);
+pub const SUPPORT_ENFORCER: Color32 = Color32::from_rgba_premultiplied(30, 80, 35, 85);
 
 pub fn path_color(kind: PathKind) -> Color32 {
     match kind {

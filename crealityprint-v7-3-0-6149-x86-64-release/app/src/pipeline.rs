@@ -4,9 +4,10 @@
 use crate::gcode::{self, GcodeOutput};
 use crate::geometry::Bounds;
 use crate::model::{PlacedObject, Triangle};
+use crate::modifier::ModifierKind;
 use crate::profiles::{Filament, PrintSettings, Printer};
-use crate::slicer::PartSettings;
 use crate::slicer::{self, SliceResult};
+use crate::slicer::{PartSettings, SupportVolumes};
 use image::RgbaImage;
 
 /// Line width = nozzle × 1.05 (0.42 mm for a 0.4 mm nozzle). Estimated.
@@ -61,7 +62,15 @@ pub fn slice_plate_with_tools(
     tools: &gcode::Tools,
     progress: &dyn Fn(f32),
 ) -> Sliced {
-    slice_plate_grouped(triangles, &[], printer, filament, settings, tools, progress)
+    slice_plate_grouped(
+        triangles,
+        &PartSlicing::default(),
+        printer,
+        filament,
+        settings,
+        tools,
+        progress,
+    )
 }
 
 /// A part on the plate for [`settings_groups`]: its placed triangles and the object
@@ -75,15 +84,23 @@ pub fn settings_groups(
     parts: &[Part],
     plate: &PrintSettings,
 ) -> Vec<(Vec<Triangle>, PartSettings)> {
-    let plain =
-        |o: &PlacedObject| o.overrides.is_empty() && o.ranges.is_empty() && o.modifiers.is_empty();
+    let plain = |o: &PlacedObject| {
+        o.overrides.is_empty()
+            && o.ranges.is_empty()
+            && o.modifiers.iter().all(|m| m.kind != ModifierKind::Infill)
+    };
     if parts.iter().all(|(_, o)| plain(o)) {
         return Vec::new();
     }
     let mut groups: Vec<(Vec<Triangle>, PartSettings)> = Vec::new();
     for (tris, o) in parts {
         let mut settings = crate::overrides::part_settings(plate, &o.overrides, &o.ranges);
-        settings.modifiers = o.modifiers.iter().map(|m| m.infill(o.x, o.y)).collect();
+        settings.modifiers = o
+            .modifiers
+            .iter()
+            .filter(|m| m.kind == ModifierKind::Infill)
+            .map(|m| m.infill(o.x, o.y))
+            .collect();
         match groups.iter_mut().find(|(_, s)| *s == settings) {
             Some((all, _)) => all.extend_from_slice(tris),
             None => groups.push((tris.to_vec(), settings)),
@@ -92,19 +109,48 @@ pub fn settings_groups(
     groups
 }
 
-/// Like [`slice_plate_with_tools`], with parts that print with settings of their own:
-/// `groups` from [`settings_groups`] (empty: everything prints with `settings`).
+/// The support blockers and enforcers of every part on the plate, placed.
+pub fn support_volumes(objects: &[PlacedObject]) -> SupportVolumes {
+    let mut v = SupportVolumes::default();
+    for o in objects {
+        for m in &o.modifiers {
+            match m.kind {
+                ModifierKind::SupportBlocker => v.blockers.push(m.triangles(o.x, o.y)),
+                ModifierKind::SupportEnforcer => v.enforcers.push(m.triangles(o.x, o.y)),
+                ModifierKind::Infill => {}
+            }
+        }
+    }
+    v
+}
+
+/// What the parts on a plate change about slicing it: the groups of parts with settings
+/// of their own (from [`settings_groups`]; empty when everything prints with the
+/// plate's) and the plate's support blockers and enforcers (from [`support_volumes`]).
+#[derive(Clone, Debug, Default)]
+pub struct PartSlicing {
+    pub groups: Vec<(Vec<Triangle>, PartSettings)>,
+    pub support_volumes: SupportVolumes,
+}
+
+/// Like [`slice_plate_with_tools`], with what the parts change about the slice.
 pub fn slice_plate_grouped(
     triangles: &[Triangle],
-    groups: &[(Vec<Triangle>, PartSettings)],
+    parts: &PartSlicing,
     printer: &Printer,
     filament: &Filament,
     settings: &PrintSettings,
     tools: &gcode::Tools,
     progress: &dyn Fn(f32),
 ) -> Sliced {
-    let mut result =
-        slicer::slice_groups(triangles, groups, settings, line_width(printer), progress);
+    let mut result = slicer::slice_groups(
+        triangles,
+        &parts.groups,
+        &parts.support_volumes,
+        settings,
+        line_width(printer),
+        progress,
+    );
     // The shield goes round what is printed, so it is added before the tower (which
     // stands apart).
     add_ooze_shield(&mut result, printer, tools);
@@ -810,7 +856,11 @@ mod tests {
         let printer = Printer::presets().remove(0);
         let filament = &Filament::presets()[0];
         let tools = gcode::Tools::default();
-        let out = slice_plate_grouped(&all, &groups, &printer, filament, &plate, &tools, &|_| {});
+        let plan = PartSlicing {
+            groups,
+            support_volumes: SupportVolumes::default(),
+        };
+        let out = slice_plate_grouped(&all, &plan, &printer, filament, &plate, &tools, &|_| {});
         let sparse_left = out
             .result
             .layers
@@ -831,7 +881,11 @@ mod tests {
         use crate::settings_registry::Value;
         let mut o = PlacedObject::new("cube", Mesh::cube(Vec3::new(30.0, 30.0, 30.0)));
         (o.x, o.y) = (20.0, -10.0);
-        let mut m = Modifier::around_middle(ModifierShape::Box, Vec3::new(20.0, 20.0, 30.0));
+        let mut m = Modifier::around_middle(
+            crate::modifier::ModifierKind::Infill,
+            ModifierShape::Box,
+            Vec3::new(20.0, 20.0, 30.0),
+        );
         m.overrides.set("infill_percent", Value::Num(100.0));
         o.modifiers.push(m);
         let tris = o.world_triangles();
@@ -841,9 +895,13 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].1.modifiers.len(), 1);
         let printer = Printer::presets().remove(0);
+        let plan = PartSlicing {
+            groups,
+            support_volumes: SupportVolumes::default(),
+        };
         let out = slice_plate_grouped(
             &tris,
-            &groups,
+            &plan,
             &printer,
             &Filament::presets()[0],
             &plate,
@@ -862,5 +920,60 @@ mod tests {
         assert!(solid
             .iter()
             .all(|p| (p.x - 20.0).abs() <= 5.6 && (p.y + 10.0).abs() <= 5.6));
+    }
+
+    #[test]
+    fn test_support_blocker_on_a_part_keeps_supports_out_of_it() {
+        use crate::model::{Mesh, PlacedObject};
+        use crate::modifier::{Modifier, ModifierShape};
+        // A slab 10 mm up on a corner post, supports on, and a blocker over its left half.
+        let mut tris = Mesh::cube(Vec3::new(30.0, 30.0, 3.0)).triangles;
+        tris.iter_mut().flatten().for_each(|v| v.z += 10.0);
+        tris.extend(Mesh::cube(Vec3::new(4.0, 4.0, 10.0)).triangles);
+        let mut o = PlacedObject::new("slab", Mesh { triangles: tris });
+        let mut blocker = Modifier::around_middle(
+            ModifierKind::SupportBlocker,
+            ModifierShape::Box,
+            Vec3::new(30.0, 30.0, 13.0),
+        );
+        (blocker.size, blocker.at) = (Vec3::new(16.0, 40.0, 20.0), Vec3::new(-8.0, 0.0, 0.0));
+        o.modifiers.push(blocker);
+        let objects = [o];
+        let placed = objects[0].world_triangles();
+        let parts: Vec<Part> = vec![(placed.as_slice(), &objects[0])];
+        let plate = PrintSettings {
+            supports: true,
+            ..PrintSettings::default()
+        };
+        // A support volume isn't a setting: the part needs no slice of its own.
+        assert!(settings_groups(&parts, &plate).is_empty());
+        let volumes = support_volumes(&objects);
+        assert_eq!((volumes.blockers.len(), volumes.enforcers.len()), (1, 0));
+        let plan = PartSlicing {
+            groups: Vec::new(),
+            support_volumes: volumes,
+        };
+        let out = slice_plate_grouped(
+            &placed,
+            &plan,
+            &Printer::presets().remove(0),
+            &Filament::presets()[0],
+            &plate,
+            &gcode::Tools::default(),
+            &|_| {},
+        );
+        let xs: Vec<f32> = out
+            .result
+            .layers
+            .iter()
+            .flat_map(|l| &l.paths)
+            .filter(|p| p.kind == slicer::PathKind::Support)
+            .flat_map(|p| p.points.iter().map(|q| q.x))
+            .collect();
+        assert!(xs.iter().any(|&x| x > 5.0));
+        assert!(
+            !xs.iter().any(|&x| x < -1.5),
+            "no supports under the blocker"
+        );
     }
 }

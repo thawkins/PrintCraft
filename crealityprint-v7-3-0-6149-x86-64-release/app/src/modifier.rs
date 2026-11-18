@@ -45,9 +45,43 @@ impl ModifierShape {
     }
 }
 
+/// What a modifier does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModifierKind {
+    /// The part's infill differs inside it.
+    Infill,
+    /// No supports for overhangs inside it.
+    SupportBlocker,
+    /// Supports for every surface facing down inside it, even with supports off.
+    SupportEnforcer,
+}
+
+impl ModifierKind {
+    pub const ALL: [ModifierKind; 3] = [Self::Infill, Self::SupportBlocker, Self::SupportEnforcer];
+
+    /// How it is named in the window.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Infill => "Infill modifier",
+            Self::SupportBlocker => "Support blocker",
+            Self::SupportEnforcer => "Support enforcer",
+        }
+    }
+
+    /// The name in a project file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Infill => "infill",
+            Self::SupportBlocker => "support_blocker",
+            Self::SupportEnforcer => "support_enforcer",
+        }
+    }
+}
+
 /// A modifier volume of a part.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Modifier {
+    pub kind: ModifierKind,
     pub shape: ModifierShape,
     /// Width, depth and height (mm).
     pub size: Vec3,
@@ -58,12 +92,13 @@ pub struct Modifier {
 }
 
 impl Modifier {
-    /// A modifier of `shape` around the middle of a part `size` across, half its size
-    /// each way, with no settings yet.
-    pub fn around_middle(shape: ModifierShape, size: Vec3) -> Self {
+    /// A modifier of `kind` and `shape` around the middle of a part `size` across, half
+    /// its size each way, with no settings yet.
+    pub fn around_middle(kind: ModifierKind, shape: ModifierShape, size: Vec3) -> Self {
         let half = |v: f32| (v * 0.5 * 10.0).round() / 10.0;
         let s = Vec3::new(half(size.x), half(size.y), half(size.z));
         Self {
+            kind,
             shape,
             size: s,
             at: Vec3::new(0.0, 0.0, half(size.z - s.z)),
@@ -113,6 +148,7 @@ impl Modifier {
     /// The modifier as a project file writes it.
     pub fn to_json(&self) -> Json {
         json!({
+            "kind": self.kind.key(),
             "shape": self.shape.key(),
             "size": [self.size.x, self.size.y, self.size.z],
             "at": [self.at.x, self.at.y, self.at.z],
@@ -120,9 +156,14 @@ impl Modifier {
         })
     }
 
-    /// A modifier from a project file; `None` for an unknown shape or a missing or
-    /// non-positive size. Settings a modifier can't change are dropped.
+    /// A modifier from a project file; `None` for an unknown shape or kind, or a
+    /// missing or non-positive size. Without a kind it is an infill modifier. Settings
+    /// a modifier can't change are dropped (all of them for a support volume).
     pub fn from_json(raw: &Json) -> Option<Self> {
+        let kind = match raw.get("kind").and_then(Json::as_str) {
+            None => ModifierKind::Infill,
+            Some(k) => ModifierKind::ALL.into_iter().find(|x| x.key() == k)?,
+        };
         let shape = ModifierShape::ALL
             .into_iter()
             .find(|s| raw.get("shape").and_then(Json::as_str) == Some(s.key()))?;
@@ -138,12 +179,16 @@ impl Modifier {
             .get("overrides")
             .map(Overrides::from_json)
             .unwrap_or_default();
-        for key in PER_MODIFIER {
+        for key in PER_MODIFIER
+            .into_iter()
+            .filter(|_| kind == ModifierKind::Infill)
+        {
             if let Some(v) = all.get(key) {
                 overrides.set(key, v);
             }
         }
         Some(Self {
+            kind,
             shape,
             size,
             at: Vec3::new(at.x, at.y, at.z.max(0.0)),
@@ -203,6 +248,7 @@ mod tests {
     fn test_modifier_shapes_have_their_size_and_place() {
         for shape in ModifierShape::ALL {
             let m = Modifier {
+                kind: ModifierKind::Infill,
                 shape,
                 size: Vec3::new(10.0, 6.0, 4.0),
                 at: Vec3::new(1.0, -2.0, 3.0),
@@ -231,7 +277,11 @@ mod tests {
 
     #[test]
     fn test_modifier_round_trips_and_keeps_only_infill_settings() {
-        let mut m = Modifier::around_middle(ModifierShape::Cylinder, Vec3::new(20.0, 20.0, 30.0));
+        let mut m = Modifier::around_middle(
+            ModifierKind::Infill,
+            ModifierShape::Cylinder,
+            Vec3::new(20.0, 20.0, 30.0),
+        );
         assert_eq!(m.size, Vec3::new(10.0, 10.0, 15.0));
         assert_eq!(m.at, Vec3::new(0.0, 0.0, 7.5));
         m.overrides.set("infill_percent", Value::Num(100.0));

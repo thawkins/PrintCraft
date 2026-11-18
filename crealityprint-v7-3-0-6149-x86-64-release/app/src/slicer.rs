@@ -115,6 +115,33 @@ pub struct SliceResult {
     pub line_width: f32,
 }
 
+/// Inside a support enforcer, any surface facing down by more than this (degrees from
+/// upright) is supported.
+const ENFORCED_OVERHANG_DEG: f32 = 1.0;
+
+/// Whether `p` is inside the closed mesh `tris`: a ray straight up from it crosses the
+/// surface an odd number of times.
+fn inside_mesh(tris: &[Triangle], p: Vec3) -> bool {
+    let q = Point2::new(p.x, p.y);
+    tris.iter()
+        .filter(|t| {
+            let flat = t.map(|v| Point2::new(v.x, v.y));
+            if !contains(&flat, q) {
+                return false;
+            }
+            let n = (t[1] - t[0]).cross(t[2] - t[0]);
+            if n.z.abs() < 1e-9 {
+                return false;
+            }
+            // The triangle's plane at the point, above it or not.
+            let z = t[0].z - (n.x * (p.x - t[0].x) + n.y * (p.y - t[0].y)) / n.z;
+            z > p.z
+        })
+        .count()
+        % 2
+        == 1
+}
+
 /// Grid used for top/bottom detection and supports.
 const CELL_MM: f32 = 1.0;
 /// Support lines are laid on every n-th grid row (2 mm apart).
@@ -153,20 +180,39 @@ pub struct InfillModifier {
     pub infill_pattern: Option<InfillPattern>,
 }
 
-/// Slices the given plate triangles. `progress` receives values from 0 to 1.
+/// Volumes that change where supports go, in plate coordinates (closed meshes). No
+/// support is made for an overhang inside a blocker; every surface facing down inside
+/// an enforcer is supported, even with supports off.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SupportVolumes {
+    pub blockers: Vec<Vec<Triangle>>,
+    pub enforcers: Vec<Vec<Triangle>>,
+}
+
+/// Slices the given plate triangles. `progress` receives values from 0 to 1. (The
+/// window and the command line slice through `slice_groups`; tests use this.)
+#[cfg(test)]
 pub fn slice(
     triangles: &[Triangle],
     settings: &PrintSettings,
     line_width: f32,
     progress: &dyn Fn(f32),
 ) -> SliceResult {
-    slice_modified(triangles, &[], settings, line_width, progress)
+    slice_modified(
+        triangles,
+        &[],
+        &SupportVolumes::default(),
+        settings,
+        line_width,
+        progress,
+    )
 }
 
 /// Like [`slice`], with infill modifiers: where they overlap, a later one wins.
 pub fn slice_modified(
     triangles: &[Triangle],
     modifiers: &[InfillModifier],
+    support_volumes: &SupportVolumes,
     settings: &PrintSettings,
     line_width: f32,
     progress: &dyn Fn(f32),
@@ -224,14 +270,49 @@ pub fn slice_modified(
     // 2. Coarse grid masks, used to find top/bottom surfaces and support areas.
     let grid = Grid::new(&bounds);
     let masks: Vec<Vec<bool>> = outlines.iter().map(|o| grid.rasterize(o)).collect();
-    let (mut supports, plate_cells) = if settings.supports {
+    let enforced = !support_volumes.enforcers.is_empty();
+    let (mut supports, plate_cells) = if settings.supports || enforced {
+        let floor_z = heights[raft_n].0;
+        let mut points = if settings.supports {
+            grid.overhangs(triangles, settings.support_angle, floor_z)
+        } else {
+            Vec::new()
+        };
+        // The volumes are placed on the plate; a full raft lifts the model above them.
+        let lifted = |volumes: &[Vec<Triangle>]| -> Vec<Vec<Triangle>> {
+            let up = Vec3::new(
+                0.0,
+                0.0,
+                if full_raft {
+                    raft_height(settings)
+                } else {
+                    0.0
+                },
+            );
+            volumes
+                .iter()
+                .map(|v| v.iter().map(|t| t.map(|p| p + up)).collect())
+                .collect()
+        };
+        let at = |&(cell, z): &(usize, f32)| {
+            let c = grid.center(cell % grid.w, cell / grid.w);
+            Vec3::new(c.x, c.y, z)
+        };
+        if enforced {
+            let enforcers = lifted(&support_volumes.enforcers);
+            points.extend(
+                grid.overhangs(triangles, ENFORCED_OVERHANG_DEG, floor_z)
+                    .into_iter()
+                    .filter(|p| enforcers.iter().any(|v| inside_mesh(v, at(p)))),
+            );
+        }
+        let blockers = lifted(&support_volumes.blockers);
+        points.retain(|p| !blockers.iter().any(|v| inside_mesh(v, at(p))));
         grid.supports(
-            triangles,
+            &points,
             &masks,
             &heights,
-            heights[raft_n].0,
             settings.supports_on_plate_only,
-            settings.support_angle,
             line_width,
         )
     } else {
@@ -474,6 +555,7 @@ impl PartSettings {
 pub fn slice_groups(
     all: &[Triangle],
     groups: &[(Vec<Triangle>, PartSettings)],
+    support_volumes: &SupportVolumes,
     plate: &PrintSettings,
     line_width: f32,
     progress: &dyn Fn(f32),
@@ -484,7 +566,7 @@ pub fn slice_groups(
         _ => false,
     };
     if plain {
-        return slice(all, plate, line_width, progress);
+        return slice_modified(all, &[], support_volumes, plate, line_width, progress);
     }
     // Each group's distinct settings, and which of them each of its layers uses.
     let variants: Vec<Vec<&PrintSettings>> = groups
@@ -500,7 +582,9 @@ pub fn slice_groups(
         })
         .collect();
     let n = variants.iter().map(Vec::len).sum::<usize>() as f32 + 1.0;
-    let base = slice(all, plate, line_width, &|v| progress(v / n));
+    let base = slice_modified(all, &[], support_volumes, plate, line_width, &|v| {
+        progress(v / n)
+    });
     let mut done = 1.0;
     let slices: Vec<Vec<SliceResult>> = groups
         .iter()
@@ -515,7 +599,8 @@ pub fn slice_groups(
                     };
                     let at = done;
                     done += 1.0;
-                    slice_modified(tris, &ps.modifiers, &own, line_width, &|v| {
+                    let none = SupportVolumes::default();
+                    slice_modified(tris, &ps.modifiers, &none, &own, line_width, &|v| {
                         progress((at + v) / n)
                     })
                 })
@@ -1643,12 +1728,10 @@ impl Grid {
     #[allow(clippy::too_many_arguments)]
     fn supports(
         &self,
-        triangles: &[Triangle],
+        overhangs: &[(usize, f32)],
         masks: &[Vec<bool>],
         heights: &[(f32, f32)],
-        floor_z: f32,
         plate_only: bool,
-        angle_deg: f32,
         lw: f32,
     ) -> (Vec<Vec<ToolPath>>, Vec<bool>) {
         let n = heights.len();
@@ -1662,7 +1745,7 @@ impl Grid {
             }
         }
         let mut starts: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for (cell, h) in self.overhangs(triangles, angle_deg, floor_z) {
+        for &(cell, h) in overhangs {
             // Highest layer that stays at least one layer below the overhang.
             let k = heights.partition_point(|(z, lh)| z + lh.max(0.15) < h);
             if k > 0 && (!plate_only || first_model[cell] >= k) {
@@ -2109,6 +2192,7 @@ mod tests {
         let grouped = slice_groups(
             &all,
             &[(all.clone(), PartSettings::plain(plate.clone()))],
+            &SupportVolumes::default(),
             &plate,
             0.42,
             &|_| {},
@@ -2127,7 +2211,14 @@ mod tests {
             infill_pattern: None,
         };
         let settings = PrintSettings::default();
-        let r = slice_modified(&tris, &[modifier], &settings, 0.42, &|_| {});
+        let r = slice_modified(
+            &tris,
+            &[modifier],
+            &SupportVolumes::default(),
+            &settings,
+            0.42,
+            &|_| {},
+        );
         let plain = slice(&tris, &settings, 0.42, &|_| {});
         assert_eq!(r.layers.len(), plain.layers.len());
         // A middle layer (well away from the top and bottom surfaces).
@@ -2171,7 +2262,14 @@ mod tests {
         };
         assert_eq!(walls(&r), walls(&plain));
         // With no modifiers, nothing changes.
-        let none = slice_modified(&tris, &[], &settings, 0.42, &|_| {});
+        let none = slice_modified(
+            &tris,
+            &[],
+            &SupportVolumes::default(),
+            &settings,
+            0.42,
+            &|_| {},
+        );
         assert_eq!(format!("{none:?}"), format!("{plain:?}"));
     }
 
@@ -2194,7 +2292,8 @@ mod tests {
                 ranges: vec![(2.0, 4.0, range)],
                 modifiers: Vec::new(),
             };
-            let r = slice_groups(&tris, &[(tris.clone(), ps)], &plate, 0.42, &|_| {});
+            let none = SupportVolumes::default();
+            let r = slice_groups(&tris, &[(tris.clone(), ps)], &none, &plate, 0.42, &|_| {});
             let plain = slice(&tris, &plate, 0.42, &|_| {});
             assert_eq!(r.layers.len(), plain.layers.len());
             let lift = if adhesion == Adhesion::Raft {
@@ -2247,6 +2346,7 @@ mod tests {
                 (a, PartSettings::plain(empty)),
                 (b, PartSettings::plain(plate.clone())),
             ],
+            &SupportVolumes::default(),
             &plate,
             0.42,
             &|_| {},
@@ -2404,6 +2504,78 @@ mod tests {
             PlacedObject::new("post", Mesh::cube(Vec3::new(4.0, 4.0, 10.0))).world_triangles(),
         );
         tris
+    }
+
+    /// Every point of every support line in `r`.
+    fn support_points(r: &SliceResult) -> Vec<Point2> {
+        r.layers
+            .iter()
+            .flat_map(|l| &l.paths)
+            .filter(|p| p.kind == PathKind::Support)
+            .flat_map(|p| p.points.iter().copied())
+            .collect()
+    }
+
+    #[test]
+    fn test_support_blocker_removes_supports_in_its_footprint() {
+        let tris = slab_on_post();
+        let s = PrintSettings {
+            supports: true,
+            ..PrintSettings::default()
+        };
+        // A blocker over the slab's left half (x below 0), floor to above the slab.
+        let mut o = PlacedObject::new("blocker", Mesh::cube(Vec3::new(20.0, 40.0, 20.0)));
+        o.x = -10.0;
+        let volumes = SupportVolumes {
+            blockers: vec![o.world_triangles()],
+            enforcers: Vec::new(),
+        };
+        let free = support_points(&slice(&tris, &s, 0.42, &|_| {}));
+        assert!(
+            free.iter().any(|p| p.x < -5.0),
+            "supports on the left without it"
+        );
+        let blocked = slice_modified(&tris, &[], &volumes, &s, 0.42, &|_| {});
+        let pts = support_points(&blocked);
+        assert!(
+            pts.iter().any(|p| p.x > 5.0),
+            "the right half is still supported"
+        );
+        assert!(
+            !pts.iter().any(|p| p.x < -1.5),
+            "no supports in the blocker's footprint"
+        );
+    }
+
+    #[test]
+    fn test_support_enforcer_supports_a_shallow_overhang() {
+        // A cone widening upwards on a 5 mm post: its walls lean 30 degrees from upright,
+        // too little for supports at the default angle, and supports are off.
+        let mut tris =
+            PlacedObject::new("post", Mesh::cylinder(4.0, 4.0, 5.0, 48)).world_triangles();
+        tris.extend(
+            Mesh::cylinder(4.0, 9.8, 10.0, 48)
+                .triangles
+                .iter()
+                .map(|t| t.map(|v| v + Vec3::new(0.0, 0.0, 5.0))),
+        );
+        let s = PrintSettings::default();
+        assert!(!s.supports);
+        assert!(support_points(&slice(&tris, &s, 0.42, &|_| {})).is_empty());
+        // An enforcer over the half with x above 0.
+        let mut o = PlacedObject::new("enforcer", Mesh::cube(Vec3::new(12.0, 24.0, 12.0)));
+        o.x = 6.0;
+        let volumes = SupportVolumes {
+            blockers: Vec::new(),
+            enforcers: vec![o.world_triangles()],
+        };
+        let pts = support_points(&slice_modified(&tris, &[], &volumes, &s, 0.42, &|_| {}));
+        // Supports under the flaring wall (beyond the post), and only inside the enforcer.
+        assert!(
+            pts.iter().any(|p| p.x.hypot(p.y) > 6.0),
+            "the enforcer supports the wall"
+        );
+        assert!(pts.iter().all(|p| p.x > -1.5), "only inside the enforcer");
     }
 
     fn kinds(layer: &Layer) -> Vec<PathKind> {

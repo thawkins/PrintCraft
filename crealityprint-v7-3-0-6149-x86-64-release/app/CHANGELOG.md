@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Support blockers and enforcers (gap plan task M4.5). "Add modifier..." now also
+  offers a support blocker (drawn red: no supports for overhangs inside it) and a
+  support enforcer (drawn green: every surface facing down inside it is supported,
+  even with supports off). They are placed like other modifiers and saved in the
+  project. Faces that reach down to the plate are still never supported, enforcer or
+  not.
 - Modifier volumes (gap plan task M4.4). "Add modifier..." under Modifiers in
   "Settings for this object" adds a box, cylinder or sphere round the middle of the
   part, half its size; its shape, size and place can be changed (Move X and Y from the

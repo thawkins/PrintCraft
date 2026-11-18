@@ -244,6 +244,14 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     lines are laid one line width apart as solid infill. Exposed (top and bottom) and
     bridged cells stay as they were.
 
+20. **Support blockers and enforcers** (`slicer::SupportVolumes`, gap plan M4.5). The
+    support columns start from a list of overhang points (a grid cell and a height).
+    With supports on, it holds the faces facing down by more than the support angle;
+    an enforcer adds the faces facing down at all (more than 1 degree) whose point is
+    inside it. Points inside a blocker are dropped. Inside means a ray straight up from
+    the point crosses the volume's surface an odd number of times. Volumes are lifted
+    with the model on a full raft. Faces touching the plate are never overhangs.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

@@ -757,7 +757,10 @@ impl PrintCraftApp {
             .zip(&self.objects)
             .map(|(t, o)| (t.as_slice(), o))
             .collect();
-        let groups = pipeline::settings_groups(&parts, &self.settings);
+        let plan = pipeline::PartSlicing {
+            groups: pipeline::settings_groups(&parts, &self.settings),
+            support_volumes: pipeline::support_volumes(&self.objects),
+        };
         let tools = match self.tools() {
             Ok(t) => t,
             Err(why) => {
@@ -786,7 +789,7 @@ impl PrintCraftApp {
                 picture,
             } = pipeline::slice_plate_grouped(
                 &tris,
-                &groups,
+                &plan,
                 &printer,
                 &filament,
                 &settings,
@@ -1277,17 +1280,21 @@ impl PrintCraftApp {
                 .collect();
             view3d::draw_objects(&painter, &self.camera, rect, &draw);
             // Modifier volumes, see-through over their parts (so one inside shows).
-            let volumes: Vec<Vec<Triangle>> = self
+            let volumes: Vec<(Vec<Triangle>, Color32)> = self
                 .objects
                 .iter()
-                .flat_map(|o| o.modifiers.iter().map(|m| m.triangles(o.x, o.y)))
+                .flat_map(|o| {
+                    o.modifiers
+                        .iter()
+                        .map(|m| (m.triangles(o.x, o.y), settings_ui::modifier_colour(m.kind)))
+                })
                 .collect();
             if !volumes.is_empty() {
                 let draw: Vec<DrawObject> = volumes
                     .iter()
-                    .map(|t| DrawObject {
+                    .map(|(t, color)| DrawObject {
                         triangles: t,
-                        color: theme::MODIFIER,
+                        color: *color,
                     })
                     .collect();
                 view3d::draw_objects(&painter, &self.camera, rect, &draw);
