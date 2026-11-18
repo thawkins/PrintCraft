@@ -30,6 +30,8 @@ printer or slicer maker.
 - Ironing, fuzzy skin, a textured top surface and spiral vase mode.
 - Cooling slowdown for short layers and fan control.
 - Time, filament, weight and cost estimates, and a thumbnail picture in the G-code.
+- Optional sequential printing (one object at a time), with a clearance check against
+  the print head and gantry.
 - Optional: object labels, so one object can be cancelled mid-print (Klipper
   `EXCLUDE_OBJECT`, M486 elsewhere); arc fitting (G2/G3); and Prusa's binary G-code
   (`.bgcode`) for export and PrusaLink.

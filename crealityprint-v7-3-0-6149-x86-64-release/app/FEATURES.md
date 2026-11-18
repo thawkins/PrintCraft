@@ -32,7 +32,8 @@ Status:
 | Support blockers and enforcers | **Yes (new)**: from "Add modifier..." on a part; a blocker stops supports inside it, an enforcer supports every surface facing down inside it (even with supports off) |
 | Modifier volumes | **Yes (new)**: box, cylinder or sphere per part ("Modifiers" in "Settings for this object") with its own infill density and pattern; 100 % is solid infill. Not yet: imported meshes, walls or other settings inside a modifier |
 | Variable layer height | **Yes (new)**: one profile for the whole plate from surface slopes, with quality and smoothing settings (Advanced, Layer height); not per object |
-| Multiple plates, sequential (one-at-a-time) printing | Not yet |
+| Sequential (one-at-a-time) printing | **Yes (new)**, off by default: "Sequential printing" under Special mode (Advanced). Each object prints from bottom to top before the next, shortest first. Between objects the nozzle lifts 2 mm above everything printed, moves across and comes down on the next one, whose first layer prints as a first layer (speed, fan off). Slicing is refused with a clear message when objects are closer than the printer's head clearance radius, or more than one is taller than its gantry clearance height (both in the printer editor, 20 mm by default). One-nozzle printers only. |
+| Multiple plates | Not yet |
 
 ## Projects (src/project.rs, src/app/project_ui.rs)
 

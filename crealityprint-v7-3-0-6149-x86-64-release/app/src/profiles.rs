@@ -37,6 +37,7 @@ pub mod limits {
     pub const MIN_LAYER_TIME: RangeInclusive<f32> = 0.0..=120.0;
     pub const RETRACT_MIN_TRAVEL: RangeInclusive<f32> = 0.0..=20.0;
     pub const WIPE_MM: RangeInclusive<f32> = 0.0..=10.0;
+    pub const CLEARANCE_MM: RangeInclusive<f32> = 1.0..=200.0;
     pub const TOOL_CHANGE_RETRACT: RangeInclusive<f32> = 0.0..=30.0;
     pub const STANDBY_DROP: RangeInclusive<u32> = 0..=100;
     pub const NOZZLE_SPACING: RangeInclusive<f32> = 5.0..=200.0;
@@ -69,6 +70,12 @@ pub struct Printer {
     /// Export and send to PrusaLink as binary G-code (`.bgcode`, src/bgcode.rs). Other
     /// connections still get plain G-code; never with X3G.
     pub binary_gcode: bool,
+    /// Sequential printing: how far (mm) the print head reaches out around the nozzle;
+    /// objects printed one at a time must be at least this far apart.
+    pub clearance_radius: f32,
+    /// Sequential printing: how high (mm) above the nozzle tip the gantry (X beam) is;
+    /// every object but the last printed must be lower.
+    pub clearance_height: f32,
     /// Nozzles: 1, or 2 (two nozzles on one carriage, like the Creator Pro). With 1, no
     /// dual-nozzle setting shows and the G-code is unchanged.
     pub extruders: u8,
@@ -119,6 +126,12 @@ impl Printer {
         }
     }
 }
+
+/// The default print-head clearance around the nozzle, for sequential printing (the
+/// figure PrusaSlicer uses when a profile gives none). Estimated; set it per printer.
+pub const DEFAULT_CLEARANCE_RADIUS_MM: f32 = 20.0;
+/// The default gantry height above the nozzle, for sequential printing. Estimated.
+pub const DEFAULT_CLEARANCE_HEIGHT_MM: f32 = 20.0;
 
 /// The default primary nozzle of a two-nozzle printer profile: T0, the right nozzle, which
 /// is also the firmware's tool 0 and the nozzle a one-nozzle print uses. Each printer
@@ -218,6 +231,8 @@ impl Printer {
             retract_min_travel: DEFAULT_RETRACT_MIN_TRAVEL_MM,
             retract_layer_change: false,
             wipe_mm: 0.0,
+            clearance_radius: DEFAULT_CLEARANCE_RADIUS_MM,
+            clearance_height: DEFAULT_CLEARANCE_HEIGHT_MM,
             tool_change_retract: DEFAULT_TOOL_CHANGE_RETRACT_MM,
             standby_drop: DEFAULT_STANDBY_DROP_C,
             primary_nozzle: PRIMARY_TOOL,
@@ -525,6 +540,9 @@ pub struct PrintSettings {
     /// Name each object in the G-code (Klipper `EXCLUDE_OBJECT`, M486 elsewhere), so one
     /// object can be cancelled while the others go on printing.
     pub label_objects: bool,
+    /// Print one object at a time, each from bottom to top, instead of all objects
+    /// layer by layer (see src/sequential.rs).
+    pub sequential: bool,
     /// Write runs of short segments that lie on a circle as G2/G3 arcs (not for X3G).
     pub arc_fitting: bool,
 }
@@ -772,6 +790,7 @@ impl Quality {
             solid_pattern: SolidPattern::Lines,
             variable_walls: false,
             label_objects: false,
+            sequential: false,
             arc_fitting: false,
         };
         match self {

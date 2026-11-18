@@ -1028,6 +1028,24 @@ fn build() -> Vec<Setting> {
         ),
         hinted(
             r!(
+                "sequential",
+                "Sequential printing",
+                G::SpecialMode,
+                A,
+                Kind::Flag,
+                Flag,
+                sequential
+            ),
+            |_| {
+                Some(
+                    "Print one object at a time, each from bottom to top. Objects must be \
+                     at least the printer's clearance radius apart, and only the tallest \
+                     may be taller than its clearance height (set in the printer editor)",
+                )
+            },
+        ),
+        hinted(
+            r!(
                 "arc_fitting",
                 "Arc fitting",
                 G::SpecialMode,
@@ -1121,6 +1139,7 @@ mod tests {
             variable_walls: true,
             label_objects: true,
             arc_fitting: true,
+            sequential: true,
         }
     }
 

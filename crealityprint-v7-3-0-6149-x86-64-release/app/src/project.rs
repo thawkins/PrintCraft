@@ -111,6 +111,8 @@ pub fn to_json(p: &Project) -> String {
             "retract_min_travel": p.printer.retract_min_travel,
             "retract_layer_change": p.printer.retract_layer_change,
             "wipe_mm": p.printer.wipe_mm,
+            "clearance_radius": p.printer.clearance_radius,
+            "clearance_height": p.printer.clearance_height,
             "tool_change_retract": p.printer.tool_change_retract,
             "standby_drop": p.printer.standby_drop,
             "primary_nozzle": p.printer.primary_nozzle,
@@ -219,6 +221,18 @@ fn project_from(v: &Value) -> Result<Project, String> {
         retract_layer_change: flag(pr, "retract_layer_change", base.retract_layer_change),
         binary_gcode: flag(pr, "binary_gcode", base.binary_gcode),
         wipe_mm: num_in(pr, "wipe_mm", base.wipe_mm, limits::WIPE_MM),
+        clearance_radius: num_in(
+            pr,
+            "clearance_radius",
+            base.clearance_radius,
+            limits::CLEARANCE_MM,
+        ),
+        clearance_height: num_in(
+            pr,
+            "clearance_height",
+            base.clearance_height,
+            limits::CLEARANCE_MM,
+        ),
         tool_change_retract: num_in(
             pr,
             "tool_change_retract",
@@ -548,6 +562,8 @@ mod tests {
         printer.primary_nozzle = 1;
         printer.nozzle_spacing = 34.5;
         printer.binary_gcode = true;
+        printer.clearance_radius = 33.0;
+        printer.clearance_height = 27.5;
         let mut filament = Filament::presets()
             .into_iter()
             .find(|f| f.name == "PETG")
@@ -798,6 +814,7 @@ mod tests {
             variable_walls: true,
             label_objects: true,
             arc_fitting: true,
+            sequential: true,
         }
     }
 
@@ -870,7 +887,8 @@ mod tests {
             "solid_pattern": "Concentric",
             "variable_walls": true,
             "label_objects": true,
-            "arc_fitting": true
+            "arc_fitting": true,
+            "sequential": true
         });
         if let (Some(e), Value::Object(r)) = (expected.as_object_mut(), rest) {
             e.extend(r);

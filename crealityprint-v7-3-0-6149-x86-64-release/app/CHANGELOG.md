@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sequential printing (gap plan task M7.1). With Advanced on, "Sequential printing"
+  under Special mode (off by default) prints one object at a time, each from bottom to
+  top, shortest first. Between objects the nozzle lifts 2 mm above everything printed,
+  moves across, and comes down on the next one, whose first layer prints as a first
+  layer. Slicing is refused, with a message naming the objects, when they are closer
+  than the printer's new "Head clearance radius" or more than one is taller than its
+  "Gantry clearance height" (both in the printer editor, 20 mm by default, saved in
+  projects). One-nozzle printers only. The command line has `--sequential`.
+
 ## [0.0.11] - 2026-11-19
 
 ### Fixed

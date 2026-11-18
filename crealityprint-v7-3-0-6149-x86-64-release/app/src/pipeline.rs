@@ -167,6 +167,78 @@ pub fn slice_plate_grouped(
     }
 }
 
+/// Sequential printing: the order to print `objects` in, one at a time (shortest
+/// first), or why they can't be (too close for the print head, more than one taller than
+/// the gantry, or a two-nozzle printer). See `sequential`.
+pub fn sequential_order(objects: &[PlacedObject], printer: &Printer) -> Result<Vec<usize>, String> {
+    if printer.extruders >= 2 {
+        return Err(
+            "Sequential printing works on one-nozzle printers; turn it off to print with two."
+                .into(),
+        );
+    }
+    let footprints: Vec<crate::sequential::Footprint> = objects
+        .iter()
+        .map(|o| crate::sequential::Footprint {
+            name: o.name.clone(),
+            outline: o.footprint_hull(),
+            height: o.world_bounds().max.z,
+        })
+        .collect();
+    crate::sequential::print_order(
+        &footprints,
+        printer.clearance_radius,
+        printer.clearance_height,
+    )
+}
+
+/// Sequential printing: slices each part on its own and prints them one after the
+/// other in `order` (from [`sequential_order`]). The slice result holds every part's
+/// layers in print order; the G-code moves clear between parts (`Tools::objects_from`).
+#[allow(clippy::too_many_arguments)]
+pub fn slice_plate_sequential(
+    parts: &[Part],
+    order: &[usize],
+    support_volumes: &SupportVolumes,
+    printer: &Printer,
+    filament: &Filament,
+    settings: &PrintSettings,
+    tools: &gcode::Tools,
+    progress: &dyn Fn(f32),
+) -> Sliced {
+    let mut result = SliceResult {
+        layers: Vec::new(),
+        line_width: line_width(printer),
+    };
+    let mut tools = tools.clone();
+    for (k, &i) in order.iter().enumerate() {
+        let (tris, _) = parts[i];
+        let groups = settings_groups(&parts[i..=i], settings);
+        let share = |v: f32| progress((k as f32 + v) / order.len() as f32);
+        let one = slicer::slice_groups(
+            tris,
+            &groups,
+            support_volumes,
+            settings,
+            line_width(printer),
+            &share,
+        );
+        if k > 0 {
+            tools.objects_from.push(result.layers.len());
+        }
+        result.layers.extend(one.layers);
+    }
+    let mut gcode = gcode::generate_with_tools(&result, printer, filament, settings, &tools);
+    let all: Vec<Triangle> = parts.iter().flat_map(|(t, _)| t.iter().copied()).collect();
+    let (text, picture) = crate::thumbnail::add_to_gcode(&gcode.text, &all);
+    gcode.text = text;
+    Sliced {
+        result,
+        gcode,
+        picture,
+    }
+}
+
 /// Adds the ooze shield to every layer up to the last tool change: above it no nozzle sits
 /// idle, so there is nothing to catch.
 fn add_ooze_shield(result: &mut slicer::SliceResult, printer: &Printer, tools: &gcode::Tools) {
@@ -1045,5 +1117,129 @@ mod tests {
             !xs.iter().any(|&x| x < -1.5),
             "no supports under the blocker"
         );
+    }
+
+    /// A cube `size` mm across and `height` tall, `x` mm right of the plate's centre.
+    fn cube_at(name: &str, x: f32, size: f32, height: f32) -> PlacedObject {
+        use crate::model::Mesh;
+        let mut o = PlacedObject::new(name, Mesh::cube(Vec3::new(size, size, height)));
+        o.x = x;
+        o
+    }
+
+    #[test]
+    fn test_sequential_prints_each_object_whole_shortest_first() {
+        let printer = Printer::presets()[0].clone();
+        let settings = PrintSettings {
+            sequential: true,
+            ..PrintSettings::default()
+        };
+        // The tall one is listed first but prints last.
+        let objects = [
+            cube_at("tall", 30.0, 10.0, 4.0),
+            cube_at("short", -30.0, 10.0, 2.0),
+        ];
+        let order = sequential_order(&objects, &printer).unwrap();
+        assert_eq!(order, vec![1, 0]);
+        let tris: Vec<Vec<Triangle>> = objects.iter().map(|o| o.world_triangles()).collect();
+        let parts: Vec<Part> = tris.iter().map(|t| t.as_slice()).zip(&objects).collect();
+        let sliced = slice_plate_sequential(
+            &parts,
+            &order,
+            &SupportVolumes::default(),
+            &printer,
+            &Filament::presets()[0],
+            &settings,
+            &gcode::Tools::default(),
+            &|_| {},
+        );
+        let text = &sliced.gcode.text;
+        let ox = printer.bed_x / 2.0;
+        let lines: Vec<&str> = text.lines().collect();
+        let word = |l: &str, k: char| -> Option<f32> {
+            l.split_whitespace()
+                .find_map(|w| w.strip_prefix(k).and_then(|v| v.parse().ok()))
+        };
+        // Layer markers run 0, 1, 2, ... through both objects: 10 + 20 layers of 0.2 mm.
+        let markers: Vec<usize> = lines
+            .iter()
+            .filter_map(|l| l.strip_prefix(";LAYER:")?.parse().ok())
+            .collect();
+        assert_eq!(markers, (0..30).collect::<Vec<_>>());
+        assert_eq!(sliced.result.layers.len(), 30);
+        // Every line of the short (left) cube comes before any line of the tall one.
+        let prints: Vec<(usize, f32)> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with("G1 X") && l.contains(" E"))
+            .filter_map(|(i, l)| Some((i, word(l, 'X')? - ox)))
+            .collect();
+        let first_right = prints.iter().position(|(_, x)| *x > 0.0).unwrap();
+        assert!(first_right > 0);
+        assert!(prints[first_right..].iter().all(|(_, x)| *x > 0.0));
+        let (last_left, _) = prints[first_right - 1];
+        let (first_tall, _) = prints[first_right];
+        // In between: up above the short cube (2 mm), across, and only then down.
+        let between = &lines[last_left..first_tall];
+        let lift = between
+            .iter()
+            .position(|l| l.starts_with("G1 Z") && word(l, 'Z').unwrap() >= 3.0)
+            .expect("no lift above the first object");
+        let across = between
+            .iter()
+            .position(|l| l.starts_with("G0 X") && word(l, 'X').unwrap() - ox > 0.0)
+            .expect("no travel to the second object");
+        let down = between
+            .iter()
+            .position(|l| l.starts_with("G1 Z") && word(l, 'Z').unwrap() < 0.5)
+            .expect("no move down to the second object's first layer");
+        assert!(lift < across && across < down, "{lift} {across} {down}");
+        // The second object's first layer prints like a first layer: first-layer speed,
+        // fan off.
+        let first_layer_f = format!(" F{:.0}", settings.first_layer_speed * 60.0);
+        let tall_first: Vec<&&str> = between[down..]
+            .iter()
+            .chain(
+                lines[first_tall..]
+                    .iter()
+                    .take_while(|l| **l != ";LAYER:11"),
+            )
+            .collect();
+        assert!(
+            tall_first
+                .iter()
+                .any(|l| l.contains(" E") && l.ends_with(&first_layer_f)),
+            "the second object's first layer isn't at first-layer speed"
+        );
+        assert!(
+            between.iter().any(|l| l.starts_with("M106 S0")),
+            "fan not off"
+        );
+        // Its end lifts above the tallest object.
+        assert!(text.contains(";END"));
+    }
+
+    #[test]
+    fn test_sequential_order_refuses_what_the_head_would_hit() {
+        let mut printer = Printer::presets()[0].clone();
+        printer.clearance_radius = 20.0;
+        printer.clearance_height = 20.0;
+        let close = [cube_at("a", -8.0, 10.0, 5.0), cube_at("b", 8.0, 10.0, 5.0)];
+        let why = sequential_order(&close, &printer).unwrap_err();
+        assert!(why.contains("\"a\"") && why.contains("\"b\""), "{why}");
+        let tall = [
+            cube_at("a", -30.0, 10.0, 25.0),
+            cube_at("b", 30.0, 10.0, 30.0),
+        ];
+        assert!(sequential_order(&tall, &printer).is_err());
+        let two_nozzles = Printer {
+            extruders: 2,
+            ..printer
+        };
+        let apart = [
+            cube_at("a", -30.0, 10.0, 5.0),
+            cube_at("b", 30.0, 10.0, 5.0),
+        ];
+        assert!(sequential_order(&apart, &two_nozzles).is_err());
     }
 }

@@ -10,6 +10,9 @@ use std::fmt::Write;
 
 /// Extra time per layer for slowing down, turning and layer changes.
 const LAYER_CHANGE_SECONDS: f32 = 1.0;
+/// Sequential printing: how far (mm) above everything printed the nozzle travels to the
+/// next object.
+const SEQUENTIAL_LIFT_MM: f32 = 2.0;
 /// Heating up the bed and nozzle before printing.
 const WARMUP_SECONDS: f32 = 120.0;
 /// Fuzzy top: a new random height every this many millimetres along the top lines.
@@ -510,6 +513,11 @@ pub struct Tools {
     /// The objects on the plate, named in the G-code when `PrintSettings::label_objects`
     /// is on (any number of nozzles).
     pub labels: Vec<ObjectLabel>,
+    /// Sequential printing: the layers (by number, after the first) where the next
+    /// object starts. Before each, the nozzle lifts clear of everything printed and
+    /// moves across to the next object before coming down. Empty: one layer-by-layer
+    /// print.
+    pub objects_from: Vec<usize>,
 }
 
 /// An object on the plate as the G-code names it, so the printer can cancel it.
@@ -768,6 +776,10 @@ pub fn generate_with_tools(
     // Where the wall loops of the previous layer started (for Aligned seams).
     let mut seams_below: Vec<Point2> = Vec::new();
     for (li, layer) in result.layers.iter().enumerate() {
+        if tools.objects_from.contains(&li) {
+            w.next_object(li, layer);
+            seams_below.clear();
+        }
         w.write_layer(li, layer, &mut seams_below);
     }
     w.finish(result)
@@ -875,6 +887,11 @@ struct Writer<'a> {
     labelling: bool,
     /// The object whose block is open now.
     open_object: Option<usize>,
+    /// Sequential printing: the layer number where the object being printed started.
+    /// Its own layers count from there (its first layer prints as a first layer).
+    layer_base: usize,
+    /// The top (mm) of everything printed so far.
+    top_printed: f32,
 }
 
 /// The nozzles a print uses, and which one it starts with.
@@ -1293,7 +1310,46 @@ impl<'a> Writer<'a> {
             progress_marks: Vec::new(),
             labelling,
             open_object: None,
+            layer_base: 0,
+            top_printed: 0.0,
         }
+    }
+
+    /// The layer number `li` counted within the object being printed (the same as `li`
+    /// unless printing one object at a time).
+    fn own_layer(&self, li: usize) -> usize {
+        li - self.layer_base
+    }
+
+    /// Sequential printing: leaves the finished object for the next one, which starts
+    /// at layer `li`: retracts, lifts clear of everything printed, moves across above
+    /// the next object's first line, and from there the layer change comes down.
+    fn next_object(&mut self, li: usize, layer: &Layer) {
+        self.switch_object(None);
+        self.retract_now();
+        let safe = (self.top_printed + SEQUENTIAL_LIFT_MM).min(self.printer.max_z);
+        let _ = writeln!(self.g, "; next object");
+        let _ = writeln!(self.g, "G1 Z{safe:.3} F600 ; clear of the printed objects");
+        self.seconds += (safe - layer.z).abs() / 10.0;
+        if let Some(to) = layer
+            .paths
+            .iter()
+            .find(|p| p.points.len() >= 2)
+            .map(|p| p.points[0])
+        {
+            let _ = writeln!(
+                self.g,
+                "G0 X{:.3} Y{:.3} F{:.0}",
+                to.x + self.ox,
+                to.y + self.oy,
+                self.travel_f
+            );
+            let t = self.pos.distance(to) / self.s.travel_speed;
+            self.seconds += t;
+            self.travel_seconds += t;
+            self.pos = to;
+        }
+        self.layer_base = li;
     }
 
     /// Opens the block of object `object` (closing the open one first), or just closes
@@ -1499,7 +1555,7 @@ impl<'a> Writer<'a> {
     /// of the layer below and is replaced by this layer's when it has any.
     fn write_layer(&mut self, li: usize, layer: &Layer, seams_below: &mut Vec<Point2>) {
         let spiral = self.begin_layer(li, layer);
-        let slowdown = cooling_slowdown(layer, li, self.s);
+        let slowdown = cooling_slowdown(layer, self.own_layer(li), self.s);
         let seam = if spiral {
             SeamPosition::Nearest
         } else {
@@ -1602,6 +1658,7 @@ impl<'a> Writer<'a> {
         if !seams_here.is_empty() {
             *seams_below = seams_here;
         }
+        self.top_printed = self.top_printed.max(layer.z);
     }
 
     /// One path of a layer: its type marker when the type changes, a travel to its start
@@ -1631,7 +1688,7 @@ impl<'a> Writer<'a> {
             &mut look.seams_here,
         );
         self.travel_to(pts[0], layer.z);
-        self.set_fan_for(path.kind, look.li);
+        self.set_fan_for(path.kind, self.own_layer(look.li));
         let style = PathStyle {
             li: look.li,
             pi,
@@ -1669,14 +1726,15 @@ impl<'a> Writer<'a> {
             self.progress_marks.push((self.g.len(), self.seconds));
         }
         // Vase mode: above the solid bottom, the wall climbs continuously instead.
-        let spiral = self.s.vase_mode && li >= self.s.bottom_layers as usize && li > 0;
+        let own = self.own_layer(li);
+        let spiral = self.s.vase_mode && own >= self.s.bottom_layers as usize && own > 0;
         if !spiral {
-            if li > 0 && self.printer.retract_layer_change {
+            if own > 0 && self.printer.retract_layer_change {
                 self.retract_now();
             }
             let _ = writeln!(self.g, "G1 Z{:.3} F600", layer.z);
         }
-        if li == 1 && self.filament.fan_percent > 0 {
+        if own == 1 && self.filament.fan_percent > 0 {
             let _ = writeln!(
                 self.g,
                 "M106 S{} ; part fan",
@@ -1844,14 +1902,16 @@ impl<'a> Writer<'a> {
             PathKind::Ironing => (IRONING_FLOW, IRONING_SPEED),
             PathKind::Bridge => (
                 s.bridge_flow / 100.0,
-                (speed_for(PathKind::Bridge, style.li, s) * style.slowdown).max(MIN_PRINT_SPEED),
+                (speed_for(PathKind::Bridge, self.own_layer(style.li), s) * style.slowdown)
+                    .max(MIN_PRINT_SPEED),
             ),
             kind => (
                 1.0,
-                (speed_for(kind, style.li, s) * style.slowdown).max(MIN_PRINT_SPEED),
+                (speed_for(kind, self.own_layer(style.li), s) * style.slowdown)
+                    .max(MIN_PRINT_SPEED),
             ),
         };
-        let accel = self.print_accel(style.kind, style.li);
+        let accel = self.print_accel(style.kind, self.own_layer(style.li));
         self.set_accel(accel, false);
         let t = motion::line_time(&pts, speed, accel);
         self.seconds += t;

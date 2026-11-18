@@ -38,6 +38,7 @@ mod profiles;
 mod project;
 mod recent;
 mod repair;
+mod sequential;
 mod settings_registry;
 mod slicer;
 mod split;
@@ -99,6 +100,7 @@ Slicing options:
   --variable-walls                variable-width walls for thin parts (experimental)
   --label-objects                 name each object in the G-code (EXCLUDE_OBJECT / M486)
   --arc-fitting                   write round walls as G2/G3 arcs (not for X3G)
+  --sequential                    print one object at a time (needs room between them)
   --fuzzy-top                     textured top surface (random lift up to 0.1 mm)
 
 Models can be STL, OBJ or 3MF files.
@@ -130,6 +132,7 @@ struct Args {
     variable_walls: bool,
     label_objects: bool,
     arc_fitting: bool,
+    sequential: bool,
     fuzzy_top: bool,
     infill_pattern: Option<String>,
     seam: Option<String>,
@@ -188,6 +191,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--variable-walls" => a.variable_walls = true,
             "--label-objects" => a.label_objects = true,
             "--arc-fitting" => a.arc_fitting = true,
+            "--sequential" => a.sequential = true,
             "--fuzzy-top" => a.fuzzy_top = true,
             "--infill-pattern" => a.infill_pattern = Some(value("--infill-pattern")?),
             "--seam" => a.seam = Some(value("--seam")?),
@@ -335,6 +339,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
     settings.variable_walls = args.variable_walls;
     settings.label_objects = args.label_objects;
     settings.arc_fitting = args.arc_fitting;
+    settings.sequential = args.sequential;
     settings.fuzzy_top = args.fuzzy_top;
     if let Some(p) = &args.infill_pattern {
         match profiles::InfillPattern::ALL
@@ -430,14 +435,36 @@ fn slice_without_window(args: &Args) -> ExitCode {
         labels: gcode::object_labels(&objects),
         ..Default::default()
     };
-    let sliced = pipeline::slice_plate_with_tools(
-        &triangles,
-        &printer,
-        &filament,
-        &settings,
-        &tools,
-        &|_| {},
-    );
+    let sliced = if settings.sequential {
+        let order = match pipeline::sequential_order(&objects, &printer) {
+            Ok(order) => order,
+            Err(why) => {
+                eprintln!("printcraft: {why}");
+                return ExitCode::from(2);
+            }
+        };
+        let tris: Vec<Vec<model::Triangle>> = objects.iter().map(|o| o.world_triangles()).collect();
+        let parts: Vec<pipeline::Part> = tris.iter().map(|t| t.as_slice()).zip(&objects).collect();
+        pipeline::slice_plate_sequential(
+            &parts,
+            &order,
+            &pipeline::support_volumes(&objects),
+            &printer,
+            &filament,
+            &settings,
+            &tools,
+            &|_| {},
+        )
+    } else {
+        pipeline::slice_plate_with_tools(
+            &triangles,
+            &printer,
+            &filament,
+            &settings,
+            &tools,
+            &|_| {},
+        )
+    };
     let out = sliced.gcode;
     let wants_x3g = output
         .extension()

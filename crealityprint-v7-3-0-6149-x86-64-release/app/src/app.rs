@@ -619,6 +619,7 @@ impl PrintCraftApp {
             shield,
             tower,
             labels,
+            objects_from: Vec::new(),
             parts,
             support_tool: self.dual.support_tool,
             primary: self.printer.primary_tool(),
@@ -786,6 +787,18 @@ impl PrintCraftApp {
                 return;
             }
         };
+        // One object at a time: the print head must clear the finished objects.
+        let sequence = if self.settings.sequential {
+            match pipeline::sequential_order(&self.objects, &self.printer) {
+                Ok(order) => Some((order, self.plate.clone(), self.objects.clone())),
+                Err(why) => {
+                    self.status = why;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let (settings, printer, filament) = (
             self.settings.clone(),
             self.printer.clone(),
@@ -801,19 +814,30 @@ impl PrintCraftApp {
         let (tx, rx) = mpsc::channel();
         let p = progress.clone();
         std::thread::spawn(move || {
+            let report = |v: f32| p.store(v.to_bits(), Ordering::Relaxed);
             let pipeline::Sliced {
                 result,
                 gcode,
                 picture,
-            } = pipeline::slice_plate_grouped(
-                &tris,
-                &plan,
-                &printer,
-                &filament,
-                &settings,
-                &tools,
-                &|v| p.store(v.to_bits(), Ordering::Relaxed),
-            );
+            } = match &sequence {
+                Some((order, plate, objects)) => {
+                    let parts: Vec<pipeline::Part> =
+                        plate.iter().map(|t| t.as_slice()).zip(objects).collect();
+                    pipeline::slice_plate_sequential(
+                        &parts,
+                        order,
+                        &plan.support_volumes,
+                        &printer,
+                        &filament,
+                        &settings,
+                        &tools,
+                        &report,
+                    )
+                }
+                None => pipeline::slice_plate_grouped(
+                    &tris, &plan, &printer, &filament, &settings, &tools, &report,
+                ),
+            };
             let shared_text = Arc::new(gcode.text.clone());
             // A custom G-code mistake (an unknown placeholder, an unclosed {if}) comes first:
             // the file would not be what the person wrote. Then Ditto: the job as sliced

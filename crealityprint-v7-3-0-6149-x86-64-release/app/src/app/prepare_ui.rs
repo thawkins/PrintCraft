@@ -233,6 +233,16 @@ impl PrintCraftApp {
                                 ui.checkbox(&mut self.printer.binary_gcode, "");
                                 ui.end_row();
                             }
+                            ui.label("Head clearance radius").on_hover_text(
+                                "Sequential printing: how far the print head (fan duct, heater block) reaches out around the nozzle. Objects printed one at a time must be at least this far apart",
+                            );
+                            ui.add(mm(&mut self.printer.clearance_radius, limits::CLEARANCE_MM, 0.5));
+                            ui.end_row();
+                            ui.label("Gantry clearance height").on_hover_text(
+                                "Sequential printing: how high the gantry (the X axis beam) is above the nozzle tip. Every object but the tallest must be lower than this",
+                            );
+                            ui.add(mm(&mut self.printer.clearance_height, limits::CLEARANCE_MM, 0.5));
+                            ui.end_row();
                             if self.printer.extruders >= 2 {
                                 ui.label("Primary nozzle").on_hover_text(
                                     "The default nozzle: new parts, supports, the skirt and one-nozzle prints use it, and it has the main filament (01)",

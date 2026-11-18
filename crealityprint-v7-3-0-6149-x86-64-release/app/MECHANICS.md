@@ -535,6 +535,20 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   way by at most 1.9 pi. Runs grow greedily from each point. I and J are the centre
   relative to the start. E follows the arc's length; the time estimate still uses the
   lines. Not used for X3G, spiral vase walls or fuzzy top. Decided 2026-11-19.
+* **Sequential printing** (src/sequential.rs, src/pipeline.rs `slice_plate_sequential`;
+  "Sequential printing", off by default). Objects print one at a time, shortest first
+  (ties keep plate order). The check, before slicing: every two footprints (convex
+  outlines seen from above) must be at least the printer's head clearance radius apart
+  (closest corner to edge; overlapping is 0 mm), and every object but the last must be
+  no taller than its gantry clearance height. Both default to 20 mm (PrusaSlicer's
+  figure when a profile gives none; estimated). Each object is sliced on its own (with
+  its own settings) and the layers are joined in print order, numbered on. Before each
+  next object: retract, `G1 Z` to 2 mm above the tallest point printed so far (at most
+  the printer's height), `G0` to the next object's first line, then the layer change
+  comes down there. Within an object, layers count from its own first layer, so it gets
+  first-layer speed, acceleration and fan-off, the fan comes on at its second layer, and
+  the vase spiral starts above its own bottom layers. Not for two-nozzle printers.
+  Decided 2026-11-19.
 * **Binary G-code** (src/bgcode.rs; printer editor "Binary G-code (.bgcode)", off by
   default). Made from the finished plain file. Checksums: CRC32 on every block.
   Metadata blocks are uncompressed INI (`key=value`): file (`Producer`), printer (the
