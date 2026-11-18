@@ -314,6 +314,8 @@ pub struct PrintSettings {
     pub print_speed: f32,
     pub first_layer_speed: f32,
     pub travel_speed: f32,
+    /// Speeds for single kinds of line (Advanced); each is "Auto" until set.
+    pub speeds: FeatureSpeeds,
     pub supports: bool,
     /// Overhangs steeper than this (degrees from vertical) get supports.
     pub support_angle: f32,
@@ -339,6 +341,90 @@ pub struct PrintSettings {
     pub z_hop: f32,
     /// Slow down so each layer takes at least this long (seconds) to cool.
     pub min_layer_time: f32,
+}
+
+/// The kinds of line that can be given their own speed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeedFeature {
+    OuterWall,
+    InnerWall,
+    SparseInfill,
+    SolidInfill,
+    TopSurface,
+    Support,
+}
+
+impl SpeedFeature {
+    pub const ALL: [Self; 6] = [
+        Self::OuterWall,
+        Self::InnerWall,
+        Self::SparseInfill,
+        Self::SolidInfill,
+        Self::TopSurface,
+        Self::Support,
+    ];
+
+    /// The outer wall's "Auto" speed is this share of the print speed: a slower outer
+    /// wall gives a cleaner visible surface.
+    pub const OUTER_WALL_FACTOR: f32 = 0.5;
+
+    /// The name of this speed in a project file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::OuterWall => "outer_wall",
+            Self::InnerWall => "inner_wall",
+            Self::SparseInfill => "sparse_infill",
+            Self::SolidInfill => "solid_infill",
+            Self::TopSurface => "top_surface",
+            Self::Support => "support",
+        }
+    }
+
+    /// The name of this speed in the settings panel.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OuterWall => "Outer wall",
+            Self::InnerWall => "Inner wall",
+            Self::SparseInfill => "Sparse infill",
+            Self::SolidInfill => "Solid infill",
+            Self::TopSurface => "Top surface",
+            Self::Support => "Support",
+        }
+    }
+
+    /// The speed (mm/s) used when this feature is left on "Auto".
+    pub fn auto_speed(self, print_speed: f32) -> f32 {
+        match self {
+            Self::OuterWall => print_speed * Self::OUTER_WALL_FACTOR,
+            Self::InnerWall
+            | Self::SparseInfill
+            | Self::SolidInfill
+            | Self::TopSurface
+            | Self::Support => print_speed,
+        }
+    }
+}
+
+/// A speed per `SpeedFeature`. `None` is "Auto": the speed follows the print speed, so a
+/// quality preset's speed still applies to it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FeatureSpeeds([Option<f32>; SpeedFeature::ALL.len()]);
+
+impl FeatureSpeeds {
+    /// The speed set for `f`, or `None` when it is on "Auto".
+    pub fn get(&self, f: SpeedFeature) -> Option<f32> {
+        self.0[f as usize]
+    }
+
+    /// Sets `f` to a speed (mm/s), or back to "Auto" with `None`.
+    pub fn set(&mut self, f: SpeedFeature, speed: Option<f32>) {
+        self.0[f as usize] = speed;
+    }
+
+    /// The speed (mm/s) `f` prints at with this print speed.
+    pub fn speed(&self, f: SpeedFeature, print_speed: f32) -> f32 {
+        self.get(f).unwrap_or_else(|| f.auto_speed(print_speed))
+    }
 }
 
 /// The quick quality choices shown at the top of the print settings.
@@ -400,6 +486,7 @@ impl Quality {
             print_speed: 60.0,
             first_layer_speed: 25.0,
             travel_speed: 150.0,
+            speeds: FeatureSpeeds::default(),
             supports: false,
             support_angle: 50.0,
             supports_on_plate_only: false,
@@ -503,5 +590,16 @@ mod tests {
             .map(|p| p.name)
             .collect();
         assert_eq!(klipper, ["Creality Ender-3 V3 KE"]);
+    }
+
+    #[test]
+    fn test_feature_speeds_survive_a_quality_preset() {
+        let mut s = PrintSettings::default();
+        s.speeds.set(SpeedFeature::OuterWall, Some(22.0));
+        Quality::Draft.apply(&mut s);
+        assert_eq!(s.speeds.get(SpeedFeature::OuterWall), Some(22.0));
+        // Auto speeds follow the preset's new print speed.
+        assert_eq!(s.speeds.speed(SpeedFeature::InnerWall, s.print_speed), 80.0);
+        assert!(Quality::Draft.matches(&s));
     }
 }

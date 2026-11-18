@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Speeds per kind of line (gap plan task M1.1). With Advanced on, the Speed section has
+  outer wall, inner wall, sparse infill, solid infill, top surface and support speeds.
+  Each is "Auto" until set: Auto follows the print speed (outer walls at half of it), as
+  before, so existing settings print exactly as they did. A speed you set is saved in
+  the project and kept when you pick a quality preset.
+
 ## [0.0.5] - 2026-11-18
 
 ### Added

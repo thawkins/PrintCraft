@@ -1,12 +1,10 @@
 //! Writes sliced layers as G-code and estimates print time, filament and cost.
 
 use crate::geometry::Point2;
-use crate::profiles::{Filament, PrintSettings, Printer, SeamPosition};
+use crate::profiles::{Filament, PrintSettings, Printer, SeamPosition, SpeedFeature};
 use crate::slicer::{Layer, PathKind, SliceResult, ToolPath};
 use std::fmt::Write;
 
-/// Outer walls print slower than the main speed for a nicer surface.
-const OUTER_WALL_SPEED_FACTOR: f32 = 0.5;
 /// Extra time per layer for slowing down, turning and layer changes.
 const LAYER_CHANGE_SECONDS: f32 = 1.0;
 /// Real printers accelerate; plain length / speed under-counts by roughly this much.
@@ -52,13 +50,33 @@ pub fn filament_for(length: f32, width: f32, height: f32, filament_diameter: f32
     length * width * height / filament_area
 }
 
+/// The settings-panel speed that a kind of line prints at, if it has one of its own.
+pub fn speed_feature(kind: PathKind) -> Option<SpeedFeature> {
+    match kind {
+        PathKind::OuterWall => Some(SpeedFeature::OuterWall),
+        PathKind::InnerWall => Some(SpeedFeature::InnerWall),
+        PathKind::SparseInfill => Some(SpeedFeature::SparseInfill),
+        PathKind::SolidInfill => Some(SpeedFeature::SolidInfill),
+        PathKind::TopSurface => Some(SpeedFeature::TopSurface),
+        PathKind::Support => Some(SpeedFeature::Support),
+        PathKind::Skirt
+        | PathKind::Brim
+        | PathKind::Ironing
+        | PathKind::Raft
+        | PathKind::PrimeTower
+        | PathKind::OozeShield => None,
+    }
+}
+
+/// The speed (mm/s) for a line of `kind` on layer `layer`, before cooling slow-down. The
+/// first layer always uses the first layer speed.
 fn speed_for(kind: PathKind, layer: usize, s: &PrintSettings) -> f32 {
     if layer == 0 {
         return s.first_layer_speed;
     }
-    match kind {
-        PathKind::OuterWall => s.print_speed * OUTER_WALL_SPEED_FACTOR,
-        _ => s.print_speed,
+    match speed_feature(kind) {
+        Some(f) => s.speeds.speed(f, s.print_speed),
+        None => s.print_speed,
     }
 }
 
@@ -1679,6 +1697,92 @@ mod tests {
             .text
             .lines()
             .any(|l| l.starts_with("G1 X") && (l.ends_with(" F600") || l.ends_with(" F300"))));
+    }
+
+    #[test]
+    fn test_feature_speeds_auto_follows_print_speed() {
+        let s = PrintSettings::default();
+        assert_eq!(speed_for(PathKind::OuterWall, 3, &s), s.print_speed * 0.5);
+        for kind in [
+            PathKind::InnerWall,
+            PathKind::SparseInfill,
+            PathKind::SolidInfill,
+            PathKind::TopSurface,
+            PathKind::Support,
+            PathKind::Skirt,
+        ] {
+            assert_eq!(speed_for(kind, 3, &s), s.print_speed, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn test_feature_speeds_each_feature_uses_its_own_speed() {
+        let mut s = PrintSettings::default();
+        for (i, f) in SpeedFeature::ALL.into_iter().enumerate() {
+            s.speeds.set(f, Some(20.0 + 10.0 * i as f32));
+        }
+        for (i, f) in SpeedFeature::ALL.into_iter().enumerate() {
+            let kind = PathKind::ALL
+                .into_iter()
+                .find(|k| speed_feature(*k) == Some(f))
+                .expect("a path kind for each feature");
+            assert_eq!(speed_for(kind, 3, &s), 20.0 + 10.0 * i as f32, "{f:?}");
+        }
+        // Lines without a speed of their own, and the whole first layer, are unchanged.
+        assert_eq!(speed_for(PathKind::Skirt, 3, &s), s.print_speed);
+        assert_eq!(speed_for(PathKind::OuterWall, 0, &s), s.first_layer_speed);
+    }
+
+    /// The feed rates (mm/min) of extruding moves after the first layer, by `;TYPE:`.
+    fn feeds_by_type(text: &str) -> std::collections::HashMap<String, Vec<f32>> {
+        let mut by_type: std::collections::HashMap<String, Vec<f32>> = Default::default();
+        let (mut layer, mut kind) = (0usize, String::new());
+        for l in text.lines() {
+            if let Some(n) = l.strip_prefix(";LAYER:") {
+                layer = n.trim().parse().unwrap_or(0);
+            } else if let Some(k) = l.strip_prefix(";TYPE:") {
+                kind = k.to_string();
+            } else if layer > 0 && l.starts_with("G1 X") && l.contains(" E") {
+                if let Some(f) = l.rsplit_once(" F").and_then(|(_, f)| f.parse().ok()) {
+                    by_type.entry(kind.clone()).or_default().push(f);
+                }
+            }
+        }
+        by_type
+    }
+
+    #[test]
+    fn test_feature_speeds_reach_the_gcode() {
+        let mut s = PrintSettings {
+            min_layer_time: 0.0,
+            ..PrintSettings::default()
+        };
+        s.speeds.set(SpeedFeature::OuterWall, Some(25.0));
+        s.speeds.set(SpeedFeature::InnerWall, Some(45.0));
+        s.speeds.set(SpeedFeature::SparseInfill, Some(90.0));
+        let (_, out) = sliced_cube(&s);
+        let feeds = feeds_by_type(&out.text);
+        let all_at = |t: &str, f: f32| feeds[t].iter().all(|x| *x == f);
+        assert!(all_at("WALL-OUTER", 1500.0), "{:?}", feeds["WALL-OUTER"]);
+        assert!(all_at("WALL-INNER", 2700.0), "{:?}", feeds["WALL-INNER"]);
+        assert!(all_at("FILL", 5400.0), "{:?}", feeds["FILL"]);
+        // Solid infill was left on Auto: it still follows the print speed.
+        assert!(all_at("SKIN", s.print_speed * 60.0), "{:?}", feeds["SKIN"]);
+    }
+
+    #[test]
+    fn test_feature_speeds_default_matches_the_old_single_speed() {
+        let s = PrintSettings {
+            min_layer_time: 0.0,
+            ..PrintSettings::default()
+        };
+        let (_, out) = sliced_cube(&s);
+        let feeds = feeds_by_type(&out.text);
+        let p = s.print_speed * 60.0;
+        assert!(feeds["WALL-OUTER"].iter().all(|x| *x == p * 0.5));
+        for t in ["WALL-INNER", "FILL", "SKIN"] {
+            assert!(feeds[t].iter().all(|x| *x == p), "{t}: {:?}", feeds[t]);
+        }
     }
 
     #[test]

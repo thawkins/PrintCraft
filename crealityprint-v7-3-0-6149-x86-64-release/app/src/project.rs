@@ -14,8 +14,8 @@ use crate::geometry::Vec3;
 use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::FoundPrinter;
 use crate::profiles::{
-    limits, Adhesion, DualNozzle, Filament, InfillPattern, PrintSettings, Printer, Quality,
-    SeamPosition,
+    limits, Adhesion, DualNozzle, FeatureSpeeds, Filament, InfillPattern, PrintSettings, Printer,
+    Quality, SeamPosition, SpeedFeature,
 };
 use serde_json::{json, Value};
 use std::ops::RangeInclusive;
@@ -123,6 +123,10 @@ pub fn to_json(p: &Project) -> String {
             "print_speed": s.print_speed,
             "first_layer_speed": s.first_layer_speed,
             "travel_speed": s.travel_speed,
+            "feature_speeds": SpeedFeature::ALL
+                .into_iter()
+                .map(|f| (f.key().to_string(), json!(s.speeds.get(f))))
+                .collect::<serde_json::Map<String, Value>>(),
             "supports": s.supports,
             "support_angle": s.support_angle,
             "supports_on_plate_only": s.supports_on_plate_only,
@@ -274,6 +278,15 @@ fn project_from(v: &Value) -> Result<Project, String> {
     let st = v.get("settings").unwrap_or(&empty);
     let d = PrintSettings::default();
     let pick = |k: &str| text_of(st, k).unwrap_or_default();
+    // Each feature speed: a number, or missing / null for "Auto".
+    let mut feature_speeds = FeatureSpeeds::default();
+    if let Some(fs) = st.get("feature_speeds") {
+        for f in SpeedFeature::ALL {
+            let r = limits::PRINT_SPEED;
+            let v = fs.get(f.key()).and_then(Value::as_f64);
+            feature_speeds.set(f, v.map(|v| (v as f32).clamp(*r.start(), *r.end())));
+        }
+    }
     let settings = PrintSettings {
         layer_height: num_in(st, "layer_height", d.layer_height, limits::LAYER_HEIGHT),
         first_layer_height: num_in(
@@ -299,6 +312,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
             limits::FIRST_LAYER_SPEED,
         ),
         travel_speed: num_in(st, "travel_speed", d.travel_speed, limits::TRAVEL_SPEED),
+        speeds: feature_speeds,
         supports: flag(st, "supports", d.supports),
         support_angle: num_in(st, "support_angle", d.support_angle, limits::SUPPORT_ANGLE),
         supports_on_plate_only: flag(st, "supports_on_plate_only", d.supports_on_plate_only),
@@ -589,6 +603,27 @@ mod tests {
         assert!(p.objects.is_empty() && p.device.is_none());
         assert!(from_json("{}").is_err(), "not a project");
         assert!(from_json("hello").is_err());
+    }
+
+    #[test]
+    fn test_project_feature_speeds_round_trip_and_clamp() {
+        let mut p = sample();
+        p.settings.speeds.set(SpeedFeature::OuterWall, Some(33.0));
+        p.settings.speeds.set(SpeedFeature::Support, Some(70.0));
+        let back = from_json(&to_json(&p)).unwrap();
+        assert_eq!(back.settings.speeds, p.settings.speeds);
+        assert_eq!(back.settings.speeds.get(SpeedFeature::InnerWall), None);
+        // Out-of-range values are held to the panel's limits; an old file has none.
+        let bad = from_json(
+            r#"{"format":"printcraft-project","version":1,"settings":{"feature_speeds":{"outer_wall":9999,"top_surface":null}}}"#,
+        )
+        .unwrap();
+        let max = *limits::PRINT_SPEED.end();
+        assert_eq!(bad.settings.speeds.get(SpeedFeature::OuterWall), Some(max));
+        assert_eq!(bad.settings.speeds.get(SpeedFeature::TopSurface), None);
+        let old =
+            from_json(r#"{"format":"printcraft-project","version":1,"settings":{}}"#).unwrap();
+        assert_eq!(old.settings.speeds, FeatureSpeeds::default());
     }
 
     #[test]

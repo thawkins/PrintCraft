@@ -9,6 +9,7 @@
 //! The look is PrintCraft's own (no logos or brand artwork).
 
 use super::*;
+use crate::profiles::SpeedFeature;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum ProcessTab {
@@ -828,8 +829,46 @@ fn speed_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
                     .speed(1.0)
                     .suffix(" mm/s"),
             );
+            for f in SpeedFeature::ALL {
+                feature_speed_row(ui, s, f);
+            }
         }
     });
+}
+
+/// One feature's speed: "Auto" follows the print speed; unticking it sets a speed of the
+/// feature's own, starting from the speed it had.
+fn feature_speed_row(ui: &mut Ui, s: &mut PrintSettings, f: SpeedFeature) {
+    ui.label(f.label());
+    ui.horizontal(|ui| {
+        let mut auto = s.speeds.get(f).is_none();
+        if ui
+            .checkbox(&mut auto, "Auto")
+            .on_hover_text("Follow the print speed")
+            .changed()
+        {
+            let speed = (!auto).then(|| f.auto_speed(s.print_speed));
+            s.speeds.set(f, speed);
+        }
+        match s.speeds.get(f) {
+            Some(mut v) => {
+                let drag = egui::DragValue::new(&mut v)
+                    .range(limits::PRINT_SPEED)
+                    .speed(1.0)
+                    .suffix(" mm/s");
+                if ui.add(drag).changed() {
+                    s.speeds.set(f, Some(v));
+                }
+            }
+            None => {
+                ui.label(
+                    RichText::new(format!("{:.0} mm/s", f.auto_speed(s.print_speed)))
+                        .color(theme::TEXT_DIM),
+                );
+            }
+        }
+    });
+    ui.end_row();
 }
 
 /// Minimum layer time and z-hop (Advanced only).

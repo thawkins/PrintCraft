@@ -154,8 +154,12 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   (M82) is used.
 * **Retraction.** Before any travel longer than 2 mm, retract by the printer's retraction
   length, then un-retract before printing.
-* **Speeds.** The first layer prints at the first-layer speed. Outer walls print at 50 %
-  of the print speed. Everything else prints at the print speed.
+* **Speeds.** The first layer prints at the first-layer speed. After that, each kind of
+  line has its own speed (Advanced: outer wall, inner wall, sparse infill, solid infill,
+  top surface, support). Each starts on "Auto": outer walls at 50 % of the print speed,
+  the others at the print speed. A speed set by hand (15-500 mm/s) replaces Auto and
+  stays when a quality preset is chosen. Skirt, brim, raft, prime tower and ooze shield
+  print at the print speed; ironing at 15 mm/s.
 * **Fan.** Off on layer 1, then the filament's fan % from layer 2 onwards.
 * **Heat waits (src/heat.rs) — only while heating up, never for cooling** (person's
   request). A nozzle or plate already hotter than the job needs is set to the new target,
