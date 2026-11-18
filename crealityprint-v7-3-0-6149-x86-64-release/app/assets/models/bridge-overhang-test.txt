@@ -18,11 +18,13 @@ Back piece - overhangs:
 bridge-overhang-test.printcraft - the same part as a ready-to-run PrintCraft project
 (File > Open project). A project keeps its own copy of the part, so it opens even if
 the STL moves. Settings:
-  printer   Creality Ender-3 V3 KE preset (220 x 220 mm, Klipper, 8000 mm/s^2); no
+  printer   Creality Ender-3 V3 KE preset (220 x 220 mm, Klipper, 8000 mm/s^2), with
+            retraction raised from the preset's 0.8 mm to 1.2 mm after the first test
+            print strung between the pieces and between the piers; no
             printer device is saved, so pick yours on the Device page. Choose another
             printer preset for another printer: the print settings stay.
   filament  PLA, 210 C nozzle, 60 C plate, fan 100 %, flow ratio 100 %
   process   Standard (0.2 mm layers), 2 walls, 25 % grid infill, skirt,
             supports OFF (the point of the test), avoid crossing walls ON
   bridges   speed Auto (half the print speed, 30 mm/s), flow 95 %, fan 100 %
-Slices to 137 layers, about 41 min and 5 g.
+Slices to 137 layers, about 42 min and 5 g.

@@ -49,7 +49,7 @@
     "primary_nozzle": 0,
     "purge_mm": 30.0,
     "retract_layer_change": false,
-    "retract_length": 0.800000011920929,
+    "retract_length": 1.2000000476837158,
     "retract_min_travel": 2.0,
     "retract_speed": 40.0,
     "standby_drop": 15,
