@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-11-18
+
 ### Changed
 
 - Variable-width walls (gap plan task M5.7) are finished, still experimental and off
@@ -523,7 +525,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects (`.printcraft`) that save the plate, settings and printer.
 - Command-line slicing (`printcraft --slice`).
 
-[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/thawkins/PrintCraft/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/thawkins/PrintCraft/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/thawkins/PrintCraft/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/thawkins/PrintCraft/compare/v0.0.6...v0.0.7
