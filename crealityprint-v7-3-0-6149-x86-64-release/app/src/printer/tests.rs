@@ -462,7 +462,8 @@ fn prints_on_a_pretend_repetier_printer_over_usb() {
     assert!(
         wait_for(&link, |s| s.status.firmware.as_deref()
             == Some("Repetier 1.0.3")),
-        "the firmware never named itself"
+        "the firmware never named itself: {:?}",
+        link.state().log
     );
     link.send(Command::UploadAndPrint {
         name: "cube.gcode".into(),
