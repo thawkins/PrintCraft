@@ -14,3 +14,15 @@ Back piece - overhangs:
   30, 45, 60 and 70 degrees from vertical (bottom to top), then a flat
   10 mm shelf on top. The wedges and the shelf are held on one side only,
   so they are overhangs, not bridges.
+
+bridge-overhang-test.printcraft - the same part as a ready-to-run PrintCraft project
+(File > Open project). A project keeps its own copy of the part, so it opens even if
+the STL moves. Settings:
+  printer   FlashForge Creator Pro (Sailfish) preset, right nozzle (T0) only; no
+            printer device is saved, so pick yours on the Device page. Choose another
+            printer preset for another printer: the print settings stay.
+  filament  PLA, 210 C nozzle, 60 C plate, fan 100 %, flow ratio 100 %
+  process   Standard (0.2 mm layers), 2 walls, 25 % grid infill, skirt,
+            supports OFF (the point of the test), avoid crossing walls ON
+  bridges   speed Auto (half the print speed, 30 mm/s), flow 95 %, fan 100 %
+Slices to 137 layers, about 50 min and 5 g.
