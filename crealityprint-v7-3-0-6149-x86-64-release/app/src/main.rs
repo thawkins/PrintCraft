@@ -25,6 +25,7 @@ mod printer;
 mod profiles;
 mod project;
 mod recent;
+mod settings_registry;
 mod slicer;
 mod theme;
 mod thumbnail;
