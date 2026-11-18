@@ -4,6 +4,7 @@
 
 mod prepare_ui;
 mod project_ui;
+mod settings_ui;
 
 use crate::device_ui::{DevicePage, PrintJob};
 use crate::gcode::GcodeOutput;
@@ -11,9 +12,7 @@ use crate::geometry::Vec3;
 use crate::gizmo;
 use crate::model::{Mesh, PlacedObject, SampleShape, Triangle};
 use crate::pipeline;
-use crate::profiles::{
-    limits, Adhesion, Filament, InfillPattern, PrintSettings, Printer, Quality, SeamPosition,
-};
+use crate::profiles::{limits, Filament, PrintSettings, Printer, Quality};
 use crate::slicer::{PathKind, SliceResult};
 use crate::theme;
 use crate::view3d::{self, Camera, DrawObject};

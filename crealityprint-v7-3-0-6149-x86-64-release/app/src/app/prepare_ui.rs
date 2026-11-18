@@ -8,8 +8,9 @@
 //!
 //! The look is PrintCraft's own (no logos or brand artwork).
 
+use super::settings_ui::{group, settings_group};
 use super::*;
-use crate::profiles::{AccelFeature, SpeedFeature};
+use crate::settings_registry::{AutoContext, Group};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum ProcessTab {
@@ -610,25 +611,18 @@ impl PrintCraftApp {
         ui.add_space(6.0);
         let before = self.settings.clone();
         let advanced = self.advanced;
-        let s = &mut self.settings;
-
-        layer_height_group(ui, s, advanced);
-        seam_group(ui, s);
-        walls_and_surfaces_group(ui, s, advanced);
-        infill_group(ui, s);
-        support_group(ui, s);
-        if self.printer.extruders >= 2 {
-            let primary = self.printer.primary_tool();
-            two_nozzle_group(ui, &mut self.dual, self.settings.supports, primary);
+        let ctx = AutoContext {
+            machine_accel: self.printer.acceleration,
+        };
+        for g in Group::ALL {
+            // The two-nozzle choices (not print settings) sit between Support and Adhesion.
+            if g == Group::Adhesion && self.printer.extruders >= 2 {
+                let primary = self.printer.primary_tool();
+                two_nozzle_group(ui, &mut self.dual, self.settings.supports, primary);
+            }
+            settings_group(ui, &mut self.settings, g, advanced, &ctx);
         }
-        let machine_accel = self.printer.acceleration;
-        let s = &mut self.settings;
-        adhesion_group(ui, s);
-        speed_group(ui, s, advanced, machine_accel);
-        if advanced {
-            cooling_and_travel_group(ui, s);
-            special_mode_group(ui, s);
-        } else {
+        if !advanced {
             ui.label(
                 RichText::new(
                     "Turn on Advanced for speeds, cooling, z-hop, fuzzy skin and spiral vase.",
@@ -663,340 +657,6 @@ impl PrintCraftApp {
                 }
             });
     }
-}
-
-/// Layer height, plus the first layer's height in Advanced.
-fn layer_height_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
-    group(ui, "Layer height", |ui| {
-        row(
-            ui,
-            "Layer height",
-            mm(&mut s.layer_height, limits::LAYER_HEIGHT, 0.01),
-        );
-        if advanced {
-            row(
-                ui,
-                "First layer height",
-                mm(&mut s.first_layer_height, limits::FIRST_LAYER_HEIGHT, 0.01),
-            );
-        }
-    });
-}
-
-/// Where each layer's outer wall starts and ends.
-fn seam_group(ui: &mut Ui, s: &mut PrintSettings) {
-    group(ui, "Seam", |ui| {
-        ui.label("Seam position");
-        egui::ComboBox::from_id_salt("seam")
-            .selected_text(s.seam.label())
-            .show_ui(ui, |ui| {
-                for p in SeamPosition::ALL {
-                    ui.selectable_value(&mut s.seam, p, p.label());
-                }
-            });
-        ui.end_row();
-    });
-}
-
-/// Wall and top/bottom layer counts, ironing, fuzzy top and (Advanced) fuzzy skin.
-fn walls_and_surfaces_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
-    group(ui, "Walls and surfaces", |ui| {
-        row(
-            ui,
-            "Walls",
-            egui::DragValue::new(&mut s.walls).range(limits::WALLS),
-        );
-        row(
-            ui,
-            "Top layers",
-            egui::DragValue::new(&mut s.top_layers).range(limits::SOLID_LAYERS),
-        );
-        row(
-            ui,
-            "Bottom layers",
-            egui::DragValue::new(&mut s.bottom_layers).range(limits::SOLID_LAYERS),
-        );
-        row(
-            ui,
-            "Ironing (smooth tops)",
-            egui::Checkbox::without_text(&mut s.ironing),
-        );
-        ui.label("Fuzzy top (textured top)").on_hover_text(
-            "While laying the visible top surface, the nozzle randomly lifts by up to the amount below, for a textured, matte top. Ironing is skipped while this is on.",
-        );
-        ui.checkbox(&mut s.fuzzy_top, "");
-        ui.end_row();
-        if s.fuzzy_top {
-            row(
-                ui,
-                "Fuzzy top amount",
-                mm(&mut s.fuzzy_top_mm, limits::FUZZY_TOP_MM, 0.01),
-            );
-        }
-        if advanced {
-            row(
-                ui,
-                "Fuzzy skin",
-                egui::Checkbox::without_text(&mut s.fuzzy_skin),
-            );
-            ui.label("Infill/wall overlap").on_hover_text(
-                "How far infill reaches into the innermost wall, as a share of a line width, so the two bond",
-            );
-            ui.add(
-                egui::DragValue::new(&mut s.infill_overlap)
-                    .range(limits::INFILL_OVERLAP)
-                    .speed(1.0)
-                    .suffix(" %"),
-            );
-            ui.end_row();
-            ui.label("Elephant foot").on_hover_text(
-                "Draw the first layer in by this much, to offset the squash that makes it wider than the rest (not with a raft)",
-            );
-            ui.add(mm(&mut s.elephant_foot, limits::ELEPHANT_FOOT, 0.01));
-            ui.end_row();
-            ui.label("Hole compensation").on_hover_text(
-                "Make every hole this much larger all round, as printed holes come out small",
-            );
-            ui.add(mm(
-                &mut s.hole_compensation,
-                limits::HOLE_COMPENSATION,
-                0.01,
-            ));
-            ui.end_row();
-        }
-    });
-}
-
-/// Infill density and pattern.
-fn infill_group(ui: &mut Ui, s: &mut PrintSettings) {
-    group(ui, "Infill", |ui| {
-        row(
-            ui,
-            "Density",
-            egui::DragValue::new(&mut s.infill_percent)
-                .range(limits::INFILL_PERCENT)
-                .speed(1.0)
-                .fixed_decimals(0)
-                .suffix(" %"),
-        );
-        ui.label("Pattern");
-        egui::ComboBox::from_id_salt("infill_pattern")
-            .selected_text(s.infill_pattern.label())
-            .show_ui(ui, |ui| {
-                for p in InfillPattern::ALL {
-                    ui.selectable_value(&mut s.infill_pattern, p, p.label());
-                }
-            });
-        ui.end_row();
-    });
-}
-
-/// The support switch, and its overhang angle and placement once it is on.
-fn support_group(ui: &mut Ui, s: &mut PrintSettings) {
-    group(ui, "Support", |ui| {
-        row(
-            ui,
-            "Enable support",
-            egui::Checkbox::without_text(&mut s.supports),
-        );
-        if s.supports {
-            row(
-                ui,
-                "Overhang angle",
-                egui::DragValue::new(&mut s.support_angle)
-                    .range(limits::SUPPORT_ANGLE)
-                    .speed(1.0)
-                    .suffix("°"),
-            );
-            row(
-                ui,
-                "On build plate only",
-                egui::Checkbox::without_text(&mut s.supports_on_plate_only),
-            );
-            // With a full raft the supports already stand on it.
-            let full_raft = s.adhesion == Adhesion::Raft;
-            let hint = if full_raft {
-                "Adhesion is set to Raft, which already covers the supports"
-            } else {
-                "Supports that reach the bed stand on a small raft of their own, so they stick"
-            };
-            ui.label("Raft under support").on_hover_text(hint);
-            ui.add_enabled(
-                !full_raft,
-                egui::Checkbox::without_text(&mut s.support_raft),
-            )
-            .on_hover_text(hint)
-            .on_disabled_hover_text(hint);
-            ui.end_row();
-        }
-    });
-}
-
-/// Skirt, brim or nothing around the first layer.
-fn adhesion_group(ui: &mut Ui, s: &mut PrintSettings) {
-    group(ui, "Adhesion", |ui| {
-        ui.label("Type");
-        egui::ComboBox::from_id_salt("adhesion")
-            .selected_text(s.adhesion.label())
-            .show_ui(ui, |ui| {
-                for a in Adhesion::ALL {
-                    ui.selectable_value(&mut s.adhesion, a, a.label());
-                }
-            });
-        ui.end_row();
-    });
-}
-
-/// Print speed, plus first layer and travel speeds in Advanced.
-fn speed_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool, machine_accel: f32) {
-    group(ui, "Speed", |ui| {
-        row(
-            ui,
-            "Print speed",
-            egui::DragValue::new(&mut s.print_speed)
-                .range(limits::PRINT_SPEED)
-                .speed(1.0)
-                .suffix(" mm/s"),
-        );
-        if advanced {
-            row(
-                ui,
-                "First layer speed",
-                egui::DragValue::new(&mut s.first_layer_speed)
-                    .range(limits::FIRST_LAYER_SPEED)
-                    .speed(1.0)
-                    .suffix(" mm/s"),
-            );
-            row(
-                ui,
-                "Travel speed",
-                egui::DragValue::new(&mut s.travel_speed)
-                    .range(limits::TRAVEL_SPEED)
-                    .speed(1.0)
-                    .suffix(" mm/s"),
-            );
-            for f in SpeedFeature::ALL {
-                let auto = f.auto_speed(s.print_speed);
-                let set = s.speeds.get(f);
-                let hint = "Follow the print speed";
-                if let Some(v) = auto_row(ui, f.label(), set, auto, AutoUnit::Speed, hint) {
-                    s.speeds.set(f, v);
-                }
-            }
-            for f in AccelFeature::ALL {
-                let set = s.accels.get(f);
-                let hint = "Use the printer's own acceleration (set in the printer editor)";
-                if let Some(v) = auto_row(ui, f.label(), set, machine_accel, AutoUnit::Accel, hint)
-                {
-                    s.accels.set(f, v);
-                }
-            }
-        }
-    });
-}
-
-/// The unit and range of an `auto_row`.
-#[derive(Clone, Copy)]
-enum AutoUnit {
-    /// mm/s, within the print speed limits.
-    Speed,
-    /// mm/s^2, within the acceleration limits.
-    Accel,
-}
-
-/// A setting that is "Auto" (`set` is None) until given a value of its own. The row shows
-/// the Auto value greyed, or a field for the value set; unticking Auto starts from the
-/// Auto value. Returns the new setting when it changed.
-fn auto_row(
-    ui: &mut Ui,
-    label: &str,
-    set: Option<f32>,
-    auto: f32,
-    unit: AutoUnit,
-    hint: &str,
-) -> Option<Option<f32>> {
-    let (range, step, suffix) = match unit {
-        AutoUnit::Speed => (limits::PRINT_SPEED, 1.0, " mm/s"),
-        AutoUnit::Accel => (limits::ACCELERATION, 50.0, " mm/s²"),
-    };
-    let mut changed = None;
-    ui.label(label);
-    ui.horizontal(|ui| {
-        let mut is_auto = set.is_none();
-        if ui
-            .checkbox(&mut is_auto, "Auto")
-            .on_hover_text(hint)
-            .changed()
-        {
-            changed = Some((!is_auto).then_some(auto));
-        }
-        match set {
-            Some(mut v) if !is_auto => {
-                let drag = egui::DragValue::new(&mut v)
-                    .range(range)
-                    .speed(step)
-                    .suffix(suffix);
-                if ui.add(drag).changed() {
-                    changed = Some(Some(v));
-                }
-            }
-            Some(_) | None => {
-                ui.label(RichText::new(format!("{auto:.0}{suffix}")).color(theme::TEXT_DIM));
-            }
-        }
-    });
-    ui.end_row();
-    changed
-}
-
-/// Minimum layer time, z-hop, avoid crossing walls, and bridge flow and fan (Advanced
-/// only).
-fn cooling_and_travel_group(ui: &mut Ui, s: &mut PrintSettings) {
-    group(ui, "Cooling and travel", |ui| {
-        row(
-            ui,
-            "Minimum layer time",
-            egui::DragValue::new(&mut s.min_layer_time)
-                .range(limits::MIN_LAYER_TIME)
-                .speed(0.5)
-                .suffix(" s"),
-        );
-        row(ui, "Z-hop", mm(&mut s.z_hop, limits::Z_HOP, 0.05));
-        ui.label("Avoid crossing walls").on_hover_text(
-            "Travel along the inside of the outer wall instead of out over air or across holes, and retract only when a travel must leave the part",
-        );
-        ui.checkbox(&mut s.avoid_crossing_walls, "");
-        ui.end_row();
-        ui.label("Bridge flow")
-            .on_hover_text("Plastic on bridge lines, as a share of a normal line");
-        ui.add(
-            egui::DragValue::new(&mut s.bridge_flow)
-                .range(limits::BRIDGE_FLOW)
-                .speed(1.0)
-                .suffix(" %"),
-        );
-        ui.end_row();
-        ui.label("Bridge fan")
-            .on_hover_text("Part fan while printing bridge lines");
-        ui.add(
-            egui::DragValue::new(&mut s.bridge_fan)
-                .range(limits::FAN_PERCENT)
-                .speed(1.0)
-                .suffix(" %"),
-        );
-        ui.end_row();
-    });
-}
-
-/// Spiral vase mode (Advanced only).
-fn special_mode_group(ui: &mut Ui, s: &mut PrintSettings) {
-    group(ui, "Special mode", |ui| {
-        row(
-            ui,
-            "Spiral vase",
-            egui::Checkbox::without_text(&mut s.vase_mode),
-        );
-    });
 }
 
 /// The two-nozzle choices: which nozzle prints supports, and Ditto printing.
@@ -1078,23 +738,6 @@ fn two_nozzle_group(ui: &mut Ui, d: &mut crate::profiles::DualNozzle, supports: 
         ui.add(egui::Checkbox::without_text(&mut d.ditto));
         ui.end_row();
     });
-}
-
-/// A titled group with an accent bar, then label / value rows.
-fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
-    ui.horizontal(|ui| {
-        let (r, p) = ui.allocate_painter(egui::vec2(4.0, 18.0), Sense::hover());
-        p.rect_filled(r.rect, 2.0, theme::ACCENT);
-        ui.label(RichText::new(title).size(15.0).strong());
-    });
-    ui.indent(title, |ui| {
-        egui::Grid::new(("group", title))
-            .num_columns(2)
-            .min_col_width(170.0)
-            .spacing([16.0, 6.0])
-            .show(ui, add);
-    });
-    ui.add_space(6.0);
 }
 
 fn mm(v: &mut f32, range: std::ops::RangeInclusive<f32>, speed: f64) -> egui::DragValue<'_> {

@@ -192,11 +192,6 @@ pub fn all() -> &'static [Setting] {
     ALL.get_or_init(build)
 }
 
-/// The setting with project-file key `key`.
-pub fn find(key: &str) -> Option<&'static Setting> {
-    all().iter().find(|s| s.key == key)
-}
-
 fn no_hint(_: &PrintSettings) -> Option<&'static str> {
     None
 }
@@ -721,6 +716,11 @@ fn build() -> Vec<Setting> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The setting with project-file key `key`.
+    fn find(key: &str) -> Option<&'static Setting> {
+        all().iter().find(|s| s.key == key)
+    }
     use crate::profiles::{
         AccelFeature, Adhesion, FeatureAccels, FeatureSpeeds, InfillPattern, PrintSettings,
         SeamPosition, SpeedFeature,
