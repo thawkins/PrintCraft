@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the part, or whose detour is over twice as long, are made as before. On the ORBIT
   fixture this cuts retractions by 63 %. With it off, the G-code is unchanged.
 
+- Calibration settings (gap plan task M1.7): a flow ratio per filament (in
+  "Temperatures and cooling"), and in Advanced, infill/wall overlap, elephant-foot
+  compensation (first layer drawn in, not with a raft) and hole compensation (holes made
+  larger). They are saved in projects, and at their defaults the G-code is unchanged.
+
 ### Changed
 
 - The time estimate now times every line with the printer's acceleration and corner

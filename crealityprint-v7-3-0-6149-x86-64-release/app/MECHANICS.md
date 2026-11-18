@@ -76,7 +76,18 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
    dropped (`offset_left`).
 5. **Infill area.** The outline moved inwards by `line_width × (walls − 0.15)`, so infill
    lines end 15 % of a line width inside the innermost wall's band (the infill bead itself
-   overlaps the wall by about 65 % of a line width). Estimated.
+   overlaps the wall by about 65 % of a line width). Estimated. The 15 % is the
+   **Infill/wall overlap** setting (Advanced, 0-50 %, gap plan M1.7).
+5a. **Size compensation** (`slicer::compensate`, gap plan M1.7; Advanced, both 0 by
+   default). **Hole compensation** (0-1 mm) moves every hole's outline that far into the
+   material on every layer, so holes come out larger. **Elephant foot** (0-1 mm) moves
+   every outline of the first layer that far into the material (outer loops shrink,
+   holes grow), offsetting the squash that widens the first layer; it is skipped with a
+   full raft, where the raft takes the squash. A loop too small to offset is left as it
+   is.
+5b. **Flow ratio** (filament, 50-150 %, default 100 %, gap plan M1.7). Every printed
+   line's filament is multiplied by it (bridges, gap fill and ironing too, on top of
+   their own flow); the purge lines are not.
 6. **Top/bottom (solid) areas.** The model is drawn onto a 1 mm grid on every layer. A grid
    cell on layer *i* is solid if it is empty on any layer from *i − bottom_layers* to
    *i + top_layers*. Layers near the very bottom or top are solid everywhere.

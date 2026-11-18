@@ -36,6 +36,10 @@ pub mod limits {
     pub const Z_HOP: RangeInclusive<f32> = 0.0..=2.0;
     pub const ACCELERATION: RangeInclusive<f32> = 100.0..=30000.0;
     pub const BRIDGE_FLOW: RangeInclusive<f32> = 50.0..=150.0;
+    pub const FLOW_PERCENT: RangeInclusive<f32> = 50.0..=150.0;
+    pub const INFILL_OVERLAP: RangeInclusive<f32> = 0.0..=50.0;
+    pub const ELEPHANT_FOOT: RangeInclusive<f32> = 0.0..=1.0;
+    pub const HOLE_COMPENSATION: RangeInclusive<f32> = 0.0..=1.0;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,6 +239,9 @@ pub struct Filament {
     pub fan_percent: u32,
     /// Price per kilogram, for the cost estimate.
     pub price_per_kg: f32,
+    /// Flow ratio (extrusion multiplier): plastic pushed for every printed line, as a
+    /// share of the computed amount (%). Calibrates for filament and extruder.
+    pub flow_percent: f32,
 }
 
 impl Filament {
@@ -247,6 +254,7 @@ impl Filament {
             density,
             fan_percent: fan,
             price_per_kg: price,
+            flow_percent: 100.0,
         };
         vec![
             f("PLA", 210, 60, 1.24, 100, 20.0),
@@ -349,6 +357,14 @@ pub struct PrintSettings {
     /// Route travels along the inside of the outer wall instead of out over air, and
     /// retract only for travels that must leave the part.
     pub avoid_crossing_walls: bool,
+    /// How far infill line ends reach into the innermost wall's band, as a share of a
+    /// line width (%). At 15 % the infill bead overlaps that wall by about 0.65 of a line.
+    pub infill_overlap: f32,
+    /// The first layer is drawn in by this much (mm) to offset the squash that widens it
+    /// ("elephant's foot"). Not with a raft, which takes the squash instead.
+    pub elephant_foot: f32,
+    /// Holes are made this much (mm) larger all round, as printed holes come out small.
+    pub hole_compensation: f32,
     pub supports: bool,
     /// Overhangs steeper than this (degrees from vertical) get supports.
     pub support_angle: f32,
@@ -375,6 +391,9 @@ pub struct PrintSettings {
     /// Slow down so each layer takes at least this long (seconds) to cool.
     pub min_layer_time: f32,
 }
+
+/// Infill reaches 15 % of a line width into the innermost wall, to bond to it.
+pub const DEFAULT_INFILL_OVERLAP: f32 = 15.0;
 
 /// Bridge flow (%): a little thinner than a normal line, so it is light enough to hang
 /// straight. Estimated from common slicer defaults.
@@ -606,6 +625,9 @@ impl Quality {
             bridge_flow: DEFAULT_BRIDGE_FLOW,
             bridge_fan: DEFAULT_BRIDGE_FAN,
             avoid_crossing_walls: false,
+            infill_overlap: DEFAULT_INFILL_OVERLAP,
+            elephant_foot: 0.0,
+            hole_compensation: 0.0,
             supports: false,
             support_angle: 50.0,
             supports_on_plate_only: false,

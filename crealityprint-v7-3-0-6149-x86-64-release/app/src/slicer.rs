@@ -122,9 +122,6 @@ const SUPPORT_ROW_STEP: usize = 2;
 const SKIRT_DISTANCE_MM: f32 = 5.0;
 const SKIRT_LOOPS: usize = 2;
 const BRIM_LINES: usize = 8;
-/// Infill line ends reach this share of a line width into the innermost wall's band
-/// (so the infill bead overlaps that wall by about 0.65 of a line width).
-const INFILL_OVERLAP: f32 = 0.15;
 /// Raft: layers, how far it reaches past the print (cells of 1 mm), the base layer's line
 /// spacing, and the gap left between a full raft and the model.
 pub const RAFT_LAYERS: usize = 3;
@@ -184,7 +181,8 @@ pub fn slice(
     }
 
     // 1. Outlines of every layer.
-    let outlines = all_outlines(triangles, &heights, progress);
+    let mut outlines = all_outlines(triangles, &heights, progress);
+    compensate(&mut outlines, settings, !full_raft);
 
     // 2. Coarse grid masks, used to find top/bottom surfaces and support areas.
     let grid = Grid::new(&bounds);
@@ -271,9 +269,16 @@ pub fn slice(
         ));
 
         if !vase {
-            paths.extend(gap_fill_paths(&outlines[i], wall_count, line_width));
+            let overlap = settings.infill_overlap / 100.0;
+            paths.extend(gap_fill_paths(
+                &outlines[i],
+                wall_count,
+                line_width,
+                overlap,
+            ));
         }
-        let region = infill_region(&outlines[i], wall_count, line_width);
+        let overlap = settings.infill_overlap / 100.0;
+        let region = infill_region(&outlines[i], wall_count, line_width, overlap);
         if !region.is_empty() && vase {
             // Vase mode: a solid bottom, then nothing but the spiral wall.
             if model_layer < settings.bottom_layers as usize {
@@ -352,6 +357,33 @@ pub fn slice(
     SliceResult { layers, line_width }
 }
 
+/// Size compensation on the layer outlines: every hole grows by `hole_compensation`
+/// all round, and, when the model sits on the plate (no raft), the first layer's
+/// outlines are drawn in by `elephant_foot` (outer loops shrink, holes grow). A loop
+/// that can't be offset (too small) is left as it is.
+fn compensate(outlines: &mut [Vec<Polygon>], settings: &PrintSettings, on_plate: bool) {
+    let shift = |poly: &mut Polygon, d: f32| {
+        if let Some(p) = offset_left(poly, d) {
+            *poly = p;
+        }
+    };
+    if settings.hole_compensation > 0.0 {
+        for poly in outlines.iter_mut().flatten() {
+            if area(poly) < 0.0 {
+                // A hole's loop runs the other way round: its left is the material.
+                shift(poly, settings.hole_compensation);
+            }
+        }
+    }
+    if on_plate && settings.elephant_foot > 0.0 {
+        if let Some(first) = outlines.first_mut() {
+            for poly in first.iter_mut() {
+                shift(poly, settings.elephant_foot);
+            }
+        }
+    }
+}
+
 /// The outline of every layer, cut through the middle of its height. Reports progress
 /// from 0 to 0.4.
 fn all_outlines(
@@ -421,14 +453,19 @@ fn wall_paths(
 /// Limits: a gap is filled with one line, so only strip-like spaces are filled well, and
 /// shapes are offset one loop at a time (a hole's walls are not checked against the
 /// outline's).
-fn gap_fill_paths(outline: &[Polygon], wall_count: u32, line_width: f32) -> Vec<ToolPath> {
+fn gap_fill_paths(
+    outline: &[Polygon],
+    wall_count: u32,
+    line_width: f32,
+    overlap: f32,
+) -> Vec<ToolPath> {
     let mut paths = Vec::new();
     for poly in outline.iter().filter(|p| area(p) > 0.0) {
         let walls = (0..wall_count)
             .take_while(|k| offset_left(poly, line_width * (0.5 + *k as f32)).is_some())
             .count();
         let infill_fits =
-            !infill_region(std::slice::from_ref(poly), wall_count, line_width).is_empty();
+            !infill_region(std::slice::from_ref(poly), wall_count, line_width, overlap).is_empty();
         if walls == wall_count as usize && infill_fits {
             continue;
         }
@@ -496,8 +533,13 @@ fn centre_line(thin: &[Point2]) -> Vec<Point2> {
 }
 
 /// The area infill covers: inside the innermost wall, overlapping it slightly.
-fn infill_region(outline: &[Polygon], wall_count: u32, line_width: f32) -> Vec<Polygon> {
-    let inset = line_width * (wall_count as f32 - INFILL_OVERLAP).max(0.0);
+fn infill_region(
+    outline: &[Polygon],
+    wall_count: u32,
+    line_width: f32,
+    overlap: f32,
+) -> Vec<Polygon> {
+    let inset = line_width * (wall_count as f32 - overlap).max(0.0);
     if inset > 0.0 {
         outline
             .iter()
@@ -1697,6 +1739,92 @@ mod tests {
         );
         let r = slice(&snug, &PrintSettings::default(), 0.42, &|_| {});
         assert!(r.layers.iter().all(|l| gap_fills(l).is_empty()));
+    }
+
+    /// The largest |x| of any point of `kind` on layer `li`.
+    fn reach(r: &SliceResult, li: usize, kind: PathKind) -> f32 {
+        r.layers[li]
+            .paths
+            .iter()
+            .filter(|p| p.kind == kind)
+            .flat_map(|p| p.points.iter().map(|q| q.x.abs()))
+            .fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn test_infill_overlap_moves_the_infill_ends() {
+        let cube = box_at(Vec3::new(20.0, 20.0, 4.0), Vec3::new(0.0, 0.0, 0.0));
+        let at = |pct: f32| {
+            let s = PrintSettings {
+                infill_overlap: pct,
+                ..PrintSettings::default()
+            };
+            reach(&slice(&cube, &s, 0.42, &|_| {}), 0, PathKind::SolidInfill)
+        };
+        // 50 % reaches 0.5 x 0.42 = 0.21 mm further out than 0 %.
+        let more = at(50.0) - at(0.0);
+        assert!((more - 0.21).abs() < 0.03, "{more}");
+    }
+
+    #[test]
+    fn test_elephant_foot_draws_in_only_the_first_layer_on_the_plate() {
+        let cube = box_at(Vec3::new(20.0, 20.0, 4.0), Vec3::new(0.0, 0.0, 0.0));
+        let plain = slice(&cube, &PrintSettings::default(), 0.42, &|_| {});
+        let s = PrintSettings {
+            elephant_foot: 0.3,
+            ..PrintSettings::default()
+        };
+        let foot = slice(&cube, &s, 0.42, &|_| {});
+        let drawn_in = reach(&plain, 0, PathKind::OuterWall) - reach(&foot, 0, PathKind::OuterWall);
+        assert!((drawn_in - 0.3).abs() < 0.01, "{drawn_in}");
+        assert_eq!(
+            reach(&plain, 1, PathKind::OuterWall),
+            reach(&foot, 1, PathKind::OuterWall)
+        );
+        // On a raft the first model layer isn't squashed onto the plate.
+        let raft = PrintSettings {
+            adhesion: Adhesion::Raft,
+            ..s.clone()
+        };
+        let raft_plain = PrintSettings {
+            adhesion: Adhesion::Raft,
+            ..PrintSettings::default()
+        };
+        let a = slice(&cube, &raft, 0.42, &|_| {});
+        let b = slice(&cube, &raft_plain, 0.42, &|_| {});
+        assert_eq!(
+            reach(&a, RAFT_LAYERS, PathKind::OuterWall),
+            reach(&b, RAFT_LAYERS, PathKind::OuterWall)
+        );
+    }
+
+    #[test]
+    fn test_hole_compensation_grows_holes() {
+        use crate::model::SampleShape;
+        // The sample tube: 14 mm outside radius, 9 mm hole.
+        let tube = PlacedObject::new("tube", SampleShape::Tube.mesh()).world_triangles();
+        let hole_wall = |s: &PrintSettings| {
+            let r = slice(&tube, s, 0.42, &|_| {});
+            r.layers[5]
+                .paths
+                .iter()
+                .filter(|p| p.kind == PathKind::OuterWall)
+                .flat_map(|p| p.points.iter().map(|q| (q.x * q.x + q.y * q.y).sqrt()))
+                .fold(f32::MAX, f32::min)
+        };
+        let s = PrintSettings {
+            hole_compensation: 0.2,
+            ..PrintSettings::default()
+        };
+        let grown = hole_wall(&s) - hole_wall(&PrintSettings::default());
+        assert!((grown - 0.2).abs() < 0.02, "{grown}");
+        // The outside is untouched.
+        let r0 = slice(&tube, &PrintSettings::default(), 0.42, &|_| {});
+        let r1 = slice(&tube, &s, 0.42, &|_| {});
+        assert_eq!(
+            reach(&r0, 5, PathKind::OuterWall),
+            reach(&r1, 5, PathKind::OuterWall)
+        );
     }
 
     #[test]

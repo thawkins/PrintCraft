@@ -530,6 +530,17 @@ impl PrintCraftApp {
                         egui::Slider::new(&mut self.filament.fan_percent, limits::FAN_PERCENT)
                             .suffix(" %"),
                     );
+                    ui.label("Flow ratio").on_hover_text(
+                        "Plastic pushed for every line, as a share of the computed amount: lower it if prints come out over-filled, raise it if they have gaps",
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut self.filament.flow_percent)
+                            .range(limits::FLOW_PERCENT)
+                            .speed(0.5)
+                            .fixed_decimals(1)
+                            .suffix(" %"),
+                    );
+                    ui.end_row();
                 });
             });
     }
@@ -728,6 +739,30 @@ fn walls_and_surfaces_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) 
                 "Fuzzy skin",
                 egui::Checkbox::without_text(&mut s.fuzzy_skin),
             );
+            ui.label("Infill/wall overlap").on_hover_text(
+                "How far infill reaches into the innermost wall, as a share of a line width, so the two bond",
+            );
+            ui.add(
+                egui::DragValue::new(&mut s.infill_overlap)
+                    .range(limits::INFILL_OVERLAP)
+                    .speed(1.0)
+                    .suffix(" %"),
+            );
+            ui.end_row();
+            ui.label("Elephant foot").on_hover_text(
+                "Draw the first layer in by this much, to offset the squash that makes it wider than the rest (not with a raft)",
+            );
+            ui.add(mm(&mut s.elephant_foot, limits::ELEPHANT_FOOT, 0.01));
+            ui.end_row();
+            ui.label("Hole compensation").on_hover_text(
+                "Make every hole this much larger all round, as printed holes come out small",
+            );
+            ui.add(mm(
+                &mut s.hole_compensation,
+                limits::HOLE_COMPENSATION,
+                0.01,
+            ));
+            ui.end_row();
         }
     });
 }

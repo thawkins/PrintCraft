@@ -1200,6 +1200,8 @@ impl<'a> Writer<'a> {
         let accel = self.print_accel(style.kind, style.li);
         self.set_accel(accel, false);
         self.seconds += motion::line_time(&pts, speed, accel);
+        // The filament's flow ratio (1.0 at 100 %, so the default changes nothing).
+        let flow = flow * (self.filament_now().flow_percent / 100.0);
         let climb = style.spiral && style.kind == PathKind::OuterWall;
         // Fuzzy top: short steps, each lifted by a random 0..amount above the layer.
         let fuzzy = s.fuzzy_top && s.fuzzy_top_mm > 0.0 && style.kind == PathKind::TopSurface;
@@ -2137,12 +2139,19 @@ mod tests {
         let s = PrintSettings::default();
         let r = crate::slicer::slice(&tris, &s, lw, &|_| {});
         let out = generate(&r, &Printer::presets()[0], &Filament::presets()[0], &s);
-        // Filament per mm by line type, from the absolute E values.
-        let (mut x, mut y, mut e, mut kind) = (0f32, 0f32, 0f32, "");
-        let mut per_mm: std::collections::HashMap<&str, Vec<f32>> = Default::default();
-        for l in out.text.lines() {
+        // Gap fill is written as WALL-INNER (there is no inner wall in this strip).
+        let ratio = mean_e_per_mm(&out.text, "WALL-INNER") / mean_e_per_mm(&out.text, "WALL-OUTER");
+        assert!((ratio - 0.6).abs() < 0.08, "{ratio}");
+    }
+
+    /// The mean filament per mm of line (from the absolute E values) over the extruding
+    /// moves longer than 2 mm under `;TYPE:kind`.
+    fn mean_e_per_mm(text: &str, kind: &str) -> f32 {
+        let (mut x, mut y, mut e, mut now) = (0f32, 0f32, 0f32, "");
+        let mut per_mm: Vec<f32> = Vec::new();
+        for l in text.lines() {
             if let Some(k) = l.strip_prefix(";TYPE:") {
-                kind = k;
+                now = k;
                 continue;
             }
             if !l.starts_with("G1 X") && !l.starts_with("G0 X") {
@@ -2159,15 +2168,28 @@ mod tests {
                 }
             }
             let len = ((nx - x).powi(2) + (ny - y).powi(2)).sqrt();
-            if ne > e && len > 2.0 {
-                per_mm.entry(kind).or_default().push((ne - e) / len);
+            if now == kind && ne > e && len > 2.0 {
+                per_mm.push((ne - e) / len);
             }
             (x, y, e) = (nx, ny, ne);
         }
-        let mean = |k: &str| per_mm[k].iter().sum::<f32>() / per_mm[k].len() as f32;
-        // Gap fill is written as WALL-INNER (there is no inner wall in this strip).
-        let ratio = mean("WALL-INNER") / mean("WALL-OUTER");
-        assert!((ratio - 0.6).abs() < 0.08, "{ratio}");
+        assert!(!per_mm.is_empty(), "no {kind} moves");
+        per_mm.iter().sum::<f32>() / per_mm.len() as f32
+    }
+
+    #[test]
+    fn test_flow_ratio_scales_every_line() {
+        let s = PrintSettings::default();
+        let (r, normal) = sliced_cube(&s);
+        let less = Filament {
+            flow_percent: 90.0,
+            ..Filament::presets()[0].clone()
+        };
+        let thin = generate(&r, &Printer::presets()[0], &less, &s);
+        for kind in ["WALL-OUTER", "WALL-INNER", "FILL", "SKIN"] {
+            let ratio = mean_e_per_mm(&thin.text, kind) / mean_e_per_mm(&normal.text, kind);
+            assert!((ratio - 0.9).abs() < 0.002, "{kind}: {ratio}");
+        }
     }
 
     /// A C opening to +X: 30 x 30 mm with an 8 mm wide slot cut in from the right.

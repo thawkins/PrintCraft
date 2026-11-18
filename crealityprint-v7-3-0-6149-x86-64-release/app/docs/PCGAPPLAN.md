@@ -52,7 +52,7 @@ obvious quality gap on the bridge and overhang tests.
 | M1.4 | **Done.** **Bridge settings.** Add bridge speed, flow ratio and fan %. Use the fan % on Bridge paths and restore the fan afterwards. Show a Bridge colour in the preview. | Test: fan and F change around the bridge paths. Screenshot of the bridge test. | 1 |
 | M1.5 | **Done.** **Gap fill.** Fill the leftover space between the innermost wall and infill that is narrower than one line width with single lines (`PathKind::GapFill`). | Test: a 1.5 x line-width slot gets one gap-fill line, not a hole. | 2 |
 | M1.6 | **Done.** **Avoid crossing walls.** Route a travel inside the current layer's outline when the straight line would cross a wall. If the inside route is over 2x longer, retract and go straight. | Test: travel between two points in a C-shape stays inside. Retraction count drops on the ORBIT fixture. | 2 |
-| M1.7 | **Calibration knobs.** Add a flow ratio (filament), an infill/wall overlap %, elephant-foot compensation (first layer inset) and XY hole compensation. | Tests: extrusion scales with the flow ratio, and the first-layer outline is inset by the set amount. | 1.5 |
+| M1.7 | **Done.** **Calibration knobs.** Add a flow ratio (filament), an infill/wall overlap %, elephant-foot compensation (first layer inset) and XY hole compensation. | Tests: extrusion scales with the flow ratio, and the first-layer outline is inset by the set amount. | 1.5 |
 
 ## M2: Control and customisation (0.2.0)
 

@@ -127,6 +127,9 @@ pub fn to_json(p: &Project) -> String {
             "bridge_flow": s.bridge_flow,
             "bridge_fan": s.bridge_fan,
             "avoid_crossing_walls": s.avoid_crossing_walls,
+            "infill_overlap": s.infill_overlap,
+            "elephant_foot": s.elephant_foot,
+            "hole_compensation": s.hole_compensation,
             "feature_accels": AccelFeature::ALL
                 .into_iter()
                 .map(|f| (f.key().to_string(), json!(s.accels.get(f))))
@@ -210,6 +213,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
             diameter: num(fi, "diameter", fbase.diameter).clamp(1.0, 3.0),
             density: num(fi, "density", fbase.density).max(0.1),
             fan_percent: int_in(fi, "fan_percent", fbase.fan_percent, limits::FAN_PERCENT),
+            flow_percent: num_in(fi, "flow_percent", fbase.flow_percent, limits::FLOW_PERCENT),
             price_per_kg: num(fi, "price_per_kg", fbase.price_per_kg).max(0.0),
         }
     };
@@ -341,6 +345,19 @@ fn project_from(v: &Value) -> Result<Project, String> {
         bridge_flow: num_in(st, "bridge_flow", d.bridge_flow, limits::BRIDGE_FLOW),
         bridge_fan: int_in(st, "bridge_fan", d.bridge_fan, limits::FAN_PERCENT),
         avoid_crossing_walls: flag(st, "avoid_crossing_walls", d.avoid_crossing_walls),
+        infill_overlap: num_in(
+            st,
+            "infill_overlap",
+            d.infill_overlap,
+            limits::INFILL_OVERLAP,
+        ),
+        elephant_foot: num_in(st, "elephant_foot", d.elephant_foot, limits::ELEPHANT_FOOT),
+        hole_compensation: num_in(
+            st,
+            "hole_compensation",
+            d.hole_compensation,
+            limits::HOLE_COMPENSATION,
+        ),
         supports: flag(st, "supports", d.supports),
         support_angle: num_in(st, "support_angle", d.support_angle, limits::SUPPORT_ANGLE),
         supports_on_plate_only: flag(st, "supports_on_plate_only", d.supports_on_plate_only),
@@ -435,6 +452,7 @@ fn filament_json(f: &Filament) -> Value {
         "diameter": f.diameter,
         "density": f.density,
         "fan_percent": f.fan_percent,
+        "flow_percent": f.flow_percent,
         "price_per_kg": f.price_per_kg,
     })
 }
@@ -662,6 +680,10 @@ mod tests {
         p.settings.bridge_flow = 88.0;
         p.settings.bridge_fan = 70;
         p.settings.avoid_crossing_walls = true;
+        p.settings.infill_overlap = 25.0;
+        p.settings.elephant_foot = 0.15;
+        p.settings.hole_compensation = 0.1;
+        p.filament.flow_percent = 96.5;
         let back = from_json(&to_json(&p)).unwrap();
         assert_eq!(back.printer.acceleration, 3456.0);
         assert_eq!(back.settings.accels, p.settings.accels);
@@ -670,6 +692,15 @@ mod tests {
             (88.0, 70)
         );
         assert!(back.settings.avoid_crossing_walls);
+        assert_eq!(
+            (
+                back.settings.infill_overlap,
+                back.settings.elephant_foot,
+                back.settings.hole_compensation,
+                back.filament.flow_percent
+            ),
+            (25.0, 0.15, 0.1, 96.5)
+        );
         // A project from before accelerations: the preset of the same name's value.
         let old = from_json(
             r#"{"format":"printcraft-project","version":1,"printer":{"name":"Creality Ender-3 V3 KE"},
