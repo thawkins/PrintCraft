@@ -2608,13 +2608,15 @@ mod tests {
 
     #[test]
     fn finishing_a_print_asks_to_print_again_once() {
-        let mut page = DevicePage::default();
-        page.last_job = Some(PrintJob {
-            name: "spacer.gcode".into(),
-            gcode: Arc::new("G28\n".into()),
-            layers: 10,
-            picture: None,
-        });
+        let mut page = DevicePage {
+            last_job: Some(PrintJob {
+                name: "spacer.gcode".into(),
+                gcode: Arc::new("G28\n".into()),
+                layers: 10,
+                picture: None,
+            }),
+            ..Default::default()
+        };
         page.observe(&state(JobState::Printing, Some("spacer.gcode")));
         assert!(page.again.is_none(), "not while printing");
         page.observe(&state(JobState::Finished, None));
@@ -2630,20 +2632,24 @@ mod tests {
 
     #[test]
     fn a_stopped_print_is_recorded_but_not_offered_again() {
-        let mut page = DevicePage::default();
-        page.last_job = Some(PrintJob {
-            name: "a.gcode".into(),
-            gcode: Arc::new(String::new()),
-            layers: 1,
-            picture: None,
-        });
+        let mut page = DevicePage {
+            last_job: Some(PrintJob {
+                name: "a.gcode".into(),
+                gcode: Arc::new(String::new()),
+                layers: 1,
+                picture: None,
+            }),
+            ..Default::default()
+        };
         page.observe(&state(JobState::Printing, Some("a.gcode")));
         page.observe(&state(JobState::Stopped, None));
         assert!(page.again.is_none());
         assert_eq!(page.records[0].outcome, "Stopped");
         // Connecting to a printer that has already finished doesn't ask either.
-        let mut fresh = DevicePage::default();
-        fresh.last_job = page.last_job.clone();
+        let mut fresh = DevicePage {
+            last_job: page.last_job.clone(),
+            ..Default::default()
+        };
         fresh.observe(&state(JobState::Finished, Some("a.gcode")));
         assert!(fresh.again.is_none());
     }
