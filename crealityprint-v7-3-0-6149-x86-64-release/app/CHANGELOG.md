@@ -7,28 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-11-18
+
 ### Added
 
 - Progress for the printer's screen (gap plan task M2.6): on Marlin and Prusa firmware
   printers every layer gets `M73 P<percent> R<minutes left>`, by time, ending with
   `M73 P100 R0`. Klipper printers (which work out their own) and X3G files are
   unchanged; the X3G translator now skips `M73` lines instead of refusing them.
+  (c70b493)
 - Preview colouring and times (gap plan task M2.5). "Colour by" in the preview's Show
   box replaces "Colour by nozzle": line type, nozzle, speed, line width, layer height,
   fan or temperature, the value modes on a blue-to-red scale with a scale bar. Each line
   type shows its print time, with Travel and "Heating, purge, changes" rows; together
   they add up to the print time. The values are the ones the G-code is written with.
+  (dc20ae3)
 - Colour change and pause at a layer (gap plan task M2.4). In the preview, "+ Colour
   change here" and "+ Pause here" add an `M600`, or a pause (`PAUSE` on Klipper,
   `M601` otherwise), before the layer the slider shows. They are marked on the slider,
   listed with remove buttons, saved in the project by height, and need no new slice.
-  Not offered on MakerBot / Sailfish printers.
+  Not offered on MakerBot / Sailfish printers. (22a14f8)
 - Placeholders in custom G-code (gap plan task M2.3): `{bed_temp}`, `{nozzle_temp}`,
   `{layer_num}`, `{layer_z}`, the print's bounds, `{tool}`/`{next_tool}` and more (26 in
   all; hover the note in the editor for the list), `{name-1}`-style offsets, and
   `{if ...}`/`{else}`/`{endif}`. A mistake (an unknown name, an unclosed `{if}`) stops
   the slice with a message naming the box and the tag. "Insert default" for Start now
-  writes the temperatures as placeholders, so the text follows the filament.
+  writes the temperatures as placeholders, so the text follows the filament. (9dc9ab2)
 - Custom G-code per printer (gap plan task M2.2), in the printer editor under
   "Custom G-code": a start block that replaces PrintCraft's heating, homing and purge;
   an end block that replaces its end sequence; and blocks added before every layer
@@ -36,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged, and are saved with the printer in projects. An "Insert default"
   button beside each box adds PrintCraft's own G-code for that place to edit: the
   built-in start, an end that turns the heaters off before lifting, and comments
-  describing what PrintCraft writes at layer and tool changes.
+  describing what PrintCraft writes at layer and tool changes. (e74a5a0, 463f38f)
 
 ### Changed
 
@@ -46,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are generated from it. The panel, project files and G-code are unchanged, except
   that the Fuzzy top and Avoid crossing walls checkboxes now line up with the others,
   and a row's hint now also shows when hovering its field, not only its label.
+  (390c9cb, 0daf7e8, 9f33fe4, bffec56, 929f0ea, 0ed3e1b, c12b8f0)
 
 ## [0.0.6] - 2026-11-18
 
@@ -363,7 +368,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects (`.printcraft`) that save the plate, settings and printer.
 - Command-line slicing (`printcraft --slice`).
 
-[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/thawkins/PrintCraft/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/thawkins/PrintCraft/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/thawkins/PrintCraft/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/thawkins/PrintCraft/compare/v0.0.3...v0.0.4

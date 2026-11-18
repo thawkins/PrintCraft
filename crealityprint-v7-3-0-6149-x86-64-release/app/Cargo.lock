@@ -2378,7 +2378,7 @@ dependencies = [
 
 [[package]]
 name = "printcraft"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "chrono",
  "eframe",
