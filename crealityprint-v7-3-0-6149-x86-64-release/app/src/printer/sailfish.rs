@@ -429,6 +429,10 @@ impl PrinterSide {
     ) -> Result<(), String> {
         match cmd {
             Command::UploadAndPrint { name, gcode } => self.start_print(w, conn, &name, &gcode),
+            Command::UploadBinaryAndPrint { .. } => {
+                w.update(|s| s.note("This connection takes plain G-code, not binary (.bgcode)."));
+                Ok(())
+            }
             Command::PrintFile(file) => {
                 if self.building {
                     w.update(|s| s.note("A print is already running."));

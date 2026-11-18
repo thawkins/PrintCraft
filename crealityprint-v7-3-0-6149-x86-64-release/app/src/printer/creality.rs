@@ -312,6 +312,10 @@ fn send_start(
 
 fn run_command(w: &Worker, cmd: Command) -> Outgoing {
     let text = match cmd {
+        Command::UploadBinaryAndPrint { .. } => {
+            w.update(|s| s.note("This connection takes plain G-code, not binary (.bgcode)."));
+            return Outgoing::Nothing;
+        }
         Command::UploadAndPrint { name, gcode } => {
             w.update(|s| s.busy = Some(format!("Sending {name} to the printer…")));
             let sent = upload(&w.host, &name, gcode.as_bytes());

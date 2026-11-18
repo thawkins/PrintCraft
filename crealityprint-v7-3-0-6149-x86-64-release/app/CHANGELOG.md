@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Binary G-code (gap plan task M6.3). "Binary G-code (.bgcode)" in the printer editor
+  (off by default, so files are unchanged) makes Export save Prusa's binary format,
+  and printing through PrusaLink upload it as `.bgcode`; other connections still get
+  plain G-code, and X3G printers never use it. The G-code is packed with MeatPack
+  (keeping comments) and compressed with heatshrink 12/4, in CRC32-checked blocks, with
+  the thumbnails and the job's details (printer, time, filament, settings) in blocks of
+  their own. Written from the published specification. The ORBIT model's file goes from
+  23.4 MB to 8.9 MB (5.4 MB with arc fitting). The command line writes it for an output
+  name ending in `.bgcode`. Checked with a decoder written from the same
+  specification; not yet tried on a Prusa printer.
+
 - Arc fitting (gap plan task M6.2). With Advanced on, "Arc fitting" under Special mode
   (off by default, so files are unchanged) writes runs of short lines that lie on a
   circle as G2/G3 arcs: every point within 0.01 mm of the arc, every segment's middle

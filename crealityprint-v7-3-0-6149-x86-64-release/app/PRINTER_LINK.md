@@ -123,6 +123,7 @@ Raspberry Pi. Prusa publishes it as an OpenAPI description (API v1).
 | Upload and start | `GET /api/v1/storage` picks the first writable storage (`usb` on Buddy printers, `local` on a Pi). Then `PUT /api/v1/files/<storage>/<name>.gcode` with `Print-After-Upload: ?1` and `Overwrite: ?1`. |
 | Pause / resume / stop | `PUT /api/v1/job/<id>/pause`, `PUT /api/v1/job/<id>/resume`, `DELETE /api/v1/job/<id>` |
 | Cancel one object | Not offered by the API (no object list or cancel call). The printer's own Cancel object menu uses the M486 labels in the file |
+| Binary G-code | With "Binary G-code (.bgcode)" on in the printer profile: the same `PUT`, to `<name>.bgcode`, with `Content-Type: application/octet-stream` |
 
 States: `IDLE`/`READY`/`BUSY` show as Ready, plus `PRINTING`, `PAUSED`, `FINISHED`,
 `STOPPED`, and `ERROR`/`ATTENTION` (shown as Failed). PrusaLink doesn't report layers or

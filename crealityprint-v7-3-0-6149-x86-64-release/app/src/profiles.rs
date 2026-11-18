@@ -66,6 +66,9 @@ pub struct Printer {
     /// A MakerBot-protocol printer (Sailfish: FlashForge Creator Pro, Replicator): print
     /// files are X3G, translated from the G-code (src/x3g).
     pub x3g: bool,
+    /// Export and send to PrusaLink as binary G-code (`.bgcode`, src/bgcode.rs). Other
+    /// connections still get plain G-code; never with X3G.
+    pub binary_gcode: bool,
     /// Nozzles: 1, or 2 (two nozzles on one carriage, like the Creator Pro). With 1, no
     /// dual-nozzle setting shows and the G-code is unchanged.
     pub extruders: u8,
@@ -210,6 +213,7 @@ impl Printer {
             // The KE runs Klipper (Creality OS); the others here run Marlin or Prusa firmware.
             klipper: name.contains("Ender-3 V3 KE"),
             x3g: name.contains("Sailfish"),
+            binary_gcode: false,
             extruders: if name.contains("Sailfish") { 2 } else { 1 },
             retract_min_travel: DEFAULT_RETRACT_MIN_TRAVEL_MM,
             retract_layer_change: false,

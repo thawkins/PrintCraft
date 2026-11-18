@@ -520,6 +520,20 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   way by at most 1.9 pi. Runs grow greedily from each point. I and J are the centre
   relative to the start. E follows the arc's length; the time estimate still uses the
   lines. Not used for X3G, spiral vase walls or fuzzy top. Decided 2026-11-19.
+* **Binary G-code** (src/bgcode.rs; printer editor "Binary G-code (.bgcode)", off by
+  default). Made from the finished plain file. Checksums: CRC32 on every block.
+  Metadata blocks are uncompressed INI (`key=value`): file (`Producer`), printer (the
+  settings block's printer_model, filament_type, nozzle_diameter, temperature,
+  bed_temperature, layer_height and filament_diameter, plus the totals), print (the
+  totals: `filament used [mm]`, `filament used [g]`, `estimated printing time (normal
+  mode)`), slicer (the whole settings block). The `; thumbnail` PNGs become
+  uncompressed thumbnail blocks. G-code goes in blocks of up to 64 KiB of whole lines,
+  each packed with MeatPack keeping comments (no-spaces mode) and compressed with
+  heatshrink, window 2^12 and lookahead 2^4 (repeats of 3-16 bytes, up to 4096 bytes
+  back, found through chains of up to 128 earlier places). Each G-code block is
+  self-contained: packing is switched on at its start, and a leftover character is
+  paired with a newline. MeatPack drops inline comments and blank lines and takes the
+  spaces out of G0-G3 moves. Decided 2026-11-19.
 
 ## Controls (src/app.rs, src/view3d.rs)
 

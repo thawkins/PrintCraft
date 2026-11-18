@@ -26,6 +26,30 @@ pub struct PrintJob {
     pub layers: usize,
     /// The picture of the part written into the print file.
     pub picture: Option<Arc<image::RgbaImage>>,
+    /// The printer profile asks for binary G-code: the job's estimate, for the file's
+    /// details. Used only where the connection takes binary files (PrusaLink).
+    pub binary: Option<crate::gcode::Estimate>,
+}
+
+/// The command that uploads and prints `text` as `name` (a `.gcode` name): binary
+/// G-code (`.bgcode`) when `binary` is given and the printer is reached through
+/// PrusaLink, plain G-code otherwise.
+fn upload_command(
+    name: &str,
+    text: &str,
+    binary: Option<&crate::gcode::Estimate>,
+    api: Option<Api>,
+) -> Command {
+    match binary {
+        Some(est) if api == Some(Api::PrusaLink) => Command::UploadBinaryAndPrint {
+            name: format!("{}.bgcode", name.trim_end_matches(".gcode")),
+            data: Arc::new(crate::bgcode::encode(text, est)),
+        },
+        _ => Command::UploadAndPrint {
+            name: name.to_string(),
+            gcode: Arc::new(text.to_string()),
+        },
+    }
 }
 
 enum Pending {
@@ -503,10 +527,12 @@ impl DevicePage {
         self.last_job = Some(job.clone());
         // Tell the printer the Enable Calibration choice before it starts.
         self.send(Command::SetCalibration(self.calibrate));
-        self.send(Command::UploadAndPrint {
-            name: job.name,
-            gcode: Arc::new(text),
-        });
+        self.send(upload_command(
+            &job.name,
+            &text,
+            job.binary.as_ref(),
+            self.api(),
+        ));
     }
 
     /// Prints a file already on the printer, with the Enable Calibration choice.
@@ -2659,6 +2685,7 @@ mod tests {
                 gcode: Arc::new("G28\n".into()),
                 layers: 10,
                 picture: None,
+                binary: None,
             }),
             ..Default::default()
         };
@@ -2683,6 +2710,7 @@ mod tests {
                 gcode: Arc::new(String::new()),
                 layers: 1,
                 picture: None,
+                binary: None,
             }),
             ..Default::default()
         };
@@ -2708,6 +2736,7 @@ mod tests {
             gcode: Arc::new("G28\n".into()),
             layers: 10,
             picture: None,
+            binary: None,
         });
         page.seen_file = Some((
             "spacer.gcode".into(),
@@ -2718,5 +2747,30 @@ mod tests {
         // file can't be restarted remotely; fall back to the job sent from here.
         page.seen_file = Some(("other.gcode".into(), Some("other.gcode".into())));
         assert!(matches!(page.again_target(), Some(Again::Job(_))));
+    }
+
+    #[test]
+    fn test_upload_command_sends_binary_only_to_prusalink() {
+        let est = crate::gcode::Estimate::default();
+        let text = "G28\n";
+        match upload_command("cube.gcode", text, Some(&est), Some(Api::PrusaLink)) {
+            Command::UploadBinaryAndPrint { name, data } => {
+                assert_eq!(name, "cube.bgcode");
+                assert_eq!(*data, crate::bgcode::encode(text, &est));
+            }
+            other => panic!("{other:?}"),
+        }
+        for (binary, api) in [
+            (Some(&est), Some(Api::Moonraker)),
+            (Some(&est), None),
+            (None, Some(Api::PrusaLink)),
+        ] {
+            match upload_command("cube.gcode", text, binary, api) {
+                Command::UploadAndPrint { name, gcode } => {
+                    assert_eq!((name.as_str(), gcode.as_str()), ("cube.gcode", text));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
     }
 }

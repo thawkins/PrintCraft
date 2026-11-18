@@ -414,6 +414,9 @@ fn session(
         }
         while let Ok(cmd) = w.rx.try_recv() {
             match cmd {
+                Command::UploadBinaryAndPrint { .. } => w.update(|s| {
+                    s.note("This connection takes plain G-code, not binary (.bgcode).")
+                }),
                 Command::UploadAndPrint { name, gcode } => {
                     st.start(&gcode, &name);
                     started_at = Some(Instant::now());

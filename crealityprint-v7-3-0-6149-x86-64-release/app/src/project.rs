@@ -106,6 +106,7 @@ pub fn to_json(p: &Project) -> String {
             "purge_mm": p.printer.purge_mm,
             "klipper": p.printer.klipper,
             "x3g": p.printer.x3g,
+            "binary_gcode": p.printer.binary_gcode,
             "extruders": p.printer.extruders,
             "retract_min_travel": p.printer.retract_min_travel,
             "retract_layer_change": p.printer.retract_layer_change,
@@ -231,6 +232,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
             limits::RETRACT_MIN_TRAVEL,
         ),
         retract_layer_change: flag(pr, "retract_layer_change", base.retract_layer_change),
+        binary_gcode: flag(pr, "binary_gcode", base.binary_gcode),
         wipe_mm: num_in(pr, "wipe_mm", base.wipe_mm, limits::WIPE_MM),
         tool_change_retract: num_in(
             pr,
@@ -532,6 +534,7 @@ mod tests {
         printer.purge_mm = 42.0;
         printer.primary_nozzle = 1;
         printer.nozzle_spacing = 34.5;
+        printer.binary_gcode = true;
         let mut filament = Filament::presets()
             .into_iter()
             .find(|f| f.name == "PETG")

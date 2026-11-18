@@ -298,6 +298,12 @@ pub enum Command {
         name: String,
         gcode: Arc<String>,
     },
+    /// Upload a binary G-code file (`name` ends in `.bgcode`) and print it. PrusaLink
+    /// only.
+    UploadBinaryAndPrint {
+        name: String,
+        data: Arc<Vec<u8>>,
+    },
     /// Print a file already on the printer (its `RemoteFile::path`).
     PrintFile(String),
     Pause,

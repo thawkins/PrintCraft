@@ -226,6 +226,13 @@ impl PrintCraftApp {
                             );
                             ui.add(mm(&mut self.printer.wipe_mm, limits::WIPE_MM, 0.1));
                             ui.end_row();
+                            if !self.printer.x3g {
+                                ui.label("Binary G-code (.bgcode)").on_hover_text(
+                                    "Export, and send to PrusaLink, in Prusa's binary G-code: a smaller file the printer reads faster. Other connections still get plain G-code",
+                                );
+                                ui.checkbox(&mut self.printer.binary_gcode, "");
+                                ui.end_row();
+                            }
                             if self.printer.extruders >= 2 {
                                 ui.label("Primary nozzle").on_hover_text(
                                     "The default nozzle: new parts, supports, the skirt and one-nozzle prints use it, and it has the main filament (01)",

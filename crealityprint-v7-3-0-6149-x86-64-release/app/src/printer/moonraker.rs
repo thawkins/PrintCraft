@@ -215,6 +215,9 @@ pub fn run(w: &Worker) {
     while !w.stopped() {
         while let Ok(cmd) = w.rx.try_recv() {
             let result = match cmd {
+                Command::UploadBinaryAndPrint { .. } => {
+                    Err("This connection takes plain G-code, not binary (.bgcode).".to_string())
+                }
                 Command::UploadAndPrint { name, gcode } => {
                     w.sending(&name, || upload_and_print(&w.host, &name, gcode.as_bytes()))
                 }

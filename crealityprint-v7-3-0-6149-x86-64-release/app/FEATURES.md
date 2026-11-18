@@ -109,7 +109,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Plain G-code export | Yes |
 | Arc moves (G2/G3) | **Yes (new)**, off by default: "Arc fitting" under Special mode (Advanced). Round walls become arcs within 0.01 mm of the sliced points; the ORBIT file shrinks from 23.2 MB to 13.0 MB with the same time and filament. Klipper needs `[gcode_arcs]`. Not used for X3G. |
 | Object labels in the G-code | **Yes (new)**, off by default: "Label objects" under Special mode (Advanced). Klipper gets `EXCLUDE_OBJECT_DEFINE` with each object's outline and `EXCLUDE_OBJECT_START`/`END` around it on every layer; Marlin and Prusa firmware get M486. Not written into X3G files. |
-| Binary G-code (.bgcode) | Not yet (PrusaLink accepts plain G-code) |
+| Binary G-code (.bgcode) | **Yes (new)**, off by default: "Binary G-code (.bgcode)" in the printer editor. Export saves `.bgcode`, and printing through PrusaLink uploads it; other connections still get plain G-code. G-code is packed with MeatPack (comments kept) and compressed with heatshrink 12/4; thumbnails and the job's details go in their own blocks. ORBIT: 23.4 MB plain, 8.9 MB binary, 5.4 MB with arc fitting too. Checked with a decoder written from the specification; not yet tried on a Prusa printer. |
 | Printer profiles | **More (new)**: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool) and Creality Ender-3 V3 KE, plus four generic sizes |
 
 ## Printers and connections

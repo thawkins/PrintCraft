@@ -279,6 +279,24 @@ fn storage(client: &mut Client) -> String {
     "usb".into()
 }
 
+/// Uploads `data` as `name` to the printer's storage, to print as soon as it arrives.
+fn upload(client: &mut Client, name: &str, content_type: &str, data: &[u8]) -> Result<(), String> {
+    let store = storage(client);
+    client
+        .call_within(
+            "PUT",
+            &format!("/api/v1/files/{store}/{name}"),
+            &[
+                ("Content-Type", content_type),
+                ("Print-After-Upload", "?1"),
+                ("Overwrite", "?1"),
+            ],
+            Some(data),
+            Some(UPLOAD_TIMEOUT),
+        )
+        .map(|_| ())
+}
+
 pub fn run(w: &Worker) {
     let login = w
         .printer
@@ -292,20 +310,10 @@ pub fn run(w: &Worker) {
         while let Ok(cmd) = w.rx.try_recv() {
             let result = match cmd {
                 Command::UploadAndPrint { name, gcode } => w.sending(&name, || {
-                    let store = storage(&mut client);
-                    client
-                        .call_within(
-                            "PUT",
-                            &format!("/api/v1/files/{store}/{name}"),
-                            &[
-                                ("Content-Type", "text/x.gcode"),
-                                ("Print-After-Upload", "?1"),
-                                ("Overwrite", "?1"),
-                            ],
-                            Some(gcode.as_bytes()),
-                            Some(UPLOAD_TIMEOUT),
-                        )
-                        .map(|_| ())
+                    upload(&mut client, &name, "text/x.gcode", gcode.as_bytes())
+                }),
+                Command::UploadBinaryAndPrint { name, data } => w.sending(&name, || {
+                    upload(&mut client, &name, "application/octet-stream", &data)
                 }),
                 Command::PrintFile(path) => {
                     let path = if path.starts_with('/') {

@@ -225,7 +225,7 @@ fn talks_to_a_pretend_prusalink_printer_with_a_password() {
     use super::digest;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let (tx, rx) = mpsc::channel::<(String, String, String)>();
+    let (tx, rx) = mpsc::channel::<(String, String, Vec<u8>)>();
     std::thread::spawn(move || {
         let challenge = digest::Challenge {
             realm: "Printer API".into(),
@@ -262,7 +262,6 @@ fn talks_to_a_pretend_prusalink_printer_with_a_password() {
                 let v = json!({"storage_list": [{"path": "/usb", "available": true, "read_only": false}]});
                 ("200 OK", v.to_string())
             } else {
-                let body = String::from_utf8_lossy(&body).to_string();
                 let _ = tx.send((format!("{method} {uri}"), head.clone(), body));
                 ("204 No Content", String::new())
             };
@@ -303,12 +302,29 @@ fn talks_to_a_pretend_prusalink_printer_with_a_password() {
         head.to_ascii_lowercase().contains("print-after-upload: ?1"),
         "{head}"
     );
-    assert_eq!(body, "G28\n");
+    assert_eq!(body, b"G28\n");
     link.send(Command::Pause);
     let (req, _, _) = rx
         .recv_timeout(Duration::from_secs(8))
         .expect("pause never arrived");
     assert_eq!(req, "PUT /api/v1/job/42/pause");
+    // A binary G-code file goes up as it is, under its .bgcode name.
+    let data = crate::bgcode::encode("G28\n", &crate::gcode::Estimate::default());
+    link.send(Command::UploadBinaryAndPrint {
+        name: "cube.bgcode".into(),
+        data: Arc::new(data.clone()),
+    });
+    let (req, head, body) = rx
+        .recv_timeout(Duration::from_secs(8))
+        .expect("binary upload never arrived");
+    assert_eq!(req, "PUT /api/v1/files/usb/cube.bgcode");
+    let head = head.to_ascii_lowercase();
+    assert!(head.contains("print-after-upload: ?1"), "{head}");
+    assert!(
+        head.contains("content-type: application/octet-stream"),
+        "{head}"
+    );
+    assert_eq!(body, data);
 }
 
 /// A pretend Creality network printer at `ip`:9999 that tells every visitor its name.

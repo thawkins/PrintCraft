@@ -895,6 +895,8 @@ impl PrintCraftApp {
             gcode: sliced.shared_text.clone(),
             layers: sliced.result.layers.len(),
             picture: sliced.picture.clone(),
+            binary: (self.printer.binary_gcode && !self.printer.x3g)
+                .then_some(sliced.gcode.estimate),
         })
     }
 
@@ -927,6 +929,13 @@ impl PrintCraftApp {
                     return;
                 }
             }
+        } else if self.printer.binary_gcode {
+            (
+                crate::bgcode::encode(&sliced.shared_text, &sliced.gcode.estimate),
+                "Binary G-code",
+                "bgcode",
+                Vec::new(),
+            )
         } else {
             (
                 sliced.shared_text.as_bytes().to_vec(),

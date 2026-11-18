@@ -11,6 +11,7 @@
 
 mod app;
 mod arcs;
+mod bgcode;
 mod codec;
 mod contour;
 mod cut;
@@ -67,6 +68,8 @@ Usage:
                                               show the printer's camera enlarged or maximised
   printcraft --screenshot OUT.png [MODEL.stl ...]
   printcraft --slice MODEL.stl [MODEL.stl ...] --output OUT.gcode [options]
+  printcraft --slice MODEL.stl [...] --output OUT.bgcode [options]
+                                              binary G-code (Prusa .bgcode)
   printcraft --slice MODEL.stl [...] --output OUT.x3g --printer 11 [options]
                                               an X3G file for a MakerBot / Sailfish printer
 
@@ -463,6 +466,18 @@ fn slice_without_window(args: &Args) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
+    } else if output
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("bgcode"))
+    {
+        if printer.x3g {
+            eprintln!(
+                "printcraft: the {} takes X3G, not binary G-code",
+                printer.name
+            );
+            return ExitCode::from(2);
+        }
+        bgcode::encode(&out.text, &out.estimate)
     } else {
         out.text.clone().into_bytes()
     };
