@@ -107,6 +107,7 @@ a project file fall back to defaults, so older and newer files still open.
 | 3D layer preview with a slider, colour by feature type | Yes (ironing is now its own colour) |
 | Time, filament, weight and cost estimates | Yes |
 | Plain G-code export | Yes |
+| Object labels in the G-code | **Yes (new)**, off by default: "Label objects" under Special mode (Advanced). Klipper gets `EXCLUDE_OBJECT_DEFINE` with each object's outline and `EXCLUDE_OBJECT_START`/`END` around it on every layer; Marlin and Prusa firmware get M486. Not written into X3G files. |
 | Binary G-code (.bgcode) | Not yet (PrusaLink accepts plain G-code) |
 | Printer profiles | **More (new)**: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool) and Creality Ender-3 V3 KE, plus four generic sizes |
 
@@ -118,6 +119,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Find printers on the network | Yes (address scan; now also finds PrusaLink printers) |
 | Known printer with a new address | **Yes (new)**. Connecting to a known printer, or opening a project with one, checks the saved address first. If the printer isn't there, or a different printer is, the local network is searched for the printer by its kind and name. The app connects at the new address and updates the known list. |
 | Monitor progress, layers, time and temperatures; pause/resume/stop | Yes (Creality, Moonraker, PrusaLink, USB) |
+| Cancel one object | **Yes (new)** for Klipper (Moonraker): the printer page lists the objects of a labelled print, each with "Cancel object" (asks first). PrusaLink has no cancel-object call; on Prusa printers use the printer's own Cancel object menu, which reads the M486 labels. |
 | Camera view | Yes for Creality/Klipper MJPEG cameras; Prusa cameras use the Prusa Connect cloud (not supported) |
 | USB printing (stream G-code over a cable) | **Yes (new)**: Marlin/Prusa firmware, line numbers, checksums, resend. Every line sent and received is recorded in `usb-serial.log` in the settings folder's `logs` folder, for diagnosing a printer. |
 | MakerBot protocol / Sailfish printers (FlashForge Creator Pro, early Creator Pro 2, Replicator) | **Yes (new)**, over USB: choose "MakerBot / Sailfish (X3G)" under USB. Prints are translated to X3G. They are recorded onto the SD card where the firmware allows; stock Sailfish doesn't, so they are streamed over USB. Pause, resume, stop (heaters off), temperatures, part fan, jog and home are supported, as are the SD card's file list and printing from it. The page shows the firmware, both nozzles' temperatures and the machine's settings (read from its EEPROM, saved as `sailfish-eeprom.bin`). X3G export saves files for the SD card. Not yet confirmed on a real printer. |

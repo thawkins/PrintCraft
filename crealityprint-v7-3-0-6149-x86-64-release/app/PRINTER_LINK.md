@@ -99,9 +99,11 @@ Status fields read: `state` (0 ready, 1 printing, 2 finished, 3 failed, 4 stoppe
 | What | How |
 |---|---|
 | Identify | `GET :7125/printer/info` |
-| Live status (polled every 1 s) | `GET :7125/printer/objects/query?print_stats&virtual_sdcard&extruder&heater_bed&display_status` |
+| Live status (polled every 1 s) | `GET :7125/printer/objects/query?print_stats&virtual_sdcard&extruder&heater_bed&display_status&fan&gcode_move&exclude_object` |
 | Upload and start | `POST :7125/server/files/upload`, multipart `file` plus `print=true` |
 | Pause / resume / stop | `POST :7125/printer/print/pause`, `/resume`, `/cancel` |
+| Objects of the print | `exclude_object.objects` (names) and `exclude_object.excluded_objects` in the status. Present only when Klipper has `[exclude_object]` and the file names its objects ("Label objects") |
+| Cancel one object | `EXCLUDE_OBJECT NAME=<name>` via `POST /printer/gcode/script` |
 
 Time left = elapsed ÷ progress − elapsed. This is the same simple projection most
 Klipper web pages use. The layer numbers come from `print_stats.info`, which only appears
@@ -120,6 +122,7 @@ Raspberry Pi. Prusa publishes it as an OpenAPI description (API v1).
 | File name | `GET /api/v1/job`: `file.display_name` |
 | Upload and start | `GET /api/v1/storage` picks the first writable storage (`usb` on Buddy printers, `local` on a Pi). Then `PUT /api/v1/files/<storage>/<name>.gcode` with `Print-After-Upload: ?1` and `Overwrite: ?1`. |
 | Pause / resume / stop | `PUT /api/v1/job/<id>/pause`, `PUT /api/v1/job/<id>/resume`, `DELETE /api/v1/job/<id>` |
+| Cancel one object | Not offered by the API (no object list or cancel call). The printer's own Cancel object menu uses the M486 labels in the file |
 
 States: `IDLE`/`READY`/`BUSY` show as Ready, plus `PRINTING`, `PAUSED`, `FINISHED`,
 `STOPPED`, and `ERROR`/`ATTENTION` (shown as Failed). PrusaLink doesn't report layers or

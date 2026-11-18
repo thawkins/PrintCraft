@@ -11,7 +11,7 @@ use std::time::Duration;
 
 pub const PORT: u16 = 7125;
 const POLL_SECONDS: f32 = 1.0;
-const QUERY: &str = "/printer/objects/query?print_stats&virtual_sdcard&extruder&heater_bed&display_status&fan&gcode_move";
+const QUERY: &str = "/printer/objects/query?print_stats&virtual_sdcard&extruder&heater_bed&display_status&fan&gcode_move&exclude_object";
 
 /// Runs G-code through Moonraker's documented script endpoint.
 fn gcode(host: &str, script: &str) -> Result<(), String> {
@@ -134,6 +134,26 @@ pub fn apply_status(s: &mut PrinterStatus, status: &Value) {
     if let Some(x) = n("gcode_move", "speed_factor") {
         s.speed_percent = Some(x as f32 * 100.0);
     }
+    if let Some(ex) = status.get("exclude_object") {
+        let names = |key: &str| -> Vec<&str> {
+            ex.get(key)
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|o| o.get("name").unwrap_or(o).as_str())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let cancelled = names("excluded_objects");
+        s.objects = names("objects")
+            .into_iter()
+            .map(|name| super::PrintObject {
+                name: name.to_string(),
+                cancelled: cancelled.contains(&name),
+            })
+            .collect();
+    }
     if let Some(ps) = status.get("print_stats") {
         if let Some(f) = ps.get("filename").and_then(|x| x.as_str()) {
             s.file = (!f.is_empty()).then(|| f.to_string());
@@ -211,6 +231,9 @@ pub fn run(w: &Worker) {
                 Command::SetSpeed(p) => gcode(&w.host, &format!("M220 S{p}")),
                 Command::Jog { axis, mm } => gcode(&w.host, &jog_gcode(axis, mm).join("\n")),
                 Command::Home => gcode(&w.host, "G28"),
+                Command::CancelObject(name) => {
+                    gcode(&w.host, &format!("EXCLUDE_OBJECT NAME={name}"))
+                }
                 Command::RefreshFiles => {
                     list_files(&w.host).map(|f| w.update(|s| s.files = Some(f)))
                 }

@@ -189,6 +189,17 @@ pub struct PrinterStatus {
     /// The firmware's own name, as a USB printer reports it to M115
     /// (`FIRMWARE_NAME:Repetier_1.0.3`, `FIRMWARE_NAME:Marlin 2.1.2`).
     pub firmware: Option<String>,
+    /// The objects the running file names (Klipper's `exclude_object`), each of which
+    /// can be cancelled on its own. Empty when the file names none or the printer can't.
+    pub objects: Vec<PrintObject>,
+}
+
+/// One object of the running print, as the printer names it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PrintObject {
+    pub name: String,
+    /// Cancelled: the printer skips it from now on.
+    pub cancelled: bool,
 }
 
 /// The firmware families whose G-code differs where it matters to the app.
@@ -310,6 +321,9 @@ pub enum Command {
     /// before the next print. Only the Creality service has such a setting; elsewhere the
     /// app adds or leaves out its own levelling step instead.
     SetCalibration(bool),
+    /// Stop printing one object (its name in `PrinterStatus::objects`) while the others
+    /// go on. Klipper (Moonraker) only.
+    CancelObject(String),
 }
 
 /// A print file stored on the printer.

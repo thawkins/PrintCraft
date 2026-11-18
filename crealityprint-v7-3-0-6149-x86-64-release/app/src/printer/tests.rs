@@ -126,7 +126,12 @@ fn talks_to_a_pretend_klipper_printer() {
                     "extruder": {"temperature": 210.0, "target": 210.0},
                     "heater_bed": {"temperature": 60.0, "target": 60.0},
                     "virtual_sdcard": {"progress": 0.5},
-                    "print_stats": {"state": "printing", "filename": "cube.gcode", "print_duration": 300.0}
+                    "print_stats": {"state": "printing", "filename": "cube.gcode", "print_duration": 300.0},
+                    "exclude_object": {
+                        "objects": [{"name": "LEFT_0"}, {"name": "RIGHT_1"}],
+                        "excluded_objects": ["LEFT_0"],
+                        "current_object": "RIGHT_1"
+                    }
                 }}})
             } else {
                 let _ = tx.send((line.clone(), String::from_utf8_lossy(&body).to_string()));
@@ -156,6 +161,29 @@ fn talks_to_a_pretend_klipper_printer() {
     assert!(line.starts_with("POST /server/files/upload"), "{line}");
     assert!(body.contains("filename=\"cube.gcode\"") && body.contains("G28"));
     assert!(body.contains("name=\"print\"\r\n\r\ntrue"));
+    // The objects in the file, and cancelling one.
+    let objects = link.state().status.objects;
+    assert_eq!(
+        objects,
+        vec![
+            super::PrintObject {
+                name: "LEFT_0".into(),
+                cancelled: true
+            },
+            super::PrintObject {
+                name: "RIGHT_1".into(),
+                cancelled: false
+            },
+        ]
+    );
+    link.send(Command::CancelObject("RIGHT_1".into()));
+    let (line, _) = rx
+        .recv_timeout(Duration::from_secs(8))
+        .expect("cancel never arrived");
+    assert!(
+        line.starts_with("POST /printer/gcode/script?script=EXCLUDE_OBJECT%20NAME%3DRIGHT_1 "),
+        "{line}"
+    );
 }
 
 /// Reads one HTTP request: (request line, headers, body).

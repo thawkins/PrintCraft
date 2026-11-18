@@ -477,6 +477,31 @@ impl PlacedObject {
         Bounds::of(self.world_triangles().iter().flatten().copied())
     }
 
+    /// The outline of the part's footprint on the plate (the convex hull of its points
+    /// seen from above, counter-clockwise), for naming the object in the G-code. Corners
+    /// closer than `HULL_STEP_MM` to the last one kept are left out, so a round part
+    /// doesn't give hundreds of points.
+    pub fn footprint_hull(&self) -> Vec<crate::geometry::Point2> {
+        const HULL_STEP_MM: f32 = 0.5;
+        let pts = self
+            .world_triangles()
+            .iter()
+            .flatten()
+            .map(|v| crate::geometry::Point2::new(v.x, v.y))
+            .collect();
+        let mut hull: Vec<crate::geometry::Point2> = Vec::new();
+        for p in crate::slicer::convex_hull(pts) {
+            if hull.last().is_none_or(|q| q.distance(p) >= HULL_STEP_MM) {
+                hull.push(p);
+            }
+        }
+        // The loop closes: the last point must also be clear of the first.
+        while hull.len() > 3 && hull[hull.len() - 1].distance(hull[0]) < HULL_STEP_MM {
+            hull.pop();
+        }
+        hull
+    }
+
     /// One object per separate piece (shell) of this one, with its turn and scale built
     /// in, each standing where that piece stood (on the plate: a piece above another
     /// drops onto it). One piece gives one object.
@@ -930,5 +955,17 @@ mod tests {
         let b = o.world_bounds();
         assert!(b.min.z.abs() < 1e-4);
         assert!((b.center().x - 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_footprint_hull_keeps_points_apart() {
+        // A fine cylinder (radius 10, 400 sides: points 0.16 mm apart).
+        let o = PlacedObject::new("c", Mesh::cylinder(10.0, 10.0, 5.0, 400));
+        let hull = o.footprint_hull();
+        assert!(hull.len() >= 20 && hull.len() <= 130, "{}", hull.len());
+        for k in 0..hull.len() {
+            let d = hull[k].distance(hull[(k + 1) % hull.len()]);
+            assert!(d >= 0.5 - 1e-4, "{d}");
+        }
     }
 }

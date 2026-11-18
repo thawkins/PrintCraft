@@ -35,7 +35,9 @@ pub struct Sliced {
 }
 
 /// Slices the plate, writes the G-code and adds the thumbnail pictures to it.
-/// `progress` hears 0..1 while slicing.
+/// `progress` hears 0..1 while slicing. (The app and CLI go through
+/// [`slice_plate_with_tools`] or [`slice_plate_grouped`]; this is the tests' shorthand.)
+#[cfg(test)]
 pub fn slice_plate(
     triangles: &[Triangle],
     printer: &Printer,

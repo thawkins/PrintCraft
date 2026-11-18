@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Object labels (gap plan task M6.1). With Advanced on, "Label objects" under Special
+  mode (off by default, so files are unchanged) names each object in the G-code: Klipper
+  gets `EXCLUDE_OBJECT_DEFINE` lines with each object's centre and outline, and
+  `EXCLUDE_OBJECT_START`/`END` around the object on every layer; Marlin and Prusa
+  firmware get M486. Each layer prints object by object, and a tool change is never
+  inside an object's block. X3G files get no labels. The command line has
+  `--label-objects`, and names objects by their file name.
+- Cancel object on Klipper printers (Moonraker). The printer page lists the objects of
+  a labelled print, with "Cancel object" for each (it asks first); cancelled ones are
+  struck through. PrusaLink offers no cancel-object call, so Prusa printers use their
+  own Cancel object menu, which reads the M486 labels.
+
 ## [0.0.10] - 2026-11-18
 
 ### Changed

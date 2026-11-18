@@ -348,6 +348,7 @@ pub fn run(w: &Worker) {
                 | Command::SetFan(_)
                 | Command::SetSpeed(_)
                 | Command::Jog { .. }
+                | Command::CancelObject(_)
                 | Command::Home => {
                     Err("PrusaLink doesn't offer this; use the printer's screen.".to_string())
                 }

@@ -507,6 +507,65 @@ pub struct Tools {
     /// The ooze shield's distance (mm) outside everything else the print lays down, when
     /// there is one.
     pub shield: Option<f32>,
+    /// The objects on the plate, named in the G-code when `PrintSettings::label_objects`
+    /// is on (any number of nozzles).
+    pub labels: Vec<ObjectLabel>,
+}
+
+/// An object on the plate as the G-code names it, so the printer can cancel it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectLabel {
+    /// The object's name as shown in the app.
+    pub name: String,
+    /// Its footprint outline (plate coordinates, counter-clockwise).
+    pub outline: Vec<Point2>,
+}
+
+impl ObjectLabel {
+    /// The middle of the outline's bounding box.
+    fn centre(&self) -> Point2 {
+        let (lo, hi) = self.outline.iter().fold(
+            (
+                Point2::new(f32::MAX, f32::MAX),
+                Point2::new(f32::MIN, f32::MIN),
+            ),
+            |(lo, hi), p| {
+                (
+                    Point2::new(lo.x.min(p.x), lo.y.min(p.y)),
+                    Point2::new(hi.x.max(p.x), hi.y.max(p.y)),
+                )
+            },
+        );
+        Point2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0)
+    }
+}
+
+/// The labels for the objects on a plate, in plate order.
+pub fn object_labels(objects: &[crate::model::PlacedObject]) -> Vec<ObjectLabel> {
+    objects
+        .iter()
+        .map(|o| ObjectLabel {
+            name: o.name.clone(),
+            outline: o.footprint_hull(),
+        })
+        .collect()
+}
+
+/// The name of object `i` in Klipper's `EXCLUDE_OBJECT` commands: letters, digits, `-`
+/// and `_` only (anything else becomes `_`), with the object's number on the end so two
+/// objects with one name stay apart.
+pub fn klipper_object_name(name: &str, i: usize) -> String {
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{safe}_{i}")
 }
 
 /// The ooze shield's outline: one loop `distance` mm outside the convex hull of every line
@@ -621,6 +680,33 @@ impl Tools {
     }
 
     /// The nozzle that prints `path`.
+    /// The object (index into `labels`) a path prints: the one whose outline holds its
+    /// first point, else the one whose middle is nearest. None for the skirt, brim, raft,
+    /// prime tower and ooze shield, which belong to no object.
+    pub fn object_for(&self, path: &ToolPath) -> Option<usize> {
+        match path.kind {
+            PathKind::Skirt
+            | PathKind::Brim
+            | PathKind::Raft
+            | PathKind::PrimeTower
+            | PathKind::OozeShield => None,
+            _ => {
+                let p = *path.points.first()?;
+                self.labels
+                    .iter()
+                    .position(|l| crate::slicer::contains(&l.outline, p))
+                    .or_else(|| {
+                        self.labels
+                            .iter()
+                            .enumerate()
+                            .map(|(i, l)| (i, l.centre().distance(p)))
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|(i, _)| i)
+                    })
+            }
+        }
+    }
+
     pub fn tool_for(&self, path: &ToolPath) -> u8 {
         match path.kind {
             PathKind::Support => self.support_tool,
@@ -687,6 +773,45 @@ pub fn generate_with_tools(
     w.finish(result)
 }
 
+/// The header lines that name the objects: Klipper's `EXCLUDE_OBJECT_DEFINE` with each
+/// object's middle and outline (printer coordinates: plate point + `ox`, `oy`), or M486
+/// (Marlin, Prusa) with the count and each object's number and name.
+fn object_definitions(labels: &[ObjectLabel], printer: &Printer, ox: f32, oy: f32) -> String {
+    let mut g = String::new();
+    if printer.klipper {
+        for (i, l) in labels.iter().enumerate() {
+            let c = l.centre();
+            let polygon: Vec<String> = l
+                .outline
+                .iter()
+                .map(|p| format!("[{:.3},{:.3}]", p.x + ox, p.y + oy))
+                .collect();
+            let _ = writeln!(
+                g,
+                "EXCLUDE_OBJECT_DEFINE NAME={} CENTER={:.3},{:.3} POLYGON=[{}]",
+                klipper_object_name(&l.name, i),
+                c.x + ox,
+                c.y + oy,
+                polygon.join(",")
+            );
+        }
+    } else {
+        let _ = writeln!(g, "M486 T{}", labels.len());
+        for (i, l) in labels.iter().enumerate() {
+            // A `;` would start a comment and cut the name short.
+            let name: String = l
+                .name
+                .chars()
+                .map(|c| if c == ';' || c.is_control() { '_' } else { c })
+                .collect();
+            let _ = writeln!(g, "M486 S{i}");
+            let _ = writeln!(g, "M486 A{name}");
+        }
+        let _ = writeln!(g, "M486 S-1");
+    }
+    g
+}
+
 /// Writes the file front to back, tracking where the nozzle is, the absolute E value
 /// and the running time and filament totals.
 struct Writer<'a> {
@@ -746,6 +871,10 @@ struct Writer<'a> {
     /// Where each layer's progress line goes (just after its `;LAYER:` line) and the
     /// time so far there; the lines are written at the end, once the total is known.
     progress_marks: Vec<(usize, f32)>,
+    /// Objects are named in the file (label objects on, objects given, not X3G).
+    labelling: bool,
+    /// The object whose block is open now.
+    open_object: Option<usize>,
 }
 
 /// The nozzles a print uses, and which one it starts with.
@@ -1093,6 +1222,10 @@ impl<'a> Writer<'a> {
         // prepares (levels) before running the file reads these to know the job temperature;
         // without them it may prepare at 0 °C and heat up again afterwards.
         g.push_str(&header_block(filament, s, printer));
+        let labelling = s.label_objects && !printer.x3g && !tools.labels.is_empty();
+        if labelling {
+            g.push_str(&object_definitions(&tools.labels, printer, ox, oy));
+        }
         let vars = template_vars(result, printer, filament, s, &nozzles, &temp_of);
         // The start: a custom one in place of heating, homing and purging, or the built-in.
         let custom_start = !printer.start_gcode.trim().is_empty();
@@ -1158,6 +1291,33 @@ impl<'a> Writer<'a> {
             kind_seconds: Vec::new(),
             travel_seconds: 0.0,
             progress_marks: Vec::new(),
+            labelling,
+            open_object: None,
+        }
+    }
+
+    /// Opens the block of object `object` (closing the open one first), or just closes
+    /// the open one when `object` is None. Nothing when objects aren't named.
+    fn switch_object(&mut self, object: Option<usize>) {
+        if !self.labelling || object == self.open_object {
+            return;
+        }
+        if let Some(i) = self.open_object.take() {
+            if self.printer.klipper {
+                let name = klipper_object_name(&self.tools.labels[i].name, i);
+                let _ = writeln!(self.g, "EXCLUDE_OBJECT_END NAME={name}");
+            } else {
+                let _ = writeln!(self.g, "M486 S-1");
+            }
+        }
+        if let Some(i) = object {
+            if self.printer.klipper {
+                let name = klipper_object_name(&self.tools.labels[i].name, i);
+                let _ = writeln!(self.g, "EXCLUDE_OBJECT_START NAME={name}");
+            } else {
+                let _ = writeln!(self.g, "M486 S{i}");
+            }
+            self.open_object = Some(i);
         }
     }
 
@@ -1387,6 +1547,13 @@ impl<'a> Writer<'a> {
         } else {
             (0..layer.paths.len()).map(|i| (i, self.tool)).collect()
         };
+        // Objects named: each nozzle's paths object by object (the skirt and the like
+        // first), so each object is one block per nozzle and layer.
+        let mut order = order;
+        if self.labelling {
+            let first = self.tool;
+            order.sort_by_key(|&(i, t)| (t != first, self.tools.object_for(&layer.paths[i])));
+        }
         let mut look = LayerLook {
             li,
             seam,
@@ -1412,6 +1579,9 @@ impl<'a> Writer<'a> {
                 continue;
             }
             if tool != self.tool {
+                // A tool change never sits inside an object's block, where cancelling the
+                // object would skip it.
+                self.switch_object(None);
                 self.change_tool(tool);
                 look.last_kind = None;
                 // The incoming nozzle primes on the tower before it prints the part.
@@ -1422,8 +1592,12 @@ impl<'a> Writer<'a> {
                     tower_done = true;
                 }
             }
+            if self.labelling {
+                self.switch_object(self.tools.object_for(&layer.paths[pi]));
+            }
             self.print_path(layer, pi, &mut look, seams_below);
         }
+        self.switch_object(None);
         let seams_here = std::mem::take(&mut look.seams_here);
         if !seams_here.is_empty() {
             *seams_below = seams_here;
@@ -3228,5 +3402,171 @@ mod tests {
             only_left.uses_second(true),
             "supports alone need the second nozzle"
         );
+    }
+
+    /// Two 10 mm cubes, 2 mm tall, 60 mm apart (left one named "left box (1)"), sliced,
+    /// and the labels for them.
+    fn two_cubes(s: &PrintSettings) -> (SliceResult, Tools) {
+        let objects: Vec<PlacedObject> = [("left box (1)", -30.0), ("right", 30.0)]
+            .into_iter()
+            .map(|(name, x)| {
+                let mut o = PlacedObject::new(name, Mesh::cube(Vec3::new(10.0, 10.0, 2.0)));
+                o.x = x;
+                o
+            })
+            .collect();
+        let tris: Vec<Triangle> = objects.iter().flat_map(|o| o.world_triangles()).collect();
+        let r = crate::slicer::slice(&tris, s, 0.42, &|_| {});
+        let tools = Tools {
+            labels: objects
+                .iter()
+                .map(|o| ObjectLabel {
+                    name: o.name.clone(),
+                    outline: o.footprint_hull(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        (r, tools)
+    }
+
+    fn labelled() -> PrintSettings {
+        PrintSettings {
+            label_objects: true,
+            ..Default::default()
+        }
+    }
+
+    /// Checks that every extruding move inside an object's block is on that object's
+    /// side of the plate (`side_of(name)`: -1 left, 1 right), and that moves outside
+    /// any block are skirt. `start`/`end` find the name a line opens or closes a block of.
+    fn check_blocks(
+        text: &str,
+        printer: &Printer,
+        start: &dyn Fn(&str) -> Option<String>,
+        end: &dyn Fn(&str) -> bool,
+        side_of: &dyn Fn(&str) -> f32,
+    ) {
+        let ox = printer.bed_x / 2.0;
+        let mut open: Option<String> = None;
+        let mut kind = "";
+        let mut seen = [0usize; 2];
+        let body = &text[text.find(";LAYER:0").unwrap()..];
+        for line in body.lines() {
+            if let Some(t) = line.strip_prefix(";TYPE:") {
+                kind = t;
+            } else if let Some(name) = start(line) {
+                assert!(open.is_none(), "block opened inside {open:?}: {line}");
+                open = Some(name);
+            } else if end(line) {
+                assert!(open.is_some(), "block closed twice: {line}");
+                open = None;
+            } else if line.starts_with("G1 X") && line.contains(" E") {
+                let x: f32 = line.split_whitespace().nth(1).unwrap()[1..]
+                    .parse()
+                    .unwrap();
+                match &open {
+                    Some(name) => {
+                        let side = side_of(name);
+                        assert!((x - ox) * side > 0.0, "{line} in block {name}");
+                        seen[(side > 0.0) as usize] += 1;
+                    }
+                    None => assert_eq!(kind, "SKIRT", "unlabelled print move {line}"),
+                }
+            }
+        }
+        assert!(open.is_none(), "a block is left open");
+        assert!(seen[0] > 0 && seen[1] > 0, "{seen:?}");
+    }
+
+    #[test]
+    fn test_object_labels_klipper_define_and_wrap_each_object() {
+        let s = labelled();
+        let (r, tools) = two_cubes(&s);
+        let printer = Printer::presets().into_iter().find(|p| p.klipper).unwrap();
+        let out = generate_with_tools(&r, &printer, &Filament::presets()[0], &s, &tools);
+        let layer0 = out.text.find(";LAYER:0").unwrap();
+        let defines: Vec<&str> = out.text[..layer0]
+            .lines()
+            .filter(|l| l.starts_with("EXCLUDE_OBJECT_DEFINE"))
+            .collect();
+        assert_eq!(defines.len(), 2, "{defines:?}");
+        // Names are made safe for a Klipper command and kept apart by their number.
+        assert!(
+            defines[0].starts_with("EXCLUDE_OBJECT_DEFINE NAME=left_box__1__0 CENTER="),
+            "{}",
+            defines[0]
+        );
+        assert!(defines[1].contains("NAME=right_1 "), "{}", defines[1]);
+        // The centre and outline are in printer coordinates.
+        let ox = printer.bed_x / 2.0;
+        let centre = format!("CENTER={:.3},", ox - 30.0);
+        assert!(defines[0].contains(&centre), "{}", defines[0]);
+        assert!(defines[0].contains("POLYGON=[["), "{}", defines[0]);
+        assert!(!out.text.contains("M486"));
+        let starts = out.text.matches("EXCLUDE_OBJECT_START NAME=").count();
+        assert_eq!(starts, out.text.matches("EXCLUDE_OBJECT_END NAME=").count());
+        assert_eq!(starts, 2 * r.layers.len());
+        check_blocks(
+            &out.text,
+            &printer,
+            &|l| {
+                l.strip_prefix("EXCLUDE_OBJECT_START NAME=")
+                    .map(str::to_string)
+            },
+            &|l| l.starts_with("EXCLUDE_OBJECT_END"),
+            &|n| if n.starts_with("left") { -1.0 } else { 1.0 },
+        );
+    }
+
+    #[test]
+    fn test_object_labels_marlin_use_m486() {
+        let s = labelled();
+        let (r, tools) = two_cubes(&s);
+        let printer = Printer::presets()
+            .into_iter()
+            .find(|p| !p.klipper && !p.x3g)
+            .unwrap();
+        let out = generate_with_tools(&r, &printer, &Filament::presets()[0], &s, &tools);
+        let layer0 = out.text.find(";LAYER:0").unwrap();
+        let head = &out.text[..layer0];
+        for want in [
+            "M486 T2",
+            "M486 S0",
+            "M486 Aleft box (1)",
+            "M486 S1",
+            "M486 Aright",
+        ] {
+            assert!(head.lines().any(|l| l == want), "no {want:?} in the header");
+        }
+        assert!(!out.text.contains("EXCLUDE_OBJECT"));
+        check_blocks(
+            &out.text,
+            &printer,
+            &|l| match l.strip_prefix("M486 S") {
+                Some(n) if n != "-1" => Some(n.to_string()),
+                _ => None,
+            },
+            &|l| l == "M486 S-1",
+            &|n| if n == "0" { -1.0 } else { 1.0 },
+        );
+    }
+
+    #[test]
+    fn test_object_labels_off_or_x3g_write_nothing() {
+        let off = PrintSettings::default();
+        let (r, tools) = two_cubes(&off);
+        let filament = &Filament::presets()[0];
+        for printer in Printer::presets() {
+            let text = generate_with_tools(&r, &printer, filament, &off, &tools).text;
+            assert!(!text.contains("EXCLUDE_OBJECT") && !text.contains("M486"));
+            // Off, the labels change nothing at all.
+            let plain = generate_with_tools(&r, &printer, filament, &off, &Tools::default());
+            assert_eq!(text, plain.text, "{}", printer.name);
+        }
+        let on = labelled();
+        let x3g = Printer::presets().into_iter().find(|p| p.x3g).unwrap();
+        let text = generate_with_tools(&r, &x3g, filament, &on, &tools).text;
+        assert!(!text.contains("EXCLUDE_OBJECT") && !text.contains("M486"));
     }
 }

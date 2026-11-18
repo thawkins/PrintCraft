@@ -458,6 +458,12 @@ impl PrinterSide {
                 w.update(|s| s.calibrate = Some(on));
                 Ok(())
             }
+            Command::CancelObject(_) => {
+                w.update(|s| {
+                    s.note("This connection can't cancel one object; use the printer's screen.")
+                });
+                Ok(())
+            }
             Command::Pause | Command::Resume => {
                 let pause = matches!(cmd, Command::Pause);
                 if !self.building || pause == self.paused {

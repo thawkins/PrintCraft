@@ -517,6 +517,9 @@ pub struct PrintSettings {
     /// Variable-width walls (experimental): thin parts get one line as wide as the
     /// space instead of walls that don't fit.
     pub variable_walls: bool,
+    /// Name each object in the G-code (Klipper `EXCLUDE_OBJECT`, M486 elsewhere), so one
+    /// object can be cancelled while the others go on printing.
+    pub label_objects: bool,
 }
 
 /// Infill reaches 15 % of a line width into the innermost wall, to bond to it.
@@ -761,6 +764,7 @@ impl Quality {
             top_pattern: SolidPattern::Lines,
             solid_pattern: SolidPattern::Lines,
             variable_walls: false,
+            label_objects: false,
         };
         match self {
             Self::Fine => PrintSettings {

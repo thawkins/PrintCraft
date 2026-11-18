@@ -565,8 +565,12 @@ impl PrintCraftApp {
     /// Which nozzle prints what, from each part's nozzle and the two-nozzle settings. Err
     /// says why the plate can't be printed that way (a Ditto plate too wide for the copy).
     fn tools(&self) -> Result<crate::gcode::Tools, String> {
+        let labels = crate::gcode::object_labels(&self.objects);
         if self.printer.extruders < 2 {
-            return Ok(crate::gcode::Tools::default());
+            return Ok(crate::gcode::Tools {
+                labels,
+                ..Default::default()
+            });
         }
         let parts: Vec<([f32; 4], u8)> = self
             .objects
@@ -601,6 +605,7 @@ impl PrintCraftApp {
         Ok(crate::gcode::Tools {
             shield,
             tower,
+            labels,
             parts,
             support_tool: self.dual.support_tool,
             primary: self.printer.primary_tool(),

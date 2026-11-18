@@ -1009,6 +1009,23 @@ fn build() -> Vec<Setting> {
             Flag,
             vase_mode
         ),
+        hinted(
+            r!(
+                "label_objects",
+                "Label objects",
+                G::SpecialMode,
+                A,
+                Kind::Flag,
+                Flag,
+                label_objects
+            ),
+            |_| {
+                Some(
+                    "Name each object in the G-code, so one can be cancelled while the \
+                     others go on printing (Klipper needs [exclude_object] in its config)",
+                )
+            },
+        ),
     ]
 }
 
@@ -1084,6 +1101,7 @@ mod tests {
             top_pattern: SolidPattern::Monotonic,
             solid_pattern: SolidPattern::Concentric,
             variable_walls: true,
+            label_objects: true,
         }
     }
 

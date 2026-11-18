@@ -30,8 +30,13 @@ pub struct PrintJob {
 
 enum Pending {
     Print(PrintJob),
-    PrintFile { name: String, path: String },
+    PrintFile {
+        name: String,
+        path: String,
+    },
     Stop,
+    /// Cancel one object of the running print (its name on the printer).
+    CancelObject(String),
 }
 
 /// What "Print again" would print.
@@ -1201,6 +1206,7 @@ impl DevicePage {
                     (cmd, ask_again) = self.job_buttons(ui, s);
                 });
             });
+            self.object_list(ui, s);
             if let Some(b) = &s.busy {
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -1343,6 +1349,39 @@ impl DevicePage {
             }
         });
         (cmd, ask_again)
+    }
+
+    /// The objects the running print names (Klipper), each with a Cancel button that asks
+    /// first. Nothing when the file names none.
+    fn object_list(&mut self, ui: &mut Ui, s: &LinkState) {
+        let st = &s.status;
+        if st.objects.is_empty() || !st.state.is_active() {
+            return;
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new("Objects").strong());
+        let can = s.connected && s.busy.is_none();
+        for o in &st.objects {
+            ui.horizontal(|ui| {
+                if o.cancelled {
+                    ui.label(
+                        RichText::new(&o.name)
+                            .strikethrough()
+                            .color(theme::TEXT_DIM),
+                    );
+                    ui.label(RichText::new("cancelled").color(theme::TEXT_DIM));
+                } else {
+                    ui.label(&o.name);
+                    if ui
+                        .add_enabled(can, egui::Button::new("Cancel object"))
+                        .on_hover_text("Stop printing this object; the others go on")
+                        .clicked()
+                    {
+                        self.pending = Some(Pending::CancelObject(o.name.clone()));
+                    }
+                }
+            });
+        }
     }
 
     fn send_card(&mut self, ui: &mut Ui, s: &LinkState, job: Option<PrintJob>) {
@@ -1788,6 +1827,11 @@ impl DevicePage {
                 "Print",
             ),
             Pending::Stop => ("Stop the print?", "The print will be cancelled and can't be resumed.".to_string(), "Stop print"),
+            Pending::CancelObject(name) => (
+                "Cancel this object?",
+                format!("Stop printing {name}? The other objects go on printing. It can't be undone."),
+                "Cancel object",
+            ),
         };
         let mut answer = None;
         let printing = matches!(pending, Pending::Print(_));
@@ -1829,6 +1873,7 @@ impl DevicePage {
                 Some(Pending::Print(job)) => self.send_job(job),
                 Some(Pending::PrintFile { path, .. }) => self.start_stored_file(path),
                 Some(Pending::Stop) => self.send(Command::Stop),
+                Some(Pending::CancelObject(name)) => self.send(Command::CancelObject(name)),
                 None => {}
             }
         }

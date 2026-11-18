@@ -112,7 +112,7 @@ Goal: PrusaSlicer's most used pattern and support choices are available.
 
 | ID | Task | Done when | Est. |
 |---|---|---|---|
-| M6.1 | **Object labels.** `; printing object` / `EXCLUDE_OBJECT_DEFINE` for Klipper, and M486 for Marlin/Prusa. Add a "cancel object" button on the printer page for Moonraker and PrusaLink. | Tests per flavour. Cancelling works against the fake Moonraker. | 2 |
+| M6.1 | **Done.** **Object labels.** `; printing object` / `EXCLUDE_OBJECT_DEFINE` for Klipper, and M486 for Marlin/Prusa. Add a "cancel object" button on the printer page for Moonraker and PrusaLink. | Tests per flavour. Cancelling works against the fake Moonraker. | 2 |
 | M6.2 | **Arc fitting.** Replace runs of short segments that fit a circle within a tolerance with G2/G3. Off for X3G (not supported there). | Test: a cylinder's walls become arcs within 0.01 mm. Time estimate unchanged within 2 %. | 2 |
 | M6.3 | **Binary G-code (.bgcode).** Write Prusa's binary format (metadata, thumbnails, G-code blocks with heatshrink/MeatPack) from the published specification. Offer it for PrusaLink printers. | Test: the file round-trips through a decoder written from the spec. Upload to the fake PrusaLink. | 3 |
 | M6.4 | **OctoPrint.** API-key connection, upload, start, status, temperatures, pause/stop, camera (MJPEG). Discovery by address scan. | Tests against a fake OctoPrint server. | 3 |

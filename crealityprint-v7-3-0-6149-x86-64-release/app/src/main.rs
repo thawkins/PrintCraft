@@ -92,6 +92,7 @@ Slicing options:
   --vase                          spiral vase mode
   --fuzzy                         fuzzy skin on outer walls
   --variable-walls                variable-width walls for thin parts (experimental)
+  --label-objects                 name each object in the G-code (EXCLUDE_OBJECT / M486)
   --fuzzy-top                     textured top surface (random lift up to 0.1 mm)
 
 Models can be STL, OBJ or 3MF files.
@@ -121,6 +122,7 @@ struct Args {
     vase: bool,
     fuzzy: bool,
     variable_walls: bool,
+    label_objects: bool,
     fuzzy_top: bool,
     infill_pattern: Option<String>,
     seam: Option<String>,
@@ -177,6 +179,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--vase" => a.vase = true,
             "--fuzzy" => a.fuzzy = true,
             "--variable-walls" => a.variable_walls = true,
+            "--label-objects" => a.label_objects = true,
             "--fuzzy-top" => a.fuzzy_top = true,
             "--infill-pattern" => a.infill_pattern = Some(value("--infill-pattern")?),
             "--seam" => a.seam = Some(value("--seam")?),
@@ -322,6 +325,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
     settings.vase_mode = args.vase;
     settings.fuzzy_skin = args.fuzzy;
     settings.variable_walls = args.variable_walls;
+    settings.label_objects = args.label_objects;
     settings.fuzzy_top = args.fuzzy_top;
     if let Some(p) = &args.infill_pattern {
         match profiles::InfillPattern::ALL
@@ -379,6 +383,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
     }
 
     let mut triangles = Vec::new();
+    let mut objects = Vec::new();
     let count = args.models.len();
     for (i, path) in args.models.iter().enumerate() {
         let mesh = match model::Mesh::load(path) {
@@ -392,7 +397,12 @@ fn slice_without_window(args: &Args) -> ExitCode {
         if !fixed.is_empty() {
             eprintln!("printcraft: {}: repaired: {fixed}", path.display());
         }
-        let mut obj = model::PlacedObject::new(path.display().to_string(), mesh);
+        // Named by its file, as the app names it (and the G-code, with --label-objects).
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let mut obj = model::PlacedObject::new(name, mesh);
         // Several models: line them up left to right with a gap.
         obj.x = (i as f32 - (count as f32 - 1.0) / 2.0) * 40.0;
         if !pipeline::fits_on_plate(&obj.world_bounds(), &printer) {
@@ -404,9 +414,21 @@ fn slice_without_window(args: &Args) -> ExitCode {
             return ExitCode::FAILURE;
         }
         triangles.extend(obj.world_triangles());
+        objects.push(obj);
     }
 
-    let sliced = pipeline::slice_plate(&triangles, &printer, &filament, &settings, &|_| {});
+    let tools = gcode::Tools {
+        labels: gcode::object_labels(&objects),
+        ..Default::default()
+    };
+    let sliced = pipeline::slice_plate_with_tools(
+        &triangles,
+        &printer,
+        &filament,
+        &settings,
+        &tools,
+        &|_| {},
+    );
     let out = sliced.gcode;
     let wants_x3g = output
         .extension()

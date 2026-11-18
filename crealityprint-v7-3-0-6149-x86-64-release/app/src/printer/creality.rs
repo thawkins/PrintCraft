@@ -356,6 +356,12 @@ fn run_command(w: &Worker, cmd: Command) -> Outgoing {
         Command::SetSpeed(p) => gcode_message(&format!("M220 S{p}")),
         Command::Jog { axis, mm } => gcode_message(&jog_gcode(axis, mm).join("\n")),
         Command::Home => gcode_message("G28"),
+        Command::CancelObject(_) => {
+            w.update(|s| {
+                s.note("This connection can't cancel one object; use the printer's screen.")
+            });
+            return Outgoing::Nothing;
+        }
         Command::RefreshFiles => {
             json!({"method": "get", "params": {"reqGcodeFile": 1}}).to_string()
         }

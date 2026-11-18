@@ -466,6 +466,9 @@ fn session(
                 Command::Home => st.send_now("G28"),
                 // The app adds (or leaves out) its own levelling step in the file.
                 Command::SetCalibration(on) => w.update(|s| s.calibrate = Some(on)),
+                Command::CancelObject(_) => w.update(|s| {
+                    s.note("This connection can't cancel one object; use the printer's screen.")
+                }),
                 Command::PrintFile(_) | Command::RefreshFiles | Command::RefreshHistory => {
                     w.update(|s| {
                         s.note("A USB printer has no file list; send a sliced plate instead.")
