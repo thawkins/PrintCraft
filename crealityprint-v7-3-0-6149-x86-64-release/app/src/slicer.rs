@@ -6,6 +6,7 @@ use crate::model::Triangle;
 use crate::profiles::{Adhesion, InfillPattern, PrintSettings, SolidPattern, SupportStyle};
 use std::collections::HashMap;
 
+mod arachne;
 mod lightning;
 mod tree;
 
@@ -433,15 +434,31 @@ pub fn slice_modified(
         }
         // Counted from the model's own first layer (above a full raft).
         let model_layer = i.saturating_sub(raft_n);
-        paths.extend(wall_paths(
-            &outlines[i],
-            model_layer,
-            wall_count,
-            line_width,
-            settings,
-        ));
+        let variable = settings.variable_walls && !vase;
+        if variable {
+            // Thin parts get a centre line instead of walls (which also fills what gap
+            // fill would).
+            let mut walls = arachne::variable_walls(&outlines[i], wall_count, line_width);
+            if settings.fuzzy_skin && model_layer > 0 {
+                for w in walls
+                    .iter_mut()
+                    .filter(|w| w.closed && w.kind == PathKind::OuterWall)
+                {
+                    w.points = fuzz(&w.points, model_layer as u64);
+                }
+            }
+            paths.extend(walls);
+        } else {
+            paths.extend(wall_paths(
+                &outlines[i],
+                model_layer,
+                wall_count,
+                line_width,
+                settings,
+            ));
+        }
 
-        if !vase {
+        if !vase && !variable {
             let overlap = settings.infill_overlap / 100.0;
             paths.extend(gap_fill_paths(
                 &outlines[i],
@@ -3677,6 +3694,70 @@ mod tests {
 
     fn tree() -> PrintSettings {
         with_supports(|s| s.support_style = SupportStyle::Tree)
+    }
+
+    /// A fin 2 mm tall: a wedge 4 mm wide at x = 0 narrowing to a point at x = 20.
+    fn wedge_fin() -> Vec<Triangle> {
+        let (a, b, c) = (
+            Vec3::new(0.0, -2.0, 0.0),
+            Vec3::new(20.0, 0.0, 0.0),
+            Vec3::new(0.0, 2.0, 0.0),
+        );
+        let up = Vec3::new(0.0, 0.0, 2.0);
+        let (a2, b2, c2) = (a + up, b + up, c + up);
+        vec![
+            [a, c, b],
+            [a2, b2, c2],
+            [a, b, b2],
+            [a, b2, a2],
+            [b, c, c2],
+            [b, c2, b2],
+            [c, a, a2],
+            [c, a2, c2],
+        ]
+    }
+
+    #[test]
+    fn test_variable_walls_fill_a_tapered_fin_continuously() {
+        let fin = wedge_fin();
+        let s = PrintSettings {
+            variable_walls: true,
+            ..PrintSettings::default()
+        };
+        let r = slice(&fin, &s, 0.42, &|_| {});
+        let mid = &r.layers[r.layers.len() / 2];
+        let walls: Vec<&ToolPath> = mid
+            .paths
+            .iter()
+            .filter(|p| matches!(p.kind, PathKind::OuterWall | PathKind::InnerWall))
+            .collect();
+        assert!(
+            walls.iter().any(|p| p.width.is_some()),
+            "centre lines on the thin end"
+        );
+        for p in &walls {
+            let w = p.width.unwrap_or(0.42);
+            assert!((0.2..=0.64).contains(&w), "width {w}");
+        }
+        // A line crosses every 0.25 mm along the fin, to where it is half a line wide.
+        for k in 1..76 {
+            let x = k as f32 * 0.25;
+            assert!(
+                walls.iter().any(|p| p
+                    .points
+                    .windows(2)
+                    .any(|w| (w[0].x - x) * (w[1].x - x) <= 0.0 && w[0].x != w[1].x)),
+                "nothing at x = {x}"
+            );
+        }
+        // No gap fill: the centre lines do its job.
+        assert!(!mid.paths.iter().any(|p| p.kind == PathKind::GapFill));
+        // Off (the default): the old walls and gap fill.
+        let plain = slice(&fin, &PrintSettings::default(), 0.42, &|_| {});
+        assert!(plain.layers[plain.layers.len() / 2]
+            .paths
+            .iter()
+            .all(|p| p.kind != PathKind::OuterWall || p.width.is_none()));
     }
 
     #[test]

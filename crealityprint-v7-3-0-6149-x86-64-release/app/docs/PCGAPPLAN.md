@@ -106,7 +106,7 @@ Goal: PrusaSlicer's most used pattern and support choices are available.
 | M5.4 | **Done.** **Top/bottom patterns.** Monotonic and concentric for solid and top layers. | Tests and screenshot. | 1.5 |
 | M5.5 | **Done.** **Support settings.** Interface layers, top/bottom Z gap, XY gap, pattern spacing, all advanced. | Tests: the gap layers are empty, and the interface layers are dense. | 2 |
 | M5.6 | **Done.** **Tree supports.** Branches that grow down from overhang points, avoid the model and merge, with tip and branch diameters. | Tests: an overhang test gets supports that don't touch the model sides. Volume is less than grid supports. Screenshot. | 10 |
-| M5.7 | **Variable-width walls (Arachne-style).** Make the wall line width vary to fill thin features without gaps. Off by default until it has been tested on prints. | Tests: a tapered wedge gets continuous walls with widths in the allowed range. Baseline unchanged when off. | 10 |
+| M5.7 | **Partly done** (experimental setting, off by default; tapered wedge test passes; still to do: widen walls beside spaces under half a line width, and smooth the handover from walls to a centre line, which leave small gaps on gear teeth). **Variable-width walls (Arachne-style).** Make the wall line width vary to fill thin features without gaps. Off by default until it has been tested on prints. | Tests: a tapered wedge gets continuous walls with widths in the allowed range. Baseline unchanged when off. | 10 |
 
 ## M6: Output, hosts, profiles and platforms (0.6.0)
 

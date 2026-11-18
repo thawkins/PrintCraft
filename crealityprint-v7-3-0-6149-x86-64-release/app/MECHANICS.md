@@ -328,6 +328,20 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     the bottom Z gap above them) stops. Each is printed as closed rings from half a
     line width inside its edge, a line width apart.
 
+28. **Variable-width walls** (`src/slicer/arachne.rs`, gap plan M5.7, experimental).
+    The distance from the outline (signed, positive inside) is sampled every third of
+    a line width within (walls + 1) line widths of each edge; rows are filled in or
+    out by even-odd crossings. Wall k is the contour at (k + 1/2) line widths
+    (marching squares, `contour`), kept where climbing uphill from it reaches
+    (k + 3/4) line widths before stopping on a thin ridge. Ridge samples are local
+    maxima along some direction whose nearest edges are at least 120 degrees apart;
+    their depth is refined to (a + b) / 2 + step across the ridge (at most half a
+    step above the sample). A ridge sample where m walls fit (depth >= (k + 3/4) line
+    widths) and 2 (depth - m x line width) is at least half a line width gets a
+    centre line that wide. The ridge is thinned (Zhang-Suen), joined into chains (3
+    samples or more), widths smoothed over 5 samples, and split where the width moves
+    by 0.15 line widths. Gap fill is off when this is on.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

@@ -514,6 +514,9 @@ pub struct PrintSettings {
     pub top_pattern: SolidPattern,
     /// How bottoms and other solid layers are filled.
     pub solid_pattern: SolidPattern,
+    /// Variable-width walls (experimental): thin parts get one line as wide as the
+    /// space instead of walls that don't fit.
+    pub variable_walls: bool,
 }
 
 /// Infill reaches 15 % of a line width into the innermost wall, to bond to it.
@@ -757,6 +760,7 @@ impl Quality {
             adaptive_smoothing: 1.0,
             top_pattern: SolidPattern::Lines,
             solid_pattern: SolidPattern::Lines,
+            variable_walls: false,
         };
         match self {
             Self::Fine => PrintSettings {

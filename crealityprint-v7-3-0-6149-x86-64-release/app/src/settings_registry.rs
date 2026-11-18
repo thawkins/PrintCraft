@@ -616,6 +616,24 @@ fn build() -> Vec<Setting> {
         ),
         hinted(
             r!(
+                "variable_walls",
+                "Variable-width walls",
+                G::WallsAndSurfaces,
+                A,
+                Kind::Flag,
+                Flag,
+                variable_walls
+            ),
+            |_| {
+                Some(
+                    "Experimental. Where a part is too thin for its walls, one line down \
+                     the middle as wide as the space (half to one and a half line widths) \
+                     instead, so thin features print without gaps",
+                )
+            },
+        ),
+        hinted(
+            r!(
                 "infill_overlap",
                 "Infill/wall overlap",
                 G::WallsAndSurfaces,
@@ -1065,6 +1083,7 @@ mod tests {
             adaptive_smoothing: 2.5,
             top_pattern: SolidPattern::Monotonic,
             solid_pattern: SolidPattern::Concentric,
+            variable_walls: true,
         }
     }
 

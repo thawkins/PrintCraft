@@ -72,6 +72,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Quality presets | Yes (Fine / Standard / Draft). They now change only quality values, so your other choices stay |
 | Infill patterns | **Simpler**: Lines, Grid, Triangles, and new Gyroid, Honeycomb, Cubic, Adaptive cubic and Lightning. Not offered: support cubic |
 | Top and solid patterns | **Yes (new)**: Lines, Monotonic or Concentric, set apart for the visible top and for other solid layers (Advanced, Walls and surfaces) |
+| Variable-width walls (Arachne) | **Partly (new, experimental, off by default)**: thin parts get a centre line as wide as the space; small gaps remain at wall handovers and beside very thin spaces |
 | Arachne variable-width walls | Not yet (fixed-width walls) |
 | Seam position (nearest / aligned-rear / random) | **Yes (new)** |
 | Seam and support painting | Not yet |

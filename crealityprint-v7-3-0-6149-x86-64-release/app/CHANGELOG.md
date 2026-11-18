@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Variable-width walls, experimental (gap plan task M5.7, partly done). With Advanced
+  on, "Variable-width walls" under Walls and surfaces (off by default): walls follow
+  the shape where they fit, and where a part is too thin for them one line runs down
+  its middle, as wide as the space (half to one and a half line widths), in place of
+  gap fill. A tapering fin prints as walls that merge into a narrowing centre line
+  instead of overlapping walls. Not yet as good as Arachne: spaces under half a line
+  width between walls are left empty (Arachne widens the walls beside them), and
+  where walls hand over to a centre line there can be a small notch; on gear teeth
+  this leaves small gaps. On the command line, `--variable-walls`. Slicing takes
+  longer with it on (about 4x on the ORBIT model).
 - Tree supports (gap plan task M5.6). Support > Style now offers Tree: from each
   overhang a thin branch grows down, leaning (at most 40 degrees) towards its
   neighbours and joining them, keeping the XY gap clear of the model, thickening from

@@ -779,6 +779,7 @@ mod tests {
             adaptive_smoothing: 2.5,
             top_pattern: SolidPattern::Monotonic,
             solid_pattern: SolidPattern::Concentric,
+            variable_walls: true,
         }
     }
 
@@ -848,7 +849,8 @@ mod tests {
             "adaptive_quality": 80.0f32,
             "adaptive_smoothing": 2.5f32,
             "top_pattern": "Monotonic",
-            "solid_pattern": "Concentric"
+            "solid_pattern": "Concentric",
+            "variable_walls": true
         });
         if let (Some(e), Value::Object(r)) = (expected.as_object_mut(), rest) {
             e.extend(r);

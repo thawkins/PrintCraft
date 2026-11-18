@@ -11,6 +11,7 @@
 
 mod app;
 mod codec;
+mod contour;
 mod cut;
 mod device_ui;
 mod formats;
@@ -90,6 +91,7 @@ Slicing options:
   --ironing                       smooth top surfaces with an ironing pass
   --vase                          spiral vase mode
   --fuzzy                         fuzzy skin on outer walls
+  --variable-walls                variable-width walls for thin parts (experimental)
   --fuzzy-top                     textured top surface (random lift up to 0.1 mm)
 
 Models can be STL, OBJ or 3MF files.
@@ -118,6 +120,7 @@ struct Args {
     ironing: bool,
     vase: bool,
     fuzzy: bool,
+    variable_walls: bool,
     fuzzy_top: bool,
     infill_pattern: Option<String>,
     seam: Option<String>,
@@ -173,6 +176,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--ironing" => a.ironing = true,
             "--vase" => a.vase = true,
             "--fuzzy" => a.fuzzy = true,
+            "--variable-walls" => a.variable_walls = true,
             "--fuzzy-top" => a.fuzzy_top = true,
             "--infill-pattern" => a.infill_pattern = Some(value("--infill-pattern")?),
             "--seam" => a.seam = Some(value("--seam")?),
@@ -317,6 +321,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
     settings.ironing = args.ironing;
     settings.vase_mode = args.vase;
     settings.fuzzy_skin = args.fuzzy;
+    settings.variable_walls = args.variable_walls;
     settings.fuzzy_top = args.fuzzy_top;
     if let Some(p) = &args.infill_pattern {
         match profiles::InfillPattern::ALL
