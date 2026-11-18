@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Variable-width walls (gap plan task M5.7) are finished, still experimental and off
+  by default until tested on prints. A space between walls too thin for a centre
+  line is now filled by widening the walls beside it, and where walls stop because a
+  part gets too thin, their ends now run on into the centre line that takes over, so
+  no notch is left. Wall depth is measured exactly across each part. Measured on test
+  shapes, the walls now cover 99 % of a tapering wedge, 97 % of a 1 mm strip and 95 %
+  of a tooth shape (normal walls with gap fill: 85 %, 96 % and 82 %). On the ORBIT
+  model some gear tooth tips still keep a small gap. Slicing ORBIT with it on takes
+  7.4 s (1.5 s without).
+
 ### Added
 
 - Variable-width walls, experimental (gap plan task M5.7, partly done). With Advanced

@@ -341,6 +341,16 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     centre line that wide. The ridge is thinned (Zhang-Suen), joined into chains (3
     samples or more), widths smoothed over 5 samples, and split where the width moves
     by 0.15 line widths. Gap fill is off when this is on.
+    A wall point's depth is found by marching up the slope of the sampled distance
+    (half a sample a step); where the slope turns back by more than 120 degrees it has
+    crossed a thin part's ridge, whose peak is found exactly (distance to the nearest
+    edges, filed in squares) by narrowing in between the last two steps; where it only
+    bends (a corner's diagonal) the march carries on. When the next wall doesn't fit
+    and the space left, depth - (k + 1) line widths, is under a quarter line width
+    (plus 0.02 mm), the wall widens by it and moves half as far in. Each wall's runs
+    (half a line width long at least) have their widths smoothed over five points and
+    split where they move by 0.15 line widths. An open wall end within 1.5 line widths
+    of a centre line's end runs on to it.
 
 ## Print file and estimates (src/gcode.rs)
 
