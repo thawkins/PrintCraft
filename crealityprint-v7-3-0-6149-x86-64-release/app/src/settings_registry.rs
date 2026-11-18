@@ -172,6 +172,14 @@ impl Setting {
         }
     }
 
+    /// The choice named `text`, when this is a drop-down setting that has it.
+    pub fn choice(&self, text: &str) -> Option<Value> {
+        match &self.kind {
+            Kind::Choice { labels } => labels().into_iter().find(|l| *l == text).map(Value::Choice),
+            Kind::Number { .. } | Kind::Count { .. } | Kind::Flag | Kind::Auto { .. } => None,
+        }
+    }
+
     /// The value in `PrintSettings::default()`.
     pub fn default_value(&self) -> Value {
         (self.get)(&PrintSettings::default())
@@ -790,19 +798,10 @@ mod tests {
                 s.key
             );
         }
-        // Feature keys follow the features' own project names.
-        for f in SpeedFeature::ALL {
-            assert!(
-                find(&format!("feature_speeds.{}", f.key())).is_some(),
-                "{f:?}"
-            );
-        }
-        for f in AccelFeature::ALL {
-            assert!(
-                find(&format!("feature_accels.{}", f.key())).is_some(),
-                "{f:?}"
-            );
-        }
+        // One row per feature speed and per feature acceleration.
+        let count = |prefix: &str| all().iter().filter(|s| s.key.starts_with(prefix)).count();
+        assert_eq!(count("feature_speeds."), SpeedFeature::ALL.len());
+        assert_eq!(count("feature_accels."), AccelFeature::ALL.len());
     }
 
     #[test]

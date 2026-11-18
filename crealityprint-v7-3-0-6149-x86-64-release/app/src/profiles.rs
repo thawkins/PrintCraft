@@ -432,19 +432,6 @@ impl SpeedFeature {
     /// over air. Estimated from common slicer defaults.
     pub const BRIDGE_FACTOR: f32 = 0.5;
 
-    /// The name of this speed in a project file.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::OuterWall => "outer_wall",
-            Self::InnerWall => "inner_wall",
-            Self::SparseInfill => "sparse_infill",
-            Self::SolidInfill => "solid_infill",
-            Self::TopSurface => "top_surface",
-            Self::Support => "support",
-            Self::Bridge => "bridge",
-        }
-    }
-
     /// The name of this speed in the settings panel.
     pub fn label(self) -> &'static str {
         match self {
@@ -512,16 +499,6 @@ impl AccelFeature {
         Self::Travel,
         Self::FirstLayer,
     ];
-
-    /// The name of this acceleration in a project file.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::OuterWall => "outer_wall",
-            Self::Infill => "infill",
-            Self::Travel => "travel",
-            Self::FirstLayer => "first_layer",
-        }
-    }
 
     /// The name of this acceleration in the settings panel.
     pub fn label(self) -> &'static str {

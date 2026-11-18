@@ -13,10 +13,8 @@ use crate::codec::base64_decode;
 use crate::geometry::Vec3;
 use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::FoundPrinter;
-use crate::profiles::{
-    limits, AccelFeature, Adhesion, DualNozzle, FeatureAccels, FeatureSpeeds, Filament,
-    InfillPattern, PrintSettings, Printer, Quality, SeamPosition, SpeedFeature,
-};
+use crate::profiles::{limits, DualNozzle, Filament, PrintSettings, Printer, Quality};
+use crate::settings_registry::{self, Value as RegValue};
 use serde_json::{json, Value};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -62,7 +60,6 @@ fn quality_name(q: Quality) -> &'static str {
 }
 
 pub fn to_json(p: &Project) -> String {
-    let s = &p.settings;
     let objects: Vec<Value> = p
         .objects
         .iter()
@@ -114,45 +111,7 @@ pub fn to_json(p: &Project) -> String {
             "shield_distance": p.dual.shield_distance,
         },
         "quality": p.quality.map(quality_name),
-        "settings": {
-            "layer_height": s.layer_height,
-            "first_layer_height": s.first_layer_height,
-            "walls": s.walls,
-            "top_layers": s.top_layers,
-            "bottom_layers": s.bottom_layers,
-            "infill_percent": s.infill_percent,
-            "print_speed": s.print_speed,
-            "first_layer_speed": s.first_layer_speed,
-            "travel_speed": s.travel_speed,
-            "bridge_flow": s.bridge_flow,
-            "bridge_fan": s.bridge_fan,
-            "avoid_crossing_walls": s.avoid_crossing_walls,
-            "infill_overlap": s.infill_overlap,
-            "elephant_foot": s.elephant_foot,
-            "hole_compensation": s.hole_compensation,
-            "feature_accels": AccelFeature::ALL
-                .into_iter()
-                .map(|f| (f.key().to_string(), json!(s.accels.get(f))))
-                .collect::<serde_json::Map<String, Value>>(),
-            "feature_speeds": SpeedFeature::ALL
-                .into_iter()
-                .map(|f| (f.key().to_string(), json!(s.speeds.get(f))))
-                .collect::<serde_json::Map<String, Value>>(),
-            "supports": s.supports,
-            "support_angle": s.support_angle,
-            "supports_on_plate_only": s.supports_on_plate_only,
-            "support_raft": s.support_raft,
-            "adhesion": s.adhesion.label(),
-            "infill_pattern": s.infill_pattern.label(),
-            "seam": s.seam.label(),
-            "ironing": s.ironing,
-            "fuzzy_skin": s.fuzzy_skin,
-            "fuzzy_top": s.fuzzy_top,
-            "fuzzy_top_mm": s.fuzzy_top_mm,
-            "vase_mode": s.vase_mode,
-            "z_hop": s.z_hop,
-            "min_layer_time": s.min_layer_time,
-        },
+        "settings": settings_json(&p.settings),
         "objects": objects,
         "device": p.device.as_ref().map(FoundPrinter::to_json),
     });
@@ -294,99 +253,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
         ),
     };
 
-    let st = v.get("settings").unwrap_or(&empty);
-    let d = PrintSettings::default();
-    let pick = |k: &str| text_of(st, k).unwrap_or_default();
-    // Each feature speed: a number, or missing / null for "Auto".
-    // Each acceleration: a number, or missing / null for "Auto".
-    let mut feature_accels = FeatureAccels::default();
-    if let Some(fa) = st.get("feature_accels") {
-        for f in AccelFeature::ALL {
-            let r = limits::ACCELERATION;
-            let v = fa.get(f.key()).and_then(Value::as_f64);
-            feature_accels.set(f, v.map(|v| (v as f32).clamp(*r.start(), *r.end())));
-        }
-    }
-    let mut feature_speeds = FeatureSpeeds::default();
-    if let Some(fs) = st.get("feature_speeds") {
-        for f in SpeedFeature::ALL {
-            let r = limits::PRINT_SPEED;
-            let v = fs.get(f.key()).and_then(Value::as_f64);
-            feature_speeds.set(f, v.map(|v| (v as f32).clamp(*r.start(), *r.end())));
-        }
-    }
-    let settings = PrintSettings {
-        layer_height: num_in(st, "layer_height", d.layer_height, limits::LAYER_HEIGHT),
-        first_layer_height: num_in(
-            st,
-            "first_layer_height",
-            d.first_layer_height,
-            limits::FIRST_LAYER_HEIGHT,
-        ),
-        walls: int_in(st, "walls", d.walls, limits::WALLS),
-        top_layers: int_in(st, "top_layers", d.top_layers, limits::SOLID_LAYERS),
-        bottom_layers: int_in(st, "bottom_layers", d.bottom_layers, limits::SOLID_LAYERS),
-        infill_percent: num_in(
-            st,
-            "infill_percent",
-            d.infill_percent,
-            limits::INFILL_PERCENT,
-        ),
-        print_speed: num_in(st, "print_speed", d.print_speed, limits::PRINT_SPEED),
-        first_layer_speed: num_in(
-            st,
-            "first_layer_speed",
-            d.first_layer_speed,
-            limits::FIRST_LAYER_SPEED,
-        ),
-        travel_speed: num_in(st, "travel_speed", d.travel_speed, limits::TRAVEL_SPEED),
-        speeds: feature_speeds,
-        accels: feature_accels,
-        bridge_flow: num_in(st, "bridge_flow", d.bridge_flow, limits::BRIDGE_FLOW),
-        bridge_fan: int_in(st, "bridge_fan", d.bridge_fan, limits::FAN_PERCENT),
-        avoid_crossing_walls: flag(st, "avoid_crossing_walls", d.avoid_crossing_walls),
-        infill_overlap: num_in(
-            st,
-            "infill_overlap",
-            d.infill_overlap,
-            limits::INFILL_OVERLAP,
-        ),
-        elephant_foot: num_in(st, "elephant_foot", d.elephant_foot, limits::ELEPHANT_FOOT),
-        hole_compensation: num_in(
-            st,
-            "hole_compensation",
-            d.hole_compensation,
-            limits::HOLE_COMPENSATION,
-        ),
-        supports: flag(st, "supports", d.supports),
-        support_angle: num_in(st, "support_angle", d.support_angle, limits::SUPPORT_ANGLE),
-        supports_on_plate_only: flag(st, "supports_on_plate_only", d.supports_on_plate_only),
-        support_raft: flag(st, "support_raft", d.support_raft),
-        adhesion: Adhesion::ALL
-            .into_iter()
-            .find(|a| a.label() == pick("adhesion"))
-            .unwrap_or(d.adhesion),
-        infill_pattern: InfillPattern::ALL
-            .into_iter()
-            .find(|a| a.label() == pick("infill_pattern"))
-            .unwrap_or(d.infill_pattern),
-        seam: SeamPosition::ALL
-            .into_iter()
-            .find(|a| a.label() == pick("seam"))
-            .unwrap_or(d.seam),
-        ironing: flag(st, "ironing", d.ironing),
-        fuzzy_skin: flag(st, "fuzzy_skin", d.fuzzy_skin),
-        fuzzy_top: flag(st, "fuzzy_top", d.fuzzy_top),
-        fuzzy_top_mm: num_in(st, "fuzzy_top_mm", d.fuzzy_top_mm, limits::FUZZY_TOP_MM),
-        vase_mode: flag(st, "vase_mode", d.vase_mode),
-        z_hop: num_in(st, "z_hop", d.z_hop, limits::Z_HOP),
-        min_layer_time: num_in(
-            st,
-            "min_layer_time",
-            d.min_layer_time,
-            limits::MIN_LAYER_TIME,
-        ),
-    };
+    let settings = settings_from_json(v.get("settings").unwrap_or(&empty));
     let quality = v
         .get("quality")
         .and_then(|q| q.as_str())
@@ -442,6 +309,72 @@ fn project_from(v: &Value) -> Result<Project, String> {
         device,
         dual,
     })
+}
+
+/// The project file's settings block, written from the settings registry: each setting
+/// at its key (`a.b` inside object `a`); Auto values that are unset are `null`.
+fn settings_json(s: &PrintSettings) -> Value {
+    let mut out = serde_json::Map::new();
+    for setting in settings_registry::all() {
+        let value = match (setting.get)(s) {
+            RegValue::Num(x) => json!(x),
+            RegValue::Count(n) => json!(n),
+            RegValue::Flag(b) => json!(b),
+            RegValue::Choice(c) => json!(c),
+            RegValue::Auto(a) => json!(a),
+        };
+        let mut obj = &mut out;
+        let mut parts = setting.key.split('.').peekable();
+        while let Some(part) = parts.next() {
+            if parts.peek().is_none() {
+                obj.insert(part.to_string(), value);
+                break;
+            }
+            let child = obj
+                .entry(part.to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            match child {
+                Value::Object(map) => obj = map,
+                // A key can't be both a value and an object; the registry's keys are
+                // checked unique, so this is never reached.
+                Value::Null
+                | Value::Bool(_)
+                | Value::Number(_)
+                | Value::String(_)
+                | Value::Array(_) => break,
+            }
+        }
+    }
+    Value::Object(out)
+}
+
+/// Print settings read from a project file's settings block through the settings
+/// registry. A missing value, or one of the wrong JSON type, keeps its default; numbers
+/// are held to their ranges and unknown choices fall back to the default.
+fn settings_from_json(block: &Value) -> PrintSettings {
+    let mut s = PrintSettings::default();
+    for setting in settings_registry::all() {
+        let Some(raw) = setting
+            .key
+            .split('.')
+            .try_fold(block, |v, part| v.get(part))
+        else {
+            continue;
+        };
+        let value = match (setting.default_value(), raw) {
+            (RegValue::Num(_), v) => v.as_f64().map(|x| RegValue::Num(x as f32)),
+            (RegValue::Count(_), v) => v
+                .as_u64()
+                .map(|n| RegValue::Count(n.min(u32::MAX as u64) as u32)),
+            (RegValue::Flag(_), v) => v.as_bool().map(RegValue::Flag),
+            (RegValue::Choice(_), v) => v.as_str().and_then(|text| setting.choice(text)),
+            (RegValue::Auto(_), v) => Some(RegValue::Auto(v.as_f64().map(|x| x as f32))),
+        };
+        if let Some(value) = value {
+            (setting.set)(&mut s, setting.clamp(value));
+        }
+    }
+    s
 }
 
 fn filament_json(f: &Filament) -> Value {
@@ -526,6 +459,10 @@ mod tests {
     use super::*;
     use crate::model::SampleShape;
     use crate::printer::Api;
+    use crate::profiles::{
+        AccelFeature, Adhesion, FeatureAccels, FeatureSpeeds, InfillPattern, SeamPosition,
+        SpeedFeature,
+    };
 
     fn sample() -> Project {
         let mut cube = PlacedObject::new("cube", SampleShape::Cube.mesh());
@@ -822,6 +759,27 @@ mod tests {
         assert_eq!(odd.walls, 3);
         assert_eq!(odd.seam, PrintSettings::default().seam);
         assert_eq!(odd.speeds.get(SpeedFeature::OuterWall), None);
+    }
+
+    #[test]
+    fn test_project_settings_bad_values_load_safely() {
+        let s = from_json(
+            r#"{"format":"printcraft-project","version":1,"settings":{
+                "walls": -3, "layer_height": "thick", "supports": 1,
+                "feature_accels": {"travel": 99999}, "adhesion": 7}}"#,
+        )
+        .unwrap()
+        .settings;
+        let d = PrintSettings::default();
+        // A negative count isn't a whole number of walls: it is read as missing.
+        assert_eq!(s.walls, d.walls);
+        assert_eq!(s.layer_height, d.layer_height);
+        assert_eq!(s.supports, d.supports);
+        assert_eq!(
+            s.accels.get(AccelFeature::Travel),
+            Some(*limits::ACCELERATION.end())
+        );
+        assert_eq!(s.adhesion, d.adhesion);
     }
 
     #[test]
