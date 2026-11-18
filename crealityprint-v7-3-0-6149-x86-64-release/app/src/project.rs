@@ -312,7 +312,6 @@ fn project_from(v: &Value) -> Result<Project, String> {
 }
 
 /// The project file's settings block, written from the settings registry: each setting
-/// The project file's settings block, written from the settings registry: each setting
 /// at its key (`a.b` inside object `a`).
 fn settings_json(s: &PrintSettings) -> Value {
     let mut out = serde_json::Map::new();

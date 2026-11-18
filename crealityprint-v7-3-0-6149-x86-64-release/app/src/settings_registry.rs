@@ -8,7 +8,8 @@
 //! setting is described in one place.
 //!
 //! `PrintSettings` stays a plain struct: the slicer and G-code writer read its fields
-//! directly. Entries are listed in panel order. Depends on `profiles` only.
+//! directly. Entries are listed in panel order. Depends on `profiles`, and on
+//! `serde_json` for the values written in project files.
 
 use crate::profiles::{
     limits, AccelFeature, Adhesion, InfillPattern, PrintSettings, SeamPosition, SpeedFeature,
@@ -136,6 +137,7 @@ pub struct Setting {
     pub group: Group,
     /// Shown in the simple panel, or only with Advanced on.
     pub level: Level,
+    /// The widget it is edited with, and its allowed range.
     pub kind: Kind,
     /// The label's hover text, which may depend on other settings.
     pub hint: fn(&PrintSettings) -> Option<&'static str>,
@@ -145,7 +147,9 @@ pub struct Setting {
     pub enabled: fn(&PrintSettings) -> bool,
     /// Reads the value from the settings.
     pub get: fn(&PrintSettings) -> Value,
-    /// Writes a value of this setting's kind into the settings (other kinds are ignored).
+    /// Stores a value of this setting's kind as it is, without range checks (other kinds
+    /// are ignored). Change settings with `Setting::write`, which sanitizes first (and
+    /// so replaces a wrong-kind value with the default).
     pub set: fn(&mut PrintSettings, Value),
 }
 
@@ -208,8 +212,9 @@ impl Setting {
                 .map(|n| Value::Count(n.min(u32::MAX as u64) as u32)),
             Kind::Flag => raw.as_bool().map(Value::Flag),
             Kind::Choice { .. } => raw.as_str().and_then(|text| self.choice(text)),
-            // Anything but a number is "Auto".
-            Kind::Auto { .. } => Some(Value::Auto(raw.as_f64().map(|x| x as f32))),
+            // A number, or null for "Auto"; anything else isn't this kind.
+            Kind::Auto { .. } if raw.is_null() => Some(Value::Auto(None)),
+            Kind::Auto { .. } => raw.as_f64().map(|x| Value::Auto(Some(x as f32))),
         }?;
         Some(self.sanitize(value))
     }
@@ -930,12 +935,27 @@ mod tests {
             outer.to_json(&PrintSettings::default()),
             serde_json::Value::Null
         );
+        // Neither a number nor null: not this setting's kind, so the default is kept.
+        assert_eq!(outer.parse_json(&serde_json::json!("fast")), None);
         let seam = find("seam").unwrap();
         assert_eq!(seam.parse_json(&serde_json::json!("Nowhere")), None);
         assert_eq!(
             seam.parse_json(&serde_json::json!("Rear")),
             Some(Value::Choice("Rear"))
         );
+    }
+
+    #[test]
+    fn test_registry_choice_names_are_pinned() {
+        // These labels are the names written in project files: changing one changes the
+        // file format (old files would load the default).
+        let labels = |key: &str| match &find(key).unwrap().kind {
+            Kind::Choice { labels } => labels(),
+            other => panic!("{key} is {other:?}"),
+        };
+        assert_eq!(labels("seam"), ["Aligned", "Nearest", "Rear", "Random"]);
+        assert_eq!(labels("infill_pattern"), ["Lines", "Grid", "Triangles"]);
+        assert_eq!(labels("adhesion"), ["None", "Skirt", "Brim", "Raft"]);
     }
 
     #[test]
