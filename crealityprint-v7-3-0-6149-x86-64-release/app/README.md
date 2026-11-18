@@ -132,9 +132,9 @@ cargo clippy --all-targets
 GitHub Actions (`.github/workflows/ci.yml` at the repository root) runs the same checks
 on Linux, Windows and macOS for every push to `main` and every pull request: clippy with
 warnings as errors, the tests and a release build. The release build then slices the
-`XYZ.stl` cube from the command line and checks the G-code. It also opens the window
-and keeps a screenshot. GitHub's Windows machines have no OpenGL 2, so the window step
-is reported there but doesn't fail the run.
+`XYZ.stl` cube from the command line and checks the G-code, then opens the window and
+keeps a screenshot (on Windows through Mesa's software OpenGL, since GitHub's Windows
+machines have no OpenGL 2; on Linux on a virtual display).
 
 Further documentation:
 - [MECHANICS.md](MECHANICS.md): how slicing

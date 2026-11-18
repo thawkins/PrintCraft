@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Continuous integration on Linux, Windows and macOS (gap plan task M6.7): clippy,
   tests, a release build, and a check that the command line slices the XYZ cube on
   each. All three give the same G-code, byte for byte (1,512,732 bytes for the cube).
-  The window opens and draws on Linux and macOS; GitHub's Windows machines have no
-  OpenGL 2, so it can't be opened there. The pretend USB printer test doesn't run on
-  macOS, whose pseudo terminals refuse the serial speed call.
+  The window opens and draws on all three (on Windows through Mesa's software OpenGL,
+  as GitHub's Windows machines have no OpenGL 2). The pretend USB printer test doesn't
+  run on macOS, whose pseudo terminals refuse the serial speed call.
 
 - The project builds with the stable Rust toolchain (`rust-toolchain.toml`); seven
   remainder checks use `is_multiple_of`, as stable clippy asks. G-code is unchanged.
