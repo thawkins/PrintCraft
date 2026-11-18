@@ -713,6 +713,117 @@ mod tests {
         assert_eq!(old.settings.accels.get(AccelFeature::OuterWall), None);
     }
 
+    /// Every print setting away from its default (a struct literal with no `..`, so a new
+    /// field must be added here too).
+    fn every_setting_changed() -> PrintSettings {
+        let mut speeds = crate::profiles::FeatureSpeeds::default();
+        speeds.set(SpeedFeature::OuterWall, Some(33.0));
+        speeds.set(SpeedFeature::Bridge, Some(21.0));
+        let mut accels = FeatureAccels::default();
+        accels.set(AccelFeature::Travel, Some(2500.0));
+        PrintSettings {
+            layer_height: 0.12,
+            first_layer_height: 0.24,
+            walls: 3,
+            top_layers: 5,
+            bottom_layers: 4,
+            infill_percent: 40.0,
+            print_speed: 70.0,
+            first_layer_speed: 20.0,
+            travel_speed: 180.0,
+            speeds,
+            accels,
+            bridge_flow: 90.0,
+            bridge_fan: 80,
+            avoid_crossing_walls: true,
+            infill_overlap: 20.0,
+            elephant_foot: 0.15,
+            hole_compensation: 0.1,
+            supports: true,
+            support_angle: 55.0,
+            supports_on_plate_only: true,
+            support_raft: false,
+            adhesion: Adhesion::Raft,
+            infill_pattern: InfillPattern::Triangles,
+            seam: SeamPosition::Rear,
+            ironing: true,
+            fuzzy_skin: true,
+            fuzzy_top: true,
+            fuzzy_top_mm: 0.2,
+            vase_mode: true,
+            z_hop: 0.4,
+            min_layer_time: 10.0,
+        }
+    }
+
+    #[test]
+    fn test_project_settings_json_is_unchanged() {
+        let mut p = sample();
+        p.settings = every_setting_changed();
+        let text = to_json(&p);
+        let v: Value = serde_json::from_str(&text).unwrap();
+        let expected = json!({
+            "layer_height": 0.12f32,
+            "first_layer_height": 0.24f32,
+            "walls": 3,
+            "top_layers": 5,
+            "bottom_layers": 4,
+            "infill_percent": 40.0f32,
+            "print_speed": 70.0f32,
+            "first_layer_speed": 20.0f32,
+            "travel_speed": 180.0f32,
+            "feature_speeds": {
+                "outer_wall": 33.0f32,
+                "inner_wall": null,
+                "sparse_infill": null,
+                "solid_infill": null,
+                "top_surface": null,
+                "support": null,
+                "bridge": 21.0f32
+            },
+            "feature_accels": {
+                "outer_wall": null,
+                "infill": null,
+                "travel": 2500.0f32,
+                "first_layer": null
+            },
+            "bridge_flow": 90.0f32,
+            "bridge_fan": 80,
+            "avoid_crossing_walls": true,
+            "infill_overlap": 20.0f32,
+            "elephant_foot": 0.15f32,
+            "hole_compensation": 0.1f32,
+            "supports": true,
+            "support_angle": 55.0f32,
+            "supports_on_plate_only": true,
+            "support_raft": false,
+            "adhesion": "Raft",
+            "infill_pattern": "Triangles",
+            "seam": "Rear",
+            "ironing": true,
+            "fuzzy_skin": true,
+            "fuzzy_top": true,
+            "fuzzy_top_mm": 0.2f32,
+            "vase_mode": true,
+            "z_hop": 0.4f32,
+            "min_layer_time": 10.0f32
+        });
+        // Both sides go through text, as a saved file does (float parsing differs in the
+        // last digit otherwise).
+        let expected: Value = serde_json::from_str(&expected.to_string()).unwrap();
+        assert_eq!(v["settings"], expected);
+        assert_eq!(from_json(&text).unwrap().settings, p.settings);
+        // Unknown names and wrongly typed values fall back to the defaults.
+        let odd = from_json(
+            r#"{"format":"printcraft-project","version":1,"settings":{"walls":3,"seam":"Nowhere","feature_speeds":{"outer_wall":"fast"}}}"#,
+        )
+        .unwrap()
+        .settings;
+        assert_eq!(odd.walls, 3);
+        assert_eq!(odd.seam, PrintSettings::default().seam);
+        assert_eq!(odd.speeds.get(SpeedFeature::OuterWall), None);
+    }
+
     #[test]
     fn base64_round_trips() {
         for data in [
