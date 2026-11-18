@@ -388,7 +388,12 @@ fn finds_a_creality_printer_that_moved_to_a_new_address() {
 /// A pretend printer running Repetier-Firmware on a pseudo serial port (Linux/macOS):
 /// it names itself to M115, asks for one line again with `rs:2` and then only says
 /// `wait` (no "ok"), as the RepRap wiki describes, and answers "ok" to everything else.
-#[cfg(unix)]
+///
+/// Not on macOS: there the serial library sets the speed with the macOS-only
+/// `IOSSIOSPEED` call, which real USB serial ports accept but a pseudo terminal refuses
+/// ("could not open /dev/ttys000: Not a typewriter"), so the pretend printer can't be
+/// opened at all.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn prints_on_a_pretend_repetier_printer_over_usb() {
     use serialport::{SerialPort, TTYPort};
