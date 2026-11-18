@@ -16,6 +16,11 @@ md-5 = "0.10"
 serialport = { version = "4", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
+# macOS only: the event-loop setting that keeps a check picture from taking focus. The
+# same winit eframe already builds with (eframe doesn't re-export it).
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = { version = "0.30", default-features = false }
+
 [profile.dev]
 opt-level = 1
 

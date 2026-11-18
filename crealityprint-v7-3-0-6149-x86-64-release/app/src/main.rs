@@ -244,7 +244,7 @@ fn run_window(args: Args) -> ExitCode {
     #[cfg(target_os = "macos")]
     if capturing {
         options.event_loop_builder = Some(Box::new(|builder| {
-            use eframe::winit::platform::macos::EventLoopBuilderExtMacOS;
+            use winit::platform::macos::EventLoopBuilderExtMacOS;
             builder.with_activate_ignoring_other_apps(false);
         }));
     }
