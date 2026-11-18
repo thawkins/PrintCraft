@@ -234,6 +234,16 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   print at 25 mm/s. The person reported the old single 9 mm line didn't clear the nozzle;
   the new purge pushes about 3× as much.
 * **End.** Retract 2 mm, lift 10 mm, park at the back-left, heaters off, motors off.
+* **Colour change and pause at a layer** (`src/layer_events.rs`, gap plan M2.4). In the
+  preview, "+ Colour change here" / "+ Pause here" add one before the layer the slider
+  shows (not the first layer; not on MakerBot / Sailfish printers, which have neither
+  command). Each is stored by its height and saved in the project; it goes before the
+  first layer at or above that height, so it stays put if the layer height changes. The
+  command goes right after that layer's `;LAYER:` marker, before the move up: `M600`
+  for a colour change (Klipper set-ups need an `M600` macro), and `PAUSE` on Klipper or
+  `M601` elsewhere for a pause. They are added to the finished G-code text, so adding
+  or removing one needs no new slice. The preview marks them beside the layer slider
+  (orange: colour change, blue: pause) and lists them with a remove button.
 * **Custom G-code** (printer editor > Custom G-code, gap plan M2.2). Four blocks per
   printer, all empty by default, which leaves the output unchanged.
   * **Placeholders** (`src/gcode_template.rs`, gap plan M2.3): `{name}` is replaced by

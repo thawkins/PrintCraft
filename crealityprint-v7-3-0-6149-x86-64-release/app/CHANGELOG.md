@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Colour change and pause at a layer (gap plan task M2.4). In the preview, "+ Colour
+  change here" and "+ Pause here" add an `M600`, or a pause (`PAUSE` on Klipper,
+  `M601` otherwise), before the layer the slider shows. They are marked on the slider,
+  listed with remove buttons, saved in the project by height, and need no new slice.
+  Not offered on MakerBot / Sailfish printers.
 - Placeholders in custom G-code (gap plan task M2.3): `{bed_temp}`, `{nozzle_temp}`,
   `{layer_num}`, `{layer_z}`, the print's bounds, `{tool}`/`{next_tool}` and more (26 in
   all; hover the note in the editor for the list), `{name-1}`-style offsets, and

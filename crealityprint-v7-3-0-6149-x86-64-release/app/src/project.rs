@@ -11,6 +11,7 @@
 
 use crate::codec::base64_decode;
 use crate::geometry::Vec3;
+use crate::layer_events::{LayerEvent, LayerEventKind};
 use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::FoundPrinter;
 use crate::profiles::{limits, DualNozzle, Filament, PrintSettings, Printer, Quality};
@@ -34,6 +35,8 @@ pub struct Project {
     pub device: Option<FoundPrinter>,
     /// Two-nozzle choices (second filament, support nozzle, Ditto).
     pub dual: DualNozzle,
+    /// Colour changes and pauses, by height, set in the preview.
+    pub layer_events: Vec<LayerEvent>,
 }
 
 /// A project read from a file, with the format version it was written in.
@@ -117,6 +120,11 @@ pub fn to_json(p: &Project) -> String {
         "quality": p.quality.map(quality_name),
         "settings": settings_json(&p.settings),
         "objects": objects,
+        "layer_events": p
+            .layer_events
+            .iter()
+            .map(|e| json!({"z": e.z, "kind": e.kind.key()}))
+            .collect::<Vec<Value>>(),
         "device": p.device.as_ref().map(FoundPrinter::to_json),
     });
     serde_json::to_string_pretty(&v).unwrap_or_default()
@@ -309,6 +317,18 @@ fn project_from(v: &Value) -> Result<Project, String> {
         Some(p)
     });
 
+    // Colour changes and pauses; anything unreadable is left out.
+    let layer_events = v
+        .get("layer_events")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let z = e.get("z")?.as_f64()? as f32;
+            let kind = LayerEventKind::from_key(e.get("kind")?.as_str()?)?;
+            (z.is_finite() && z >= 0.0).then_some(LayerEvent { z, kind })
+        })
+        .collect();
     Ok(Project {
         printer,
         filament,
@@ -317,6 +337,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
         objects,
         device,
         dual,
+        layer_events,
     })
 }
 
@@ -507,6 +528,16 @@ mod tests {
                 ooze_shield: true,
                 shield_distance: 4.5,
             },
+            layer_events: vec![
+                LayerEvent {
+                    z: 2.4,
+                    kind: LayerEventKind::ColourChange,
+                },
+                LayerEvent {
+                    z: 5.0,
+                    kind: LayerEventKind::Pause,
+                },
+            ],
         }
     }
 
@@ -520,6 +551,10 @@ mod tests {
         assert_eq!(back.filament, p.filament);
         assert_eq!(back.settings, p.settings);
         assert_eq!(back.dual, p.dual, "two-nozzle choices");
+        assert_eq!(
+            back.layer_events, p.layer_events,
+            "colour changes and pauses"
+        );
         assert_eq!(back.printer.nozzle_spacing, 34.5, "the nozzle spacing");
         assert_eq!(back.objects[0].extruder, 1, "each part's nozzle");
         assert_eq!(

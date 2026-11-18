@@ -108,7 +108,7 @@ impl PrintCraftApp {
 
     /// True when the plate or settings changed since the project was last saved or opened.
     pub(super) fn has_unsaved_changes(&self) -> bool {
-        self.fingerprint() != self.saved_fingerprint
+        self.project_fingerprint() != self.saved_fingerprint
     }
 
     /// Runs `action`, first asking about unsaved changes if there are any.
@@ -140,10 +140,11 @@ impl PrintCraftApp {
 
     fn new_project(&mut self) {
         self.clear_plate();
+        self.layer_events.clear();
         self.sliced = None;
         self.project_path = None;
         self.mode = Mode::Prepare;
-        self.saved_fingerprint = self.fingerprint();
+        self.saved_fingerprint = self.project_fingerprint();
         self.status = "New project.".into();
         self.update_title();
     }
@@ -158,6 +159,7 @@ impl PrintCraftApp {
             objects: self.objects.clone(),
             device: self.device.current_device(),
             dual: self.dual.clone(),
+            layer_events: self.layer_events.clone(),
         }
     }
 
@@ -182,7 +184,7 @@ impl PrintCraftApp {
             .then_some(opened.file_version);
         self.apply_project(opened.project);
         self.project_path = Some(path.to_path_buf());
-        self.saved_fingerprint = self.fingerprint();
+        self.saved_fingerprint = self.project_fingerprint();
         self.status = format!("Opened {}.", display_name(path));
         if let Some(version) = newer {
             self.status = format!(
@@ -211,6 +213,7 @@ impl PrintCraftApp {
         self.printer = p.printer;
         self.filament = p.filament;
         self.dual = p.dual;
+        self.layer_events = p.layer_events;
         self.settings = p.settings;
         self.quality = p
             .quality
@@ -261,7 +264,7 @@ impl PrintCraftApp {
             Ok(()) => {
                 self.recent.add(path);
                 self.project_path = Some(path.to_path_buf());
-                self.saved_fingerprint = self.fingerprint();
+                self.saved_fingerprint = self.project_fingerprint();
                 self.status = format!("Saved {}.", display_name(path));
                 self.update_title();
             }

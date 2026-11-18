@@ -159,6 +159,8 @@ pub struct PrintCraftApp {
     project_path: Option<PathBuf>,
     /// The plate and settings as last saved or opened (to notice unsaved changes).
     saved_fingerprint: String,
+    /// Colour changes and pauses, by height, added to the print file (set in the preview).
+    layer_events: Vec<crate::layer_events::LayerEvent>,
     /// New / Open waiting for an answer about unsaved changes.
     pending_project: Option<project_ui::ProjectAction>,
     egui_ctx: egui::Context,
@@ -215,6 +217,7 @@ impl PrintCraftApp {
             send_after_slice: false,
             project_path: None,
             saved_fingerprint: String::new(),
+            layer_events: Vec::new(),
             pending_project: None,
             egui_ctx: cc.egui_ctx.clone(),
             tool: gizmo::Tool::Move,
@@ -230,7 +233,7 @@ impl PrintCraftApp {
             },
             open_file_menu: start.file_menu,
         };
-        app.saved_fingerprint = app.fingerprint();
+        app.saved_fingerprint = app.project_fingerprint();
         app.load_paths(&start.models);
         if start.slice_on_start && !app.objects.is_empty() {
             app.start_slice();
@@ -484,6 +487,27 @@ impl PrintCraftApp {
         })
     }
 
+    /// What a saved project holds: the plate and settings (`fingerprint`) plus the
+    /// colour changes and pauses, which change the print file but need no new slice.
+    pub(super) fn project_fingerprint(&self) -> String {
+        format!("{}|{:?}", self.fingerprint(), self.layer_events)
+    }
+
+    /// Rebuilds the print file that is sent or exported: the sliced G-code with the
+    /// colour changes and pauses added after their layers' markers.
+    fn refresh_print_file(&mut self) {
+        let Some(sliced) = &mut self.sliced else {
+            return;
+        };
+        let zs: Vec<f32> = sliced.result.layers.iter().map(|l| l.z).collect();
+        sliced.shared_text = Arc::new(crate::layer_events::add_layer_events(
+            &sliced.gcode.text,
+            &zs,
+            &self.layer_events,
+            &self.printer,
+        ));
+    }
+
     fn slice_is_current(&self) -> bool {
         self.sliced
             .as_ref()
@@ -599,6 +623,7 @@ impl PrintCraftApp {
                 self.layer = done.result.layers.len().saturating_sub(1);
                 let problem = done.problem.clone();
                 self.sliced = Some(done);
+                self.refresh_print_file();
                 self.mode = Mode::Preview;
                 self.job = None;
                 if let Some(why) = problem {
@@ -655,7 +680,7 @@ impl PrintCraftApp {
         // before the file dialog does.
         let (bytes, kind, ext, notes) = if self.printer.x3g {
             match crate::x3g::export(
-                &sliced.gcode.text,
+                &sliced.shared_text,
                 &self.printer,
                 &name,
                 sliced.result.layers.len(),
@@ -668,7 +693,7 @@ impl PrintCraftApp {
             }
         } else {
             (
-                sliced.gcode.text.clone().into_bytes(),
+                sliced.shared_text.as_bytes().to_vec(),
                 "G-code",
                 "gcode",
                 Vec::new(),
@@ -1348,6 +1373,7 @@ impl PrintCraftApp {
             );
         });
         let layer = &sliced.result.layers[self.layer.min(n - 1)];
+        let z_here = layer.z;
         let label = format!("Layer {} of {}  ·  {:.2} mm", self.layer + 1, n, layer.z);
         ui.painter().text(
             egui::pos2(rect.center().x, rect.top() + 24.0),
@@ -1356,6 +1382,24 @@ impl PrintCraftApp {
             egui::FontId::proportional(14.0),
             theme::TEXT,
         );
+        // Colour changes and pauses: ticks beside the slider at their layers.
+        let zs: Vec<f32> = sliced.result.layers.iter().map(|l| l.z).collect();
+        let (track_top, track_bottom) = (slider_rect.top() + 10.0, slider_rect.bottom() - 10.0);
+        for e in &self.layer_events {
+            let Some(li) = crate::layer_events::layer_for(e.z, &zs) else {
+                continue;
+            };
+            let f = li as f32 / (n - 1).max(1) as f32;
+            let y = track_bottom - f * (track_bottom - track_top);
+            ui.painter().line_segment(
+                [
+                    egui::pos2(slider_rect.left() - 10.0, y),
+                    egui::pos2(slider_rect.left() + 6.0, y),
+                ],
+                egui::Stroke::new(3.0, event_color(e.kind)),
+            );
+        }
+        self.layer_event_controls(ui, rect, z_here, &zs);
         ui.painter().text(
             rect.left_bottom() + egui::vec2(12.0, -12.0),
             egui::Align2::LEFT_BOTTOM,
@@ -1363,6 +1407,82 @@ impl PrintCraftApp {
             egui::FontId::proportional(12.0),
             theme::TEXT_DIM,
         );
+    }
+
+    /// Under the layer label: buttons adding a colour change or a pause before the layer
+    /// shown, and the list of those already added, each with a button removing it.
+    fn layer_event_controls(&mut self, ui: &mut Ui, rect: egui::Rect, z_here: f32, zs: &[f32]) {
+        use crate::layer_events::{layer_for, LayerEvent, LayerEventKind};
+        let area = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, rect.top() + 48.0),
+            egui::vec2(520.0, 26.0),
+        );
+        let first_layer = self.layer == 0;
+        let why_not = if self.printer.x3g {
+            Some("MakerBot / Sailfish printers have no pause or colour-change command")
+        } else if first_layer {
+            Some("Pick a layer above the first with the slider")
+        } else {
+            None
+        };
+        let mut changed = false;
+        ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space((area.width() - 330.0).max(0.0) / 2.0);
+                for kind in [LayerEventKind::ColourChange, LayerEventKind::Pause] {
+                    let button = egui::Button::new(
+                        RichText::new(format!("+ {} here", kind.label())).color(event_color(kind)),
+                    );
+                    let hint = match kind {
+                        LayerEventKind::ColourChange => {
+                            "Stop before this layer for a filament swap (M600), then carry on"
+                        }
+                        LayerEventKind::Pause => {
+                            "Stop before this layer until you resume (PAUSE on Klipper, M601 otherwise)"
+                        }
+                    };
+                    let response = ui
+                        .add_enabled(why_not.is_none(), button)
+                        .on_hover_text(hint)
+                        .on_disabled_hover_text(why_not.unwrap_or(hint));
+                    let event = LayerEvent { z: z_here, kind };
+                    if response.clicked() && !self.layer_events.contains(&event) {
+                        self.layer_events.push(event);
+                        self.layer_events.sort_by(|a, b| a.z.total_cmp(&b.z));
+                        changed = true;
+                    }
+                }
+            });
+        });
+        let mut remove = None;
+        for (i, e) in self.layer_events.iter().enumerate() {
+            let row = egui::Rect::from_center_size(
+                egui::pos2(rect.center().x, area.bottom() + 14.0 + 24.0 * i as f32),
+                egui::vec2(320.0, 22.0),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+                ui.horizontal(|ui| {
+                    let at = match layer_for(e.z, zs) {
+                        Some(li) => format!("layer {}", li + 1),
+                        None => "above the print".to_string(),
+                    };
+                    ui.label(
+                        RichText::new(format!("{} before {at}  ({:.2} mm)", e.kind.label(), e.z))
+                            .color(event_color(e.kind)),
+                    );
+                    if ui.small_button("x").on_hover_text("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            });
+        }
+        if let Some(i) = remove {
+            self.layer_events.remove(i);
+            changed = true;
+        }
+        if changed {
+            self.refresh_print_file();
+        }
     }
 
     // ----- input and the screenshot option ---------------------------------------------------
@@ -1809,6 +1929,14 @@ fn job_extent(result: &SliceResult) -> Option<[f32; 4]> {
         *e = [e[0].min(p.x), e[1].min(p.y), e[2].max(p.x), e[3].max(p.y)];
     }
     b
+}
+
+/// The colour that marks a colour change or a pause in the preview.
+fn event_color(kind: crate::layer_events::LayerEventKind) -> Color32 {
+    match kind {
+        crate::layer_events::LayerEventKind::ColourChange => Color32::from_rgb(255, 160, 60),
+        crate::layer_events::LayerEventKind::Pause => Color32::from_rgb(90, 180, 255),
+    }
 }
 
 #[cfg(test)]
