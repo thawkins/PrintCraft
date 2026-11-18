@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Preview colouring and times (gap plan task M2.5). "Colour by" in the preview's Show
+  box replaces "Colour by nozzle": line type, nozzle, speed, line width, layer height,
+  fan or temperature, the value modes on a blue-to-red scale with a scale bar. Each line
+  type shows its print time, with Travel and "Heating, purge, changes" rows; together
+  they add up to the print time. The values are the ones the G-code is written with.
 - Colour change and pause at a layer (gap plan task M2.4). In the preview, "+ Colour
   change here" and "+ Pause here" add an `M600`, or a pause (`PAUSE` on Klipper,
   `M601` otherwise), before the layer the slider shows. They are marked on the slider,

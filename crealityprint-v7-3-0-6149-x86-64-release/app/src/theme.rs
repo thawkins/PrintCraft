@@ -40,6 +40,29 @@ pub fn path_color(kind: PathKind) -> Color32 {
     }
 }
 
+/// A colour from the preview's scale for `t` between 0 (lowest: blue) and 1 (highest:
+/// red), through cyan, green and yellow; outside 0-1 it is held to the ends.
+pub fn gradient(t: f32) -> Color32 {
+    const STOPS: [(u8, u8, u8); 5] = [
+        (40, 90, 220),
+        (40, 190, 220),
+        (80, 200, 90),
+        (240, 210, 60),
+        (230, 70, 60),
+    ];
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let pos = t * (STOPS.len() - 1) as f32;
+    let i = (pos.floor() as usize).min(STOPS.len() - 2);
+    let f = pos - i as f32;
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * f).round() as u8;
+    let (a, b) = (STOPS[i], STOPS[i + 1]);
+    Color32::from_rgb(mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
+}
+
 /// The preview colour of a nozzle when colouring by nozzle: T0 blue, T1 orange.
 pub fn nozzle_color(tool: u8) -> Color32 {
     if tool == 0 {

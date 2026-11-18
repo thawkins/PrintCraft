@@ -146,7 +146,8 @@ pub struct PrintCraftApp {
     layer: usize,
     hidden_kinds: Vec<PathKind>,
     /// Two-nozzle printers: colour the preview by nozzle instead of by path type.
-    colour_by_nozzle: bool,
+    /// What the preview colours paths by.
+    preview_colour: PreviewColour,
     status: String,
     screenshot: Option<ScreenshotTask>,
     device: DevicePage,
@@ -203,7 +204,7 @@ impl PrintCraftApp {
             sliced: None,
             layer: 0,
             hidden_kinds: Vec::new(),
-            colour_by_nozzle: false,
+            preview_colour: PreviewColour::Type,
             status: "Open a model (STL, OBJ or 3MF) or add a shape to start.".into(),
             screenshot: start.screenshot.map(|path| ScreenshotTask {
                 path,
@@ -506,6 +507,16 @@ impl PrintCraftApp {
             &self.layer_events,
             &self.printer,
         ));
+    }
+
+    /// The colour mode in use: nozzle colouring only on a two-nozzle printer, not in
+    /// Ditto (falls back to line type).
+    fn effective_colour(&self) -> PreviewColour {
+        let nozzle_ok = self.printer.extruders >= 2 && !self.dual.ditto;
+        match self.preview_colour {
+            PreviewColour::Nozzle if !nozzle_ok => PreviewColour::Type,
+            other => other,
+        }
     }
 
     fn slice_is_current(&self) -> bool {
@@ -843,16 +854,52 @@ impl PrintCraftApp {
                 }
             });
         });
+        let mode = self.effective_colour();
+        let range = colour_range(mode, sliced);
+        let times = sliced.gcode.times.clone();
         card(ui, "Show", |ui| {
-            if self.printer.extruders >= 2 && !self.dual.ditto {
-                ui.checkbox(&mut self.colour_by_nozzle, "Colour by nozzle")
-                    .on_hover_text("Right nozzle (T0) blue, left nozzle (T1) orange");
+            let nozzle_mode = self.printer.extruders >= 2 && !self.dual.ditto;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Colour by").color(theme::TEXT_DIM));
+                egui::ComboBox::from_id_salt("preview_colour")
+                    .selected_text(mode.label())
+                    .show_ui(ui, |ui| {
+                        for c in PreviewColour::ALL {
+                            if c == PreviewColour::Nozzle && !nozzle_mode {
+                                continue;
+                            }
+                            ui.selectable_value(&mut self.preview_colour, c, c.label());
+                        }
+                    });
+            });
+            match (mode, range) {
+                (PreviewColour::Nozzle, _) => {
+                    ui.label(
+                        RichText::new("Right nozzle (T0) blue, left nozzle (T1) orange")
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    );
+                }
+                (PreviewColour::Type, _) => {}
+                (_, Some((lo, hi))) => gradient_legend(ui, mode, lo, hi),
+                (_, None) => {}
             }
+            ui.add_space(4.0);
             for kind in PathKind::ALL {
                 let mut on = !self.hidden_kinds.contains(&kind);
+                let time = times
+                    .by_kind
+                    .iter()
+                    .find(|(k, _)| *k == kind)
+                    .map(|(_, s)| *s);
                 ui.horizontal(|ui| {
+                    let swatch = if mode == PreviewColour::Type {
+                        theme::path_color(kind)
+                    } else {
+                        theme::TEXT_DIM.gamma_multiply(0.4)
+                    };
                     let (r, painter) = ui.allocate_painter(egui::vec2(14.0, 14.0), Sense::hover());
-                    painter.rect_filled(r.rect.shrink(1.0), 3.0, theme::path_color(kind));
+                    painter.rect_filled(r.rect.shrink(1.0), 3.0, swatch);
                     if ui.checkbox(&mut on, kind.label()).changed() {
                         if on {
                             self.hidden_kinds.retain(|k| *k != kind);
@@ -860,6 +907,23 @@ impl PrintCraftApp {
                             self.hidden_kinds.push(kind);
                         }
                     }
+                    if let Some(s) = time {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(RichText::new(duration_text(s)).color(theme::TEXT_DIM));
+                        });
+                    }
+                });
+            }
+            for (name, s) in [
+                ("Travel", times.travel),
+                ("Heating, purge, changes", times.other),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(RichText::new(name).color(theme::TEXT_DIM));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(duration_text(s)).color(theme::TEXT_DIM));
+                    });
                 });
             }
         });
@@ -915,12 +979,34 @@ impl PrintCraftApp {
             let hidden = &self.hidden_kinds;
             let tools = self.tools().unwrap_or_default();
             let dual = self.printer.extruders >= 2;
-            let by_nozzle = dual && self.colour_by_nozzle && !self.dual.ditto;
-            let color = |p: &crate::slicer::ToolPath| {
-                if by_nozzle {
-                    theme::nozzle_color(tools.tool_for(p))
-                } else {
-                    theme::path_color(p.kind)
+            let mode = self.effective_colour();
+            let stats = &sliced.gcode.path_stats;
+            let range = colour_range(mode, sliced);
+            let color = |li: usize, pi: usize, p: &crate::slicer::ToolPath| match mode {
+                PreviewColour::Type => theme::path_color(p.kind),
+                PreviewColour::Nozzle => theme::nozzle_color(tools.tool_for(p)),
+                PreviewColour::Speed
+                | PreviewColour::Width
+                | PreviewColour::LayerHeight
+                | PreviewColour::Fan
+                | PreviewColour::Temperature => {
+                    let height = sliced
+                        .result
+                        .layers
+                        .get(li)
+                        .map(|l| l.height)
+                        .unwrap_or(0.0);
+                    let value = stats
+                        .get(li)
+                        .and_then(|l| l.get(pi))
+                        .and_then(|st| mode.value(st, height));
+                    match (value, range) {
+                        (Some(v), Some((lo, hi))) if hi > lo => {
+                            theme::gradient((v - lo) / (hi - lo))
+                        }
+                        (Some(_), Some(_)) => theme::gradient(0.5),
+                        (Some(_), None) | (None, Some(_)) | (None, None) => theme::TEXT_DIM,
+                    }
                 }
             };
             let look = view3d::PathLook {
@@ -1931,6 +2017,144 @@ fn job_extent(result: &SliceResult) -> Option<[f32; 4]> {
     b
 }
 
+/// What the preview colours paths by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewColour {
+    /// The kind of line (outer wall, infill, ...).
+    Type,
+    /// The nozzle that prints it (two-nozzle printers).
+    Nozzle,
+    Speed,
+    Width,
+    LayerHeight,
+    Fan,
+    Temperature,
+}
+
+impl PreviewColour {
+    const ALL: [Self; 7] = [
+        Self::Type,
+        Self::Nozzle,
+        Self::Speed,
+        Self::Width,
+        Self::LayerHeight,
+        Self::Fan,
+        Self::Temperature,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Type => "Line type",
+            Self::Nozzle => "Nozzle",
+            Self::Speed => "Speed",
+            Self::Width => "Line width",
+            Self::LayerHeight => "Layer height",
+            Self::Fan => "Fan",
+            Self::Temperature => "Temperature",
+        }
+    }
+
+    /// How the scale's values are written.
+    fn format(self, v: f32) -> String {
+        match self {
+            Self::Speed => format!("{v:.0} mm/s"),
+            Self::Width | Self::LayerHeight => format!("{v:.2} mm"),
+            Self::Fan => format!("{v:.0} %"),
+            Self::Temperature => format!("{v:.0} °C"),
+            Self::Type | Self::Nozzle => String::new(),
+        }
+    }
+
+    /// A printed path's value on this scale (`layer_height` is its layer's); `None` for
+    /// the type and nozzle modes, and for a path that wasn't printed.
+    fn value(self, st: &crate::gcode::PathStats, layer_height: f32) -> Option<f32> {
+        if st.seconds <= 0.0 {
+            return None;
+        }
+        match self {
+            Self::Speed => Some(st.speed),
+            Self::Width => Some(st.width),
+            Self::LayerHeight => Some(layer_height),
+            Self::Fan => Some(st.fan as f32),
+            Self::Temperature => Some(st.temp as f32),
+            Self::Type | Self::Nozzle => None,
+        }
+    }
+}
+
+/// The lowest and highest value of `mode` over every printed path of the slice, for
+/// the colour scale; `None` for the type and nozzle modes or an empty slice.
+fn colour_range(mode: PreviewColour, sliced: &Sliced) -> Option<(f32, f32)> {
+    let mut range: Option<(f32, f32)> = None;
+    for (li, layer) in sliced.gcode.path_stats.iter().enumerate() {
+        let height = sliced
+            .result
+            .layers
+            .get(li)
+            .map(|l| l.height)
+            .unwrap_or(0.0);
+        for st in layer {
+            if let Some(v) = mode.value(st, height) {
+                range = Some(match range {
+                    Some((lo, hi)) => (lo.min(v), hi.max(v)),
+                    None => (v, v),
+                });
+            }
+        }
+    }
+    range
+}
+
+/// The colour scale for a value mode: a bar from blue to red with its lowest, middle
+/// and highest values.
+fn gradient_legend(ui: &mut Ui, mode: PreviewColour, lo: f32, hi: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), Sense::hover());
+    let steps = 24;
+    for i in 0..steps {
+        let t0 = i as f32 / steps as f32;
+        let x0 = rect.left() + rect.width() * t0;
+        let x1 = rect.left() + rect.width() * (i + 1) as f32 / steps as f32;
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom())),
+            0.0,
+            theme::gradient((t0 + 0.5 / steps as f32).min(1.0)),
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(mode.format(lo))
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        if hi > lo {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(mode.format(hi))
+                        .small()
+                        .color(theme::TEXT_DIM),
+                );
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(mode.format((lo + hi) / 2.0))
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    );
+                });
+            });
+        }
+    });
+}
+
+/// A short duration: `12 s`, `2 min`, `1 h 2 min`.
+fn duration_text(seconds: f32) -> String {
+    let s = seconds.max(0.0).round() as u64;
+    match s {
+        0..=59 => format!("{s} s"),
+        60..=3599 => format!("{} min", s / 60),
+        _ => format!("{} h {} min", s / 3600, (s % 3600) / 60),
+    }
+}
+
 /// The colour that marks a colour change or a pause in the preview.
 fn event_color(kind: crate::layer_events::LayerEventKind) -> Color32 {
     match kind {
@@ -1942,6 +2166,43 @@ fn event_color(kind: crate::layer_events::LayerEventKind) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_preview_gradient_runs_blue_to_red() {
+        let (lo, hi) = (theme::gradient(0.0), theme::gradient(1.0));
+        assert!(lo.b() > lo.r(), "cool end is blue: {lo:?}");
+        assert!(hi.r() > hi.b(), "hot end is red: {hi:?}");
+        assert_eq!(theme::gradient(-1.0), lo);
+        assert_eq!(theme::gradient(2.0), hi);
+        assert_ne!(theme::gradient(0.5), lo);
+    }
+
+    #[test]
+    fn test_preview_colour_values() {
+        let st = crate::gcode::PathStats {
+            speed: 42.0,
+            width: 0.42,
+            fan: 80,
+            temp: 210,
+            seconds: 1.0,
+        };
+        assert_eq!(PreviewColour::Speed.value(&st, 0.2), Some(42.0));
+        assert_eq!(PreviewColour::Width.value(&st, 0.2), Some(0.42));
+        assert_eq!(PreviewColour::LayerHeight.value(&st, 0.2), Some(0.2));
+        assert_eq!(PreviewColour::Fan.value(&st, 0.2), Some(80.0));
+        assert_eq!(PreviewColour::Temperature.value(&st, 0.2), Some(210.0));
+        assert_eq!(PreviewColour::Type.value(&st, 0.2), None);
+        // A path that wasn't printed has no value.
+        let unprinted = crate::gcode::PathStats::default();
+        assert_eq!(PreviewColour::Speed.value(&unprinted, 0.2), None);
+    }
+
+    #[test]
+    fn test_duration_text() {
+        assert_eq!(duration_text(12.4), "12 s");
+        assert_eq!(duration_text(125.0), "2 min");
+        assert_eq!(duration_text(3725.0), "1 h 2 min");
+    }
 
     #[test]
     fn ditto_needs_a_narrow_plate_whose_copy_lands_on_the_plate() {

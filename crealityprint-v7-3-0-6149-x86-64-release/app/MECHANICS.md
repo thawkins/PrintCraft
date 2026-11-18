@@ -234,6 +234,17 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   print at 25 mm/s. The person reported the old single 9 mm line didn't clear the nozzle;
   the new purge pushes about 3× as much.
 * **End.** Retract 2 mm, lift 10 mm, park at the back-left, heaters off, motors off.
+* **Preview colours and times** (gap plan M2.5). The G-code writer records, for every
+  path, what it is printed at: speed after cooling slow-down, line width, part fan,
+  nozzle temperature and the seconds it takes (`GcodeOutput::path_stats`), and splits
+  the print time into each kind of line, travel, and everything else (heating, purge,
+  retractions, layer and tool changes), which add up exactly to the estimate
+  (`GcodeOutput::times`). The Show box's "Colour by" picks line type, nozzle (two-nozzle
+  printers, not Ditto), speed, line width, layer height, fan or temperature. The value
+  modes colour each path from blue (lowest) through cyan, green and yellow to red
+  (highest), scaled to the lowest and highest value in the whole print, with a scale
+  bar showing the lowest, middle and highest value. The time beside each line type,
+  and the Travel and "Heating, purge, changes" rows, are those times.
 * **Colour change and pause at a layer** (`src/layer_events.rs`, gap plan M2.4). In the
   preview, "+ Colour change here" / "+ Pause here" add one before the layer the slider
   shows (not the first layer; not on MakerBot / Sailfish printers, which have neither

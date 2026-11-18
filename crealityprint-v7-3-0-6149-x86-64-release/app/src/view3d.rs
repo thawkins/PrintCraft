@@ -292,8 +292,8 @@ fn inside_triangle(p: Pos2, a: Pos2, b: Pos2, c: Pos2) -> bool {
 pub struct PathLook<'a> {
     /// Whether a kind of path is shown.
     pub visible: &'a dyn Fn(PathKind) -> bool,
-    /// A path's colour (by type, or by nozzle).
-    pub color: &'a dyn Fn(&crate::slicer::ToolPath) -> egui::Color32,
+    /// A path's colour, given its layer index, its index in the layer and the path.
+    pub color: &'a dyn Fn(usize, usize, &crate::slicer::ToolPath) -> egui::Color32,
     /// Ditto printing: the second nozzle's copy, this far along X (mm), drawn dimmed.
     pub copy_dx: Option<f32>,
 }
@@ -321,11 +321,11 @@ pub fn draw_toolpaths(
         if !current && li % stride != 0 {
             continue;
         }
-        for path in &layer.paths {
+        for (pi, path) in layer.paths.iter().enumerate() {
             if !(look.visible)(path.kind) {
                 continue;
             }
-            let base = (look.color)(path);
+            let base = (look.color)(li, pi, path);
             let (width, color) = if current {
                 (2.0, base)
             } else {

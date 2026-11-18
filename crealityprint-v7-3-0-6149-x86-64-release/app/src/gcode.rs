@@ -425,6 +425,37 @@ pub fn config_block(f: &Filament, s: &PrintSettings, p: &Printer) -> String {
 pub struct GcodeOutput {
     pub text: String,
     pub estimate: Estimate,
+    /// What each path prints at, by layer then path (as in the slice result), for the
+    /// preview's colour modes.
+    pub path_stats: Vec<Vec<PathStats>>,
+    /// The print time split by what it is spent on.
+    pub times: FeatureTimes,
+}
+
+/// What one path is printed at.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PathStats {
+    /// Speed after cooling slow-down (mm/s).
+    pub speed: f32,
+    /// Line width (mm).
+    pub width: f32,
+    /// Part fan (%).
+    pub fan: u32,
+    /// Nozzle temperature (°C).
+    pub temp: u32,
+    /// Time to print it, speeding up and slowing down (s).
+    pub seconds: f32,
+}
+
+/// The print time split by what it is spent on. The parts add up to the estimate.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FeatureTimes {
+    /// Printing each kind of line (s), for the kinds that are printed.
+    pub by_kind: Vec<(PathKind, f32)>,
+    /// Travel moves (s).
+    pub travel: f32,
+    /// Everything else (s): heating, purging, retractions, layer and tool changes.
+    pub other: f32,
 }
 
 /// Which nozzle prints what, on a printer with two (`Printer::extruders`). With the
@@ -679,6 +710,12 @@ struct Writer<'a> {
     walls: Vec<Vec<Point2>>,
     /// Values for the placeholders in the printer's custom G-code.
     vars: TemplateVars,
+    /// What each path is printed at, by layer then path.
+    stats: Vec<Vec<PathStats>>,
+    /// Seconds printing each kind of line.
+    kind_seconds: Vec<(PathKind, f32)>,
+    /// Seconds travelling.
+    travel_seconds: f32,
 }
 
 /// The nozzles a print uses, and which one it starts with.
@@ -1083,6 +1120,13 @@ impl<'a> Writer<'a> {
             fan_now: 0,
             walls: Vec::new(),
             vars,
+            stats: result
+                .layers
+                .iter()
+                .map(|l| vec![PathStats::default(); l.paths.len()])
+                .collect(),
+            kind_seconds: Vec::new(),
+            travel_seconds: 0.0,
         }
     }
 
@@ -1096,6 +1140,29 @@ impl<'a> Writer<'a> {
     }
 
     /// The printing temperature of nozzle `t`.
+    /// Notes what the path `style` describes is printed at, for the preview and the
+    /// time split.
+    fn record(&mut self, style: &PathStyle, speed: f32, seconds: f32) {
+        let stats = PathStats {
+            speed,
+            width: style.width,
+            fan: self.fan_now,
+            temp: self.temp_of(self.tool),
+            seconds,
+        };
+        if let Some(slot) = self
+            .stats
+            .get_mut(style.li)
+            .and_then(|l| l.get_mut(style.pi))
+        {
+            *slot = stats;
+        }
+        match self.kind_seconds.iter_mut().find(|(k, _)| *k == style.kind) {
+            Some((_, s)) => *s += seconds,
+            None => self.kind_seconds.push((style.kind, seconds)),
+        }
+    }
+
     fn temp_of(&self, t: u8) -> u32 {
         match &self.tools.second {
             Some(f) if t != self.tools.primary && !self.tools.ditto => f.nozzle_temp,
@@ -1523,7 +1590,9 @@ impl<'a> Writer<'a> {
                 to.y + self.oy,
                 self.travel_f
             );
-            self.seconds += motion::line_time(&[self.pos, to], self.s.travel_speed, accel);
+            let t = motion::line_time(&[self.pos, to], self.s.travel_speed, accel);
+            self.seconds += t;
+            self.travel_seconds += t;
         }
         if hopped {
             let _ = writeln!(self.g, "G1 Z{:.3} F600", z);
@@ -1550,7 +1619,9 @@ impl<'a> Writer<'a> {
             );
             pts.push(*q);
         }
-        self.seconds += motion::line_time(&pts, self.s.travel_speed, accel);
+        let t = motion::line_time(&pts, self.s.travel_speed, accel);
+        self.seconds += t;
+        self.travel_seconds += t;
         if let Some(last) = route.last() {
             self.pos = *last;
         }
@@ -1573,7 +1644,9 @@ impl<'a> Writer<'a> {
         };
         let accel = self.print_accel(style.kind, style.li);
         self.set_accel(accel, false);
-        self.seconds += motion::line_time(&pts, speed, accel);
+        let t = motion::line_time(&pts, speed, accel);
+        self.seconds += t;
+        self.record(style, speed, t);
         // The filament's flow ratio (1.0 at 100 %, so the default changes nothing).
         let flow = flow * (self.filament_now().flow_percent / 100.0);
         let climb = style.spiral && style.kind == PathKind::OuterWall;
@@ -1720,9 +1793,17 @@ impl<'a> Writer<'a> {
             }
         }
         g.push_str(&config_block(filament, self.s, printer));
+        let printing: f32 = self.kind_seconds.iter().map(|(_, s)| s).sum();
+        let times = FeatureTimes {
+            by_kind: self.kind_seconds,
+            travel: self.travel_seconds,
+            other: (seconds - printing - self.travel_seconds).max(0.0),
+        };
         GcodeOutput {
             text: self.g,
             estimate,
+            path_stats: self.stats,
+            times,
         }
     }
 }
@@ -2963,6 +3044,54 @@ mod tests {
             })
             .is_ok());
         }
+    }
+
+    #[test]
+    fn test_path_stats_record_what_each_path_prints_at() {
+        let s = PrintSettings {
+            min_layer_time: 0.0,
+            ..PrintSettings::default()
+        };
+        let (r, out) = sliced_cube(&s);
+        let f = &Filament::presets()[0];
+        assert_eq!(out.path_stats.len(), r.layers.len());
+        for (li, layer) in r.layers.iter().enumerate() {
+            assert_eq!(out.path_stats[li].len(), layer.paths.len(), "layer {li}");
+            for (pi, path) in layer.paths.iter().enumerate() {
+                let st = out.path_stats[li][pi];
+                assert_eq!(st.width, r.line_width, "{:?}", path.kind);
+                assert_eq!(st.temp, f.nozzle_temp);
+                assert_eq!(st.fan, if li == 0 { 0 } else { f.fan_percent });
+                assert!(st.seconds > 0.0);
+                if li > 0 && path.kind == PathKind::OuterWall {
+                    assert_eq!(st.speed, s.print_speed * 0.5);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_feature_times_add_up_to_the_print_time() {
+        let (_, out) = sliced_cube(&PrintSettings::default());
+        let t = &out.times;
+        let parts: f32 = t.by_kind.iter().map(|(_, s)| s).sum::<f32>() + t.travel + t.other;
+        assert!(
+            (parts - out.estimate.seconds).abs() < 0.01,
+            "{parts} vs {}",
+            out.estimate.seconds
+        );
+        assert!(t.other > 0.0 && t.travel > 0.0);
+        let wall = t
+            .by_kind
+            .iter()
+            .find(|(k, _)| *k == PathKind::OuterWall)
+            .unwrap()
+            .1;
+        assert!(wall > 0.0);
+        // The per-path seconds are the same time, split the other way.
+        let by_path: f32 = out.path_stats.iter().flatten().map(|p| p.seconds).sum();
+        let printed: f32 = t.by_kind.iter().map(|(_, s)| s).sum();
+        assert!((by_path - printed).abs() < 0.01, "{by_path} vs {printed}");
     }
 
     #[test]
