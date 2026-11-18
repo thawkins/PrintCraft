@@ -158,6 +158,17 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     switched with `M106 ... ; bridge fan` before a bridge and back to the filament's fan
     (`; part fan`) before the next line that isn't one, only when the two differ. Walls
     over air are not bridged.
+12c. **Gap fill** (`slicer::gap_fill_paths`, gap plan M1.5). For each outer loop of a
+    layer (holes are not checked), the walls are offset one by one. Where the next wall,
+    or the infill inside the last wall, doesn't fit, the space left inside the innermost
+    wall (or the whole shape, when not even the outer wall fits) is narrower than a wall.
+    Its width is found by searching for the deepest offset of the shape that still
+    exists, plus the thickness that almost-collapsed loop still has. One line is laid
+    along that loop between its two farthest-apart points, as wide as the space (so it
+    lays only the plastic the space holds; capped at 1.5 line widths). Spaces under 0.3
+    of a line width stay empty. White in the preview, `;TYPE:WALL-INNER` (Cura-style
+    names have no gap-fill type), printed at the print speed. Not in vase mode. Only
+    strip-like spaces are filled well: a gap gets one line.
 13. **Spiral vase.** One wall. The first `bottom_layers` layers are solid. After that there
     is only the outer wall: no infill, no top.
 14. **Lay flat** (`PlacedObject::lay_flat`). Faces are grouped by direction (about 1°).

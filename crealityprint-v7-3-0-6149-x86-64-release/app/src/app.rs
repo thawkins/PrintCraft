@@ -1919,6 +1919,7 @@ mod tests {
                         Point2::new(-h, h),
                     ],
                     closed: true,
+                    width: None,
                 }],
             }],
             line_width: 0.44,

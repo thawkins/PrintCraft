@@ -31,6 +31,8 @@
     {"name": "bridge speed (Auto)", "group": "speed", "value": 50, "unit": "% of print speed", "estimated": true},
     {"name": "bridge flow", "group": "quality", "value": 95, "unit": "% of a normal line, 50-150", "estimated": true},
     {"name": "bridge fan", "group": "cooling", "value": 100, "unit": "%", "estimated": true},
+    {"name": "smallest gap filled", "group": "quality", "value": 0.3, "unit": "x line width", "estimated": true},
+    {"name": "widest gap-fill line", "group": "quality", "value": 1.5, "unit": "x line width", "estimated": true},
     {"name": "bridge directions tried", "group": "quality", "value": 12, "unit": "every 15 degrees", "estimated": true},
     {"name": "bridge anchor", "group": "quality", "value": 2, "unit": "mm onto supported area", "estimated": true},
     {"name": "smallest bridge", "group": "quality", "value": 4, "unit": "mm^2 (1 mm cells)", "estimated": true},

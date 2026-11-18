@@ -33,12 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Bridge flow" (95 %) and "Bridge fan" (100 %) in Cooling and travel. The fan switches
   for bridges and back only when the bridge fan differs from the filament's fan.
 
+- Gap fill (gap plan task M1.5). Where a shape is too narrow for its next wall or for
+  infill, one line runs down the middle of the space left, as wide as the space, so
+  thin walls and slots are no longer left hollow. Walls too thin for even one wall loop
+  get a gap-fill line too. Models without such spaces slice exactly as before.
+
 ### Changed
 
 - The time estimate now times every line with the printer's acceleration and corner
   speeds (new `motion.rs`) instead of adding a flat 15 %. With default settings the
   G-code is unchanged except the "; estimated time" comment (for example a 20 mm cube:
   19.9 min before, 19.7 min now; a 12 mm cylinder: 17.3 min before, 16.3 min now).
+
+### Fixed
+
+- Shrunk loops (walls and infill areas of thin features) could get small spikes near
+  corners, from outline points in the middle of a straight edge. Those points are now
+  dropped before offsetting: the same shapes with fewer points per loop. Seams can move
+  slightly. (c321fa2)
 
 ## [0.0.5] - 2026-11-18
 

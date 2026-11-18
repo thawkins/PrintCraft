@@ -78,6 +78,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Z-hop (lift on retraction) | **Yes (new)** |
 | Cooling: slow down short layers (minimum layer time) | **Yes (new)**: default 15 s, never below 15 mm/s |
 | Fan control | Yes (filament fan %, off on the first layer) |
+| Gap fill (thin walls and spaces too narrow for another wall) | **Simpler (new)**: one line down the middle of the space, as wide as the space |
 | Bridge detection and settings | **Simpler (new)**: unsupported areas anchored at both ends are filled with solid lines across the shortest anchored span (own colour in the preview). Bridge speed (Auto: half the print speed), flow (95 %) and fan (100 %) are their own settings in Advanced |
 | Multi-material / multi-tool (MMU, XL tool changer, wipe tower) | Not yet |
 | SLA (resin) printing | Not yet |

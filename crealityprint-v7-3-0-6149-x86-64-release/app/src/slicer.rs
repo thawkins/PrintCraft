@@ -22,6 +22,9 @@ pub enum PathKind {
     TopSurface,
     /// Lines of a raft under the print or under supports.
     Raft,
+    /// One line down the middle of a space too narrow for another wall loop, as wide as
+    /// the space (`ToolPath::width`).
+    GapFill,
     /// Solid lines laid over air (an unsupported area anchored at both ends), running
     /// across the shortest anchored span.
     Bridge,
@@ -33,9 +36,10 @@ pub enum PathKind {
 }
 
 impl PathKind {
-    pub const ALL: [PathKind; 13] = [
+    pub const ALL: [PathKind; 14] = [
         Self::OuterWall,
         Self::InnerWall,
+        Self::GapFill,
         Self::TopSurface,
         Self::SolidInfill,
         Self::Bridge,
@@ -62,6 +66,7 @@ impl PathKind {
             Self::TopSurface => "Top surface",
             Self::Raft => "Raft",
             Self::Bridge => "Bridge",
+            Self::GapFill => "Gap fill",
             Self::PrimeTower => "Prime tower",
             Self::OozeShield => "Ooze shield",
         }
@@ -71,7 +76,8 @@ impl PathKind {
         match self {
             Self::Skirt | Self::Brim => "SKIRT",
             Self::OuterWall => "WALL-OUTER",
-            Self::InnerWall => "WALL-INNER",
+            // Gap fill sits between the walls; Cura-style names have no type of its own.
+            Self::InnerWall | Self::GapFill => "WALL-INNER",
             // Cura-style names have no bridge type; a bridge is solid skin to printer screens.
             Self::SolidInfill | Self::Bridge => "SKIN",
             Self::SparseInfill => "FILL",
@@ -90,6 +96,9 @@ pub struct ToolPath {
     pub kind: PathKind,
     pub points: Vec<Point2>,
     pub closed: bool,
+    /// The line's width (mm) when it isn't the slice's line width: gap fill is as wide as
+    /// the gap it fills. `None` = the normal line width.
+    pub width: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +134,8 @@ const BRIDGE_ANCHOR_CELLS: usize = 2;
 const MIN_BRIDGE_CELLS: usize = 4;
 /// Bridge directions tried, every 15 degrees over a half turn.
 const BRIDGE_ANGLE_STEPS: usize = 12;
+/// Gaps narrower than this share of the line width are left empty: too thin to print.
+const MIN_GAP_FILL: f32 = 0.3;
 const RAFT_MARGIN_CELLS: usize = 3;
 const SUPPORT_RAFT_MARGIN_CELLS: usize = 2;
 const RAFT_BASE_SPACING_MM: f32 = 1.0;
@@ -259,6 +270,9 @@ pub fn slice(
             settings,
         ));
 
+        if !vase {
+            paths.extend(gap_fill_paths(&outlines[i], wall_count, line_width));
+        }
         let region = infill_region(&outlines[i], wall_count, line_width);
         if !region.is_empty() && vase {
             // Vase mode: a solid bottom, then nothing but the spiral wall.
@@ -390,8 +404,95 @@ fn wall_paths(
             kind,
             points,
             closed: true,
+            width: None,
         })
         .collect()
+}
+
+/// Gap fill for shapes (outer loops, not holes) too narrow for all their walls and
+/// infill. Inside the innermost wall that fits (or inside the whole shape when not even
+/// the outer wall fits) is a space narrower than one more wall. Its width is found by
+/// searching for the deepest offset of the shape that still exists; that almost
+/// collapsed loop runs along the middle of the space, and one side of it, between its
+/// two farthest-apart points, is the gap's centre line. The line is as wide as the
+/// space, so it lays only the plastic the space holds. Spaces under `MIN_GAP_FILL` of a
+/// line width stay empty.
+///
+/// Limits: a gap is filled with one line, so only strip-like spaces are filled well, and
+/// shapes are offset one loop at a time (a hole's walls are not checked against the
+/// outline's).
+fn gap_fill_paths(outline: &[Polygon], wall_count: u32, line_width: f32) -> Vec<ToolPath> {
+    let mut paths = Vec::new();
+    for poly in outline.iter().filter(|p| area(p) > 0.0) {
+        let walls = (0..wall_count)
+            .take_while(|k| offset_left(poly, line_width * (0.5 + *k as f32)).is_some())
+            .count();
+        let infill_fits =
+            !infill_region(std::slice::from_ref(poly), wall_count, line_width).is_empty();
+        if walls == wall_count as usize && infill_fits {
+            continue;
+        }
+        // The inner edge of the innermost wall (the shape's own edge with no wall).
+        let start = line_width * walls as f32;
+        let first = if start > 0.0 {
+            offset_left(poly, start)
+        } else {
+            Some(poly.clone())
+        };
+        let Some(mut core) = first else {
+            continue;
+        };
+        let (mut lo, mut hi) = (start, start + line_width);
+        if offset_left(poly, hi).is_some() {
+            continue;
+        }
+        for _ in 0..12 {
+            let mid = 0.5 * (lo + hi);
+            match offset_left(poly, mid) {
+                Some(c) => {
+                    lo = mid;
+                    core = c;
+                }
+                None => hi = mid,
+            }
+        }
+        // `offset_left` gives up while a thin loop still has some thickness left; that
+        // thickness (area over half the perimeter, for a thin loop) adds to the width.
+        let perimeter: f32 = core.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>()
+            + core[core.len() - 1].distance(core[0]);
+        let left = 2.0 * area(&core).abs() / perimeter.max(1e-6);
+        let width = 2.0 * (lo - start) + left;
+        if width < MIN_GAP_FILL * line_width {
+            continue;
+        }
+        let mut path = open_path(PathKind::GapFill, centre_line(&core));
+        path.width = Some(width.min(line_width * 1.5));
+        paths.push(path);
+    }
+    paths
+}
+
+/// The middle line of a very thin loop: the loop's points from one of its two
+/// farthest-apart points to the other, along the shorter way round.
+fn centre_line(thin: &[Point2]) -> Vec<Point2> {
+    let n = thin.len();
+    let (mut a, mut b, mut far) = (0, 0, -1.0f32);
+    for i in 0..n {
+        for j in i + 1..n {
+            let d = thin[i].distance(thin[j]);
+            if d > far {
+                (a, b, far) = (i, j, d);
+            }
+        }
+    }
+    let forward: Vec<Point2> = (a..=b).map(|i| thin[i]).collect();
+    let backward: Vec<Point2> = (b..=a + n).map(|i| thin[i % n]).collect();
+    let length = |p: &[Point2]| p.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>();
+    if length(&forward) <= length(&backward) {
+        forward
+    } else {
+        backward
+    }
 }
 
 /// The area infill covers: inside the innermost wall, overlapping it slightly.
@@ -575,6 +676,7 @@ fn open_path(kind: PathKind, points: Vec<Point2>) -> ToolPath {
         kind,
         points,
         closed: false,
+        width: None,
     }
 }
 
@@ -1125,6 +1227,7 @@ fn adhesion_paths(first: &[Polygon], adhesion: Adhesion, lw: f32) -> Vec<ToolPat
                         kind: PathKind::Skirt,
                         points: p,
                         closed: true,
+                        width: None,
                     });
                 }
             }
@@ -1137,6 +1240,7 @@ fn adhesion_paths(first: &[Polygon], adhesion: Adhesion, lw: f32) -> Vec<ToolPat
                             kind: PathKind::Brim,
                             points: p,
                             closed: true,
+                            width: None,
                         });
                     }
                 }
@@ -1489,6 +1593,7 @@ impl Grid {
                     kind: PathKind::Support,
                     points: pts,
                     closed: false,
+                    width: None,
                 });
             }
         }
@@ -1534,6 +1639,64 @@ mod tests {
         (0..r.layers.len())
             .filter(|&i| r.layers[i].paths.iter().any(|p| p.kind == PathKind::Bridge))
             .collect()
+    }
+
+    fn gap_fills(layer: &Layer) -> Vec<&ToolPath> {
+        layer
+            .paths
+            .iter()
+            .filter(|p| p.kind == PathKind::GapFill)
+            .collect()
+    }
+
+    #[test]
+    fn test_gap_fill_one_line_down_a_strip_too_narrow_for_two_walls() {
+        let lw = 0.42;
+        // Room for the outer wall all round, then 0.6 of a line width left in the middle.
+        let strip = box_at(Vec3::new(20.0, 2.6 * lw, 2.0), Vec3::new(0.0, 0.0, 0.0));
+        let r = slice(&strip, &PrintSettings::default(), lw, &|_| {});
+        for layer in &r.layers {
+            let gaps = gap_fills(layer);
+            assert_eq!(gaps.len(), 1, "z {}", layer.z);
+            let g = gaps[0];
+            let width = g.width.expect("gap fill has its own width");
+            assert!((width - 0.6 * lw).abs() < 0.1 * lw, "width {width}");
+            let (a, b) = (g.points[0], *g.points.last().unwrap());
+            assert!(a.distance(b) > 15.0, "too short: {a:?} -> {b:?}");
+            assert!(
+                g.points.iter().all(|p| p.y.abs() < 0.1),
+                "off centre {:?}",
+                g.points
+            );
+            assert!(!layer.paths.iter().any(|p| p.kind == PathKind::InnerWall));
+        }
+    }
+
+    #[test]
+    fn test_gap_fill_a_wall_too_thin_for_any_loop() {
+        let lw = 0.42;
+        let thin = box_at(Vec3::new(20.0, 0.8 * lw, 2.0), Vec3::new(0.0, 0.0, 0.0));
+        let r = slice(&thin, &PrintSettings::default(), lw, &|_| {});
+        let layer = &r.layers[3];
+        let gaps = gap_fills(layer);
+        assert_eq!(gaps.len(), 1);
+        let width = gaps[0].width.unwrap();
+        assert!((width - 0.8 * lw).abs() < 0.1 * lw, "width {width}");
+        assert!(!layer.paths.iter().any(|p| p.kind == PathKind::OuterWall));
+    }
+
+    #[test]
+    fn test_gap_fill_none_where_infill_fits_or_too_thin() {
+        let cube = box_at(Vec3::new(20.0, 20.0, 2.0), Vec3::new(0.0, 0.0, 0.0));
+        let r = slice(&cube, &PrintSettings::default(), 0.42, &|_| {});
+        assert!(r.layers.iter().all(|l| gap_fills(l).is_empty()));
+        // Two walls that just touch leave nothing worth filling.
+        let snug = box_at(
+            Vec3::new(20.0, 4.0 * 0.42 + 0.05, 2.0),
+            Vec3::new(0.0, 0.0, 0.0),
+        );
+        let r = slice(&snug, &PrintSettings::default(), 0.42, &|_| {});
+        assert!(r.layers.iter().all(|l| gap_fills(l).is_empty()));
     }
 
     #[test]

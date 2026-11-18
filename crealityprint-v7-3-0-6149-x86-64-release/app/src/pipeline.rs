@@ -95,6 +95,7 @@ fn add_ooze_shield(result: &mut slicer::SliceResult, printer: &Printer, tools: &
             kind: slicer::PathKind::OozeShield,
             points: outline.clone(),
             closed: true,
+            width: None,
         });
     }
 }

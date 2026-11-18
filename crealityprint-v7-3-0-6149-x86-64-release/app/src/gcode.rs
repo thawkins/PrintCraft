@@ -62,6 +62,7 @@ pub fn speed_feature(kind: PathKind) -> Option<SpeedFeature> {
         PathKind::Skirt
         | PathKind::Brim
         | PathKind::Ironing
+        | PathKind::GapFill
         | PathKind::Raft
         | PathKind::PrimeTower
         | PathKind::OozeShield => None,
@@ -373,6 +374,7 @@ pub fn prime_tower_paths(centre: Point2, width: f32, li: usize) -> Vec<ToolPath>
         kind: PathKind::PrimeTower,
         points: vec![corner(-h, -h), corner(h, -h), corner(h, h), corner(-h, h)],
         closed: true,
+        width: None,
     };
     let inner = h - width;
     let mut fill = Vec::new();
@@ -398,6 +400,7 @@ pub fn prime_tower_paths(centre: Point2, width: f32, li: usize) -> Vec<ToolPath>
             kind: PathKind::PrimeTower,
             points: fill,
             closed: false,
+            width: None,
         },
     ]
 }
@@ -993,6 +996,7 @@ impl<'a> Writer<'a> {
             kind: path.kind,
             spiral: look.spiral,
             slowdown: look.slowdown,
+            width: path.width.unwrap_or(self.line_width),
         };
         self.extrude(layer, &style, pts);
     }
@@ -1040,6 +1044,7 @@ impl<'a> Writer<'a> {
             | PathKind::Ironing
             | PathKind::TopSurface
             | PathKind::Bridge
+            | PathKind::GapFill
             | PathKind::Raft
             | PathKind::PrimeTower
             | PathKind::OozeShield => machine,
@@ -1163,12 +1168,8 @@ impl<'a> Writer<'a> {
                 continue;
             }
             done_len += len;
-            let de = filament_for(
-                len,
-                self.line_width,
-                layer.height,
-                self.filament_now().diameter,
-            ) * flow;
+            let de =
+                filament_for(len, style.width, layer.height, self.filament_now().diameter) * flow;
             let e = self.ext.extrude(de);
             self.by_tool[self.tool as usize] += de as f64;
             let z = if climb {
@@ -1319,6 +1320,8 @@ struct PathStyle {
     spiral: bool,
     /// Cooling factor from `cooling_slowdown`.
     slowdown: f32,
+    /// The line's width (mm).
+    width: f32,
 }
 
 /// Cooling: the factor (at most 1) that stretches a layer which would otherwise finish
@@ -2080,6 +2083,47 @@ mod tests {
     }
 
     #[test]
+    fn test_gap_fill_extrudes_for_its_width() {
+        let lw = 0.42;
+        let tris = PlacedObject::new("strip", Mesh::cube(Vec3::new(20.0, 2.6 * lw, 2.0)))
+            .world_triangles();
+        let s = PrintSettings::default();
+        let r = crate::slicer::slice(&tris, &s, lw, &|_| {});
+        let out = generate(&r, &Printer::presets()[0], &Filament::presets()[0], &s);
+        // Filament per mm by line type, from the absolute E values.
+        let (mut x, mut y, mut e, mut kind) = (0f32, 0f32, 0f32, "");
+        let mut per_mm: std::collections::HashMap<&str, Vec<f32>> = Default::default();
+        for l in out.text.lines() {
+            if let Some(k) = l.strip_prefix(";TYPE:") {
+                kind = k;
+                continue;
+            }
+            if !l.starts_with("G1 X") && !l.starts_with("G0 X") {
+                continue;
+            }
+            let (mut nx, mut ny, mut ne) = (x, y, e);
+            for w in l.split(';').next().unwrap_or("").split_whitespace().skip(1) {
+                let v: f32 = w[1..].parse().unwrap_or(0.0);
+                match &w[..1] {
+                    "X" => nx = v,
+                    "Y" => ny = v,
+                    "E" => ne = v,
+                    _ => {}
+                }
+            }
+            let len = ((nx - x).powi(2) + (ny - y).powi(2)).sqrt();
+            if ne > e && len > 2.0 {
+                per_mm.entry(kind).or_default().push((ne - e) / len);
+            }
+            (x, y, e) = (nx, ny, ne);
+        }
+        let mean = |k: &str| per_mm[k].iter().sum::<f32>() / per_mm[k].len() as f32;
+        // Gap fill is written as WALL-INNER (there is no inner wall in this strip).
+        let ratio = mean("WALL-INNER") / mean("WALL-OUTER");
+        assert!((ratio - 0.6).abs() < 0.08, "{ratio}");
+    }
+
+    #[test]
     fn test_bridge_prints_with_its_fan_speed_and_flow() {
         let s = PrintSettings {
             min_layer_time: 0.0,
@@ -2125,6 +2169,7 @@ mod tests {
             kind,
             points: vec![Point2::new(x, 0.0), Point2::new(x + 1.0, 0.0)],
             closed: false,
+            width: None,
         };
         let tools = Tools {
             parts: vec![([-35.0, -5.0, -25.0, 5.0], 0), ([25.0, -5.0, 35.0, 5.0], 1)],
