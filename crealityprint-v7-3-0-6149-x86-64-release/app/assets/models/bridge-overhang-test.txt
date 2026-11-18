@@ -1,0 +1,16 @@
+bridge-overhang-test.stl - PrintCraft's own test part for bridges and overhangs.
+Made for this project (no outside source); free to use like the rest of PrintCraft.
+
+Size: 145 x 35 x 27.5 mm. Two closed pieces, each a side profile extruded 10 mm deep.
+Print without supports, so the bridges and overhangs are tested as they are.
+
+Front piece - bridges:
+  six 5 mm pillars, 7 mm tall, under a 1 mm deck, leaving gaps of
+  10, 15, 20, 30 and 40 mm (left to right). PrintCraft bridges the deck's
+  first layer (z 7.2 mm at 0.2 mm layers) across every gap.
+
+Back piece - overhangs:
+  a 5 mm wall with four 5 mm tall wedges whose undersides lean
+  30, 45, 60 and 70 degrees from vertical (bottom to top), then a flat
+  10 mm shelf on top. The wedges and the shelf are held on one side only,
+  so they are overhangs, not bridges.

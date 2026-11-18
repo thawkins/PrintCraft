@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compensation (first layer drawn in, not with a raft) and hole compensation (holes made
   larger). They are saved in projects, and at their defaults the G-code is unchanged.
 
+- A bridge and overhang test part, `assets/models/bridge-overhang-test.stl` (made for
+  PrintCraft, described in the .txt beside it): bridges of 10-40 mm over pillars, and
+  overhang wedges at 30-70 degrees with a flat shelf on top. For checking M1 on a printer.
+
 ### Changed
 
 - The time estimate now times every line with the printer's acceleration and corner
