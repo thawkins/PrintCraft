@@ -1,5 +1,6 @@
 //! Writes sliced layers as G-code and estimates print time, filament and cost.
 
+use crate::gcode_template;
 use crate::geometry::Point2;
 use crate::motion;
 use crate::profiles::{AccelFeature, Filament, PrintSettings, Printer, SeamPosition, SpeedFeature};
@@ -42,6 +43,96 @@ impl Estimate {
             format!("{} min", m.max(1))
         }
     }
+}
+
+/// The placeholders custom G-code can use, with what each one is. Temperatures in °C,
+/// lengths and positions in mm (positions in printer coordinates).
+pub const PLACEHOLDERS: [(&str, &str); 26] = [
+    ("bed_temp", "plate temperature"),
+    ("nozzle_temp", "nozzle temperature (the main filament)"),
+    ("first_layer_temp", "nozzle temperature for the first layer"),
+    ("nozzle_temp_0", "temperature of nozzle T0"),
+    (
+        "nozzle_temp_1",
+        "temperature of nozzle T1 (two-nozzle printers)",
+    ),
+    ("fan_percent", "part fan from the second layer, %"),
+    ("filament_diameter", "filament diameter"),
+    ("nozzle_diameter", "nozzle diameter"),
+    ("retract_length", "retraction length"),
+    ("extruders", "number of nozzles"),
+    ("klipper", "1 on a Klipper printer, else 0"),
+    ("bed_x", "plate width"),
+    ("bed_y", "plate depth"),
+    ("max_z", "printer's maximum height"),
+    ("layer_height", "layer height"),
+    ("first_layer_height", "first layer height"),
+    ("total_layers", "number of layers"),
+    (
+        "layer_num",
+        "this layer's number, from 0 (start: 0; end: the last)",
+    ),
+    (
+        "layer_z",
+        "this layer's height (start: the first layer's; end: the top)",
+    ),
+    ("print_min_x", "left edge of everything printed"),
+    ("print_max_x", "right edge of everything printed"),
+    ("print_min_y", "front edge of everything printed"),
+    ("print_max_y", "back edge of everything printed"),
+    ("print_max_z", "top of the print"),
+    ("tool", "the nozzle selected now"),
+    (
+        "next_tool",
+        "at a tool change, the nozzle about to be selected (elsewhere: tool)",
+    ),
+];
+
+/// Values for the placeholders, by name.
+#[derive(Clone, Debug, Default)]
+struct TemplateVars(Vec<(&'static str, f64)>);
+
+impl TemplateVars {
+    fn get(&self, name: &str) -> Option<f64> {
+        self.0.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
+    }
+
+    /// The same values with `name` set to `value`.
+    fn with(&self, name: &'static str, value: f64) -> Self {
+        let mut v = self.clone();
+        match v.0.iter_mut().find(|(n, _)| *n == name) {
+            Some(slot) => slot.1 = value,
+            None => v.0.push((name, value)),
+        }
+        v
+    }
+
+    /// The values at layer `li` (z and number).
+    fn at_layer(&self, li: usize, z: f32) -> Self {
+        self.with("layer_num", li as f64).with("layer_z", z as f64)
+    }
+}
+
+/// `text` with its placeholders filled in. The blocks are checked before slicing
+/// (`check_custom_gcode`), so a template that fails here is written as it is.
+fn render_block(text: &str, vars: &TemplateVars) -> String {
+    gcode_template::render(text, &|name| vars.get(name)).unwrap_or_else(|_| text.to_string())
+}
+
+/// Checks the printer's custom G-code: every placeholder known, every `{if}` closed.
+/// The error names the box and the problem.
+pub fn check_custom_gcode(printer: &Printer) -> Result<(), String> {
+    let known = |name: &str| PLACEHOLDERS.iter().any(|(n, _)| *n == name).then_some(1.0);
+    let boxes = [
+        ("Start", &printer.start_gcode),
+        ("End", &printer.end_gcode),
+        ("Before each layer", &printer.layer_change_gcode),
+        ("Tool change", &printer.tool_change_gcode),
+    ];
+    for (name, text) in boxes {
+        gcode_template::render(text, &known).map_err(|e| format!("Custom G-code ({name}): {e}"))?;
+    }
+    Ok(())
 }
 
 /// Adds custom G-code `text` to `g` as written, ending with a line break. Blank text
@@ -586,6 +677,8 @@ struct Writer<'a> {
     /// This layer's outer wall loops, for routing travels inside the part (only kept
     /// with "avoid crossing walls" on).
     walls: Vec<Vec<Point2>>,
+    /// Values for the placeholders in the printer's custom G-code.
+    vars: TemplateVars,
 }
 
 /// The nozzles a print uses, and which one it starts with.
@@ -618,6 +711,65 @@ impl Nozzles {
             start_tool: if dual { tools.first_tool() } else { 0 },
         }
     }
+}
+
+/// The placeholder values for a print: everything in `PLACEHOLDERS`, with the layer
+/// values at the first layer and the tool values at the first nozzle.
+fn template_vars(
+    result: &SliceResult,
+    printer: &Printer,
+    filament: &Filament,
+    s: &PrintSettings,
+    nozzles: &Nozzles,
+    temp_of: &dyn Fn(u8) -> u32,
+) -> TemplateVars {
+    let (ox, oy) = (printer.bed_x / 2.0, printer.bed_y / 2.0);
+    let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for p in result
+        .layers
+        .iter()
+        .flat_map(|l| l.paths.iter())
+        .flat_map(|p| p.points.iter())
+    {
+        (x0, x1, y0, y1) = (x0.min(p.x), x1.max(p.x), y0.min(p.y), y1.max(p.y));
+    }
+    if x0 > x1 {
+        (x0, x1, y0, y1) = (0.0, 0.0, 0.0, 0.0);
+    }
+    let first = result.layers.first();
+    let f = |v: f32| v as f64;
+    let tool = nozzles.start_tool as f64;
+    TemplateVars(vec![
+        ("bed_temp", filament.bed_temp as f64),
+        ("nozzle_temp", filament.nozzle_temp as f64),
+        ("first_layer_temp", filament.nozzle_temp as f64),
+        ("nozzle_temp_0", temp_of(0) as f64),
+        ("nozzle_temp_1", temp_of(1) as f64),
+        ("fan_percent", filament.fan_percent as f64),
+        ("filament_diameter", f(filament.diameter)),
+        ("nozzle_diameter", f(printer.nozzle_diameter)),
+        ("retract_length", f(printer.retract_length)),
+        ("extruders", printer.extruders as f64),
+        ("klipper", if printer.klipper { 1.0 } else { 0.0 }),
+        ("bed_x", f(printer.bed_x)),
+        ("bed_y", f(printer.bed_y)),
+        ("max_z", f(printer.max_z)),
+        ("layer_height", f(s.layer_height)),
+        ("first_layer_height", f(s.first_layer_height)),
+        ("total_layers", result.layers.len() as f64),
+        ("layer_num", 0.0),
+        ("layer_z", first.map(|l| f(l.z)).unwrap_or(0.0)),
+        ("print_min_x", f(x0 + ox)),
+        ("print_max_x", f(x1 + ox)),
+        ("print_min_y", f(y0 + oy)),
+        ("print_max_y", f(y1 + oy)),
+        (
+            "print_max_z",
+            result.layers.last().map(|l| f(l.z)).unwrap_or(0.0),
+        ),
+        ("tool", tool),
+        ("next_tool", tool),
+    ])
 }
 
 /// What PrintCraft's own start leaves for the rest of the file: the filament and time
@@ -725,9 +877,19 @@ fn builtin_start(
 }
 
 /// The text the custom start box offers as its default: PrintCraft's own start for this
-/// printer and filament on its primary nozzle, as plain G-code. Temperatures are this
-/// filament's, written in (placeholders come with M2.3).
+/// printer on its primary nozzle, with the temperatures as placeholders (`{bed_temp}`,
+/// `{nozzle_temp}`, and `{..-1}` for Klipper's waits), so it follows the filament.
+///
+/// It is made by running the built-in start with marker temperatures and swapping the
+/// markers for placeholders; filled in, the text is exactly the built-in start.
 pub fn default_start_gcode(printer: &Printer, filament: &Filament) -> String {
+    const NOZZLE_MARK: u32 = 7001;
+    const BED_MARK: u32 = 8001;
+    let marked = Filament {
+        nozzle_temp: NOZZLE_MARK,
+        bed_temp: BED_MARK,
+        ..filament.clone()
+    };
     let tools = Tools {
         primary: printer.primary_tool(),
         support_tool: printer.primary_tool(),
@@ -737,11 +899,21 @@ pub fn default_start_gcode(printer: &Printer, filament: &Filament) -> String {
     builtin_start(
         &mut g,
         printer,
-        filament,
+        &marked,
         &Nozzles::of(printer, &tools, false),
-        &|_| filament.nozzle_temp,
+        &|_| NOZZLE_MARK,
     );
-    g
+    let margin = crate::heat::WAIT_MARGIN_C;
+    g.replace(&BED_MARK.to_string(), "{bed_temp}")
+        .replace(&NOZZLE_MARK.to_string(), "{nozzle_temp}")
+        .replace(
+            &(BED_MARK - margin).to_string(),
+            &format!("{{bed_temp-{margin}}}"),
+        )
+        .replace(
+            &(NOZZLE_MARK - margin).to_string(),
+            &format!("{{nozzle_temp-{margin}}}"),
+        )
 }
 
 /// The text the custom end box offers as its default: PrintCraft's own end, written so it
@@ -854,6 +1026,7 @@ impl<'a> Writer<'a> {
         // prepares (levels) before running the file reads these to know the job temperature;
         // without them it may prepare at 0 °C and heat up again afterwards.
         g.push_str(&header_block(filament, s, printer));
+        let vars = template_vars(result, printer, filament, s, &nozzles, &temp_of);
         // The start: a custom one in place of heating, homing and purging, or the built-in.
         let custom_start = !printer.start_gcode.trim().is_empty();
         let StartState {
@@ -863,7 +1036,7 @@ impl<'a> Writer<'a> {
             by_tool,
             pos,
         } = if custom_start {
-            push_block(&mut g, &printer.start_gcode);
+            push_block(&mut g, &render_block(&printer.start_gcode, &vars));
             // PrintCraft's own moves need these, whatever the custom start did.
             let _ = writeln!(g, "G90 ; absolute positions");
             let _ = writeln!(g, "M82 ; absolute extrusion");
@@ -909,6 +1082,7 @@ impl<'a> Writer<'a> {
             accel_now: [None; 2],
             fan_now: 0,
             walls: Vec::new(),
+            vars,
         }
     }
 
@@ -1032,7 +1206,14 @@ impl<'a> Writer<'a> {
             let standby = self.temp_of(old).saturating_sub(p.standby_drop);
             let _ = writeln!(self.g, "M104 T{old} S{standby} ; standby");
         }
-        push_block(&mut self.g, &self.printer.tool_change_gcode);
+        let at_change = self
+            .vars
+            .with("tool", old as f64)
+            .with("next_tool", tool as f64);
+        push_block(
+            &mut self.g,
+            &render_block(&self.printer.tool_change_gcode, &at_change),
+        );
         let _ = writeln!(self.g, "T{tool}");
         let _ = writeln!(self.g, "G92 E0");
         if p.standby_drop > 0 {
@@ -1202,7 +1383,15 @@ impl<'a> Writer<'a> {
                 .collect();
         }
         let _ = writeln!(self.g, ";LAYER:{li}");
-        push_block(&mut self.g, &self.printer.layer_change_gcode);
+        let here = self
+            .vars
+            .at_layer(li, layer.z)
+            .with("tool", self.tool as f64);
+        let here = here.with("next_tool", self.tool as f64);
+        push_block(
+            &mut self.g,
+            &render_block(&self.printer.layer_change_gcode, &here),
+        );
         // Vase mode: above the solid bottom, the wall climbs continuously instead.
         let spiral = self.s.vase_mode && li >= self.s.bottom_layers as usize && li > 0;
         if !spiral {
@@ -1465,7 +1654,9 @@ impl<'a> Writer<'a> {
             let _ = writeln!(g, "M107");
             let _ = writeln!(g, "M84 ; motors off");
         } else {
-            push_block(g, &printer.end_gcode);
+            let last = result.layers.len().saturating_sub(1);
+            let end = self.vars.at_layer(last, top);
+            push_block(g, &render_block(&printer.end_gcode, &end));
         }
 
         let total_e = (self.prime_e as f64 + self.ext.extruded) as f32;
@@ -2684,6 +2875,93 @@ mod tests {
                     .all(|l| l.trim().is_empty() || l.starts_with(';')),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn test_placeholders_are_filled_in_each_block() {
+        let mut printer = Printer::presets()[0].clone();
+        printer.start_gcode = "M117 B{bed_temp} N{nozzle_temp} of {total_layers}".into();
+        printer.layer_change_gcode = "M117 L{layer_num} Z{layer_z}".into();
+        printer.end_gcode = "M117 end {layer_num}{if klipper} K{else} M{endif}".into();
+        let (r, out) = square_on(&printer);
+        let f = &Filament::presets()[0];
+        let n = r.layers.len();
+        assert!(out
+            .text
+            .contains(&format!("M117 B{} N{} of {n}\n", f.bed_temp, f.nozzle_temp)));
+        let z1 = gcode_template::format_number(r.layers[1].z as f64);
+        assert!(out.text.contains(&format!(";LAYER:1\nM117 L1 Z{z1}\n")));
+        assert!(out.text.contains(&format!("M117 end {} M\n", n - 1)));
+    }
+
+    #[test]
+    fn test_print_bounds_placeholders_cover_the_print() {
+        let mut printer = Printer::presets()[0].clone();
+        printer.start_gcode =
+            "; box {print_min_x} {print_max_x} {print_min_y} {print_max_y} {print_max_z}".into();
+        let (r, out) = square_on(&printer);
+        let line = out.text.lines().find(|l| l.starts_with("; box ")).unwrap();
+        let v: Vec<f32> = line[6..].split(' ').map(|w| w.parse().unwrap()).collect();
+        let xs: Vec<f32> = out
+            .text
+            .lines()
+            .skip_while(|l| !l.starts_with(";LAYER:0"))
+            .take_while(|l| *l != ";END")
+            .filter(|l| l.starts_with("G1 X"))
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .nth(1)
+                    .and_then(|w| w[1..].parse().ok())
+            })
+            .collect();
+        let (lo, hi) = xs
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(*x), b.max(*x)));
+        assert!(
+            v[0] <= lo + 0.01 && v[1] >= hi - 0.01,
+            "{v:?} vs {lo}..{hi}"
+        );
+        assert!(v[0] < v[1] && v[2] < v[3]);
+        assert!((v[4] - r.layers.last().unwrap().z).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_custom_gcode_check_names_box_and_placeholder() {
+        let mut printer = Printer::presets()[0].clone();
+        assert!(check_custom_gcode(&printer).is_ok());
+        printer.end_gcode = "M104 S{nozle_temp}".into();
+        let err = check_custom_gcode(&printer).unwrap_err();
+        assert!(err.contains("End") && err.contains("{nozle_temp}"), "{err}");
+        printer.end_gcode.clear();
+        printer.layer_change_gcode = "{if layer_num > 2}M117{endif".into();
+        assert!(check_custom_gcode(&printer)
+            .unwrap_err()
+            .contains("Before each layer"));
+        // Every placeholder the editor lists is one the check accepts.
+        for (name, _) in PLACEHOLDERS {
+            printer.layer_change_gcode = format!("{{{name}}}");
+            assert!(check_custom_gcode(&printer).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
+    fn test_default_start_uses_placeholders() {
+        for printer in [
+            Printer::presets()[0].clone(),
+            Printer::presets().into_iter().find(|p| p.klipper).unwrap(),
+        ] {
+            let text = default_start_gcode(&printer, &Filament::presets()[0]);
+            assert!(
+                text.contains("{bed_temp}") && text.contains("{nozzle_temp}"),
+                "{text}"
+            );
+            assert!(!text.contains("7001") && !text.contains("8001") && !text.contains("8000"));
+            assert!(check_custom_gcode(&Printer {
+                start_gcode: text,
+                ..printer.clone()
+            })
+            .is_ok());
         }
     }
 

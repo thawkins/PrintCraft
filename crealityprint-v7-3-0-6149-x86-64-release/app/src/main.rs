@@ -15,6 +15,7 @@ mod device_ui;
 mod formats;
 mod fsutil;
 mod gcode;
+mod gcode_template;
 mod geometry;
 mod gizmo;
 mod heat;

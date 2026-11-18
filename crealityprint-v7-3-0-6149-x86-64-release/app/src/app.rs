@@ -542,10 +542,13 @@ impl PrintCraftApp {
                 &|v| p.store(v.to_bits(), Ordering::Relaxed),
             );
             let shared_text = Arc::new(gcode.text.clone());
-            // Ditto: the job as sliced (skirt, brim and raft included) must leave room for
-            // its copy.
-            let problem = ditto_dx
-                .and_then(|dx| {
+            // A custom G-code mistake (an unknown placeholder, an unclosed {if}) comes first:
+            // the file would not be what the person wrote. Then Ditto: the job as sliced
+            // (skirt, brim and raft included) must leave room for its copy.
+            let problem = crate::gcode::check_custom_gcode(&printer)
+                .err()
+                .or_else(|| {
+                    let dx = ditto_dx?;
                     let extent = job_extent(&result)?;
                     ditto_check(&[extent], printer.bed_x, dx).err()
                 })

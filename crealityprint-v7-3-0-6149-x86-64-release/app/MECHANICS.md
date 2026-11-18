@@ -235,8 +235,24 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   the new purge pushes about 3× as much.
 * **End.** Retract 2 mm, lift 10 mm, park at the back-left, heaters off, motors off.
 * **Custom G-code** (printer editor > Custom G-code, gap plan M2.2). Four blocks per
-  printer, all empty by default, which leaves the output unchanged. Text is used as
-  written (placeholders come in M2.3).
+  printer, all empty by default, which leaves the output unchanged.
+  * **Placeholders** (`src/gcode_template.rs`, gap plan M2.3): `{name}` is replaced by
+    a value (whole numbers without decimals, others to at most 3), `{name-1}` /
+    `{name+5}` by the value plus or minus a number, and `{if a op b}` ... `{else}` ...
+    `{endif}` keeps one part (`op`: `== != < <= > >=`; `a`, `b`: names or numbers;
+    `{if name}` is true when it isn't 0; branches nest). `{{` and `}}` write braces.
+    The names (`gcode::PLACEHOLDERS`, also listed by hovering in the editor): bed_temp,
+    nozzle_temp, first_layer_temp, nozzle_temp_0, nozzle_temp_1, fan_percent,
+    filament_diameter, nozzle_diameter, retract_length, extruders, klipper (1/0),
+    bed_x, bed_y, max_z, layer_height, first_layer_height, total_layers, layer_num,
+    layer_z, print_min_x/max_x/min_y/max_y (printer coordinates of everything
+    printed, skirt included), print_max_z, tool, next_tool. Layer values are the
+    first layer's in Start and the last layer's in End; at a tool change `tool` is
+    the old nozzle and `next_tool` the new one.
+  * **Checked before slicing:** an unknown name (even in a part an `{if}` skips) or a
+    malformed tag stops the slice with a message naming the box and the tag, e.g.
+    "Custom G-code (End): unknown placeholder {nozle_temp}"; the job can't be sent or
+    exported until it's fixed.
   * **Start** replaces heating, homing and the purge lines (on a two-nozzle printer,
     also the second nozzle's purge, parking and standby). The header comments come
     before it. After it PrintCraft writes `G90`, `M82`, `G92 E0` and, with two nozzles,
@@ -252,10 +268,10 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     doesn't know stop the export with an error naming the line.
   * **Insert default** (a button beside each box) adds PrintCraft's own text for that
     place to the box, to edit; nothing in the box is replaced.
-    * Start: the built-in start for this printer and filament on its primary nozzle
-      (`gcode::default_start_gcode`, the same code the built-in start runs).
-      Temperatures are written in, so they don't follow later filament changes until
-      placeholders (M2.3).
+    * Start: the built-in start for this printer on its primary nozzle
+      (`gcode::default_start_gcode`, the same code the built-in start runs), with
+      temperatures as `{bed_temp}`, `{nozzle_temp}` and, for Klipper's waits,
+      `{bed_temp-1}` / `{nozzle_temp-1}`. Filled in, it is exactly the built-in start.
     * End: the built-in end's steps written without knowing the print: heaters and fan
       off first, then a relative 2 mm retract and 10 mm lift (`G91` ... `G90`), park at
       the back-left, motors off. Heaters go off before the lift, so they are off even if

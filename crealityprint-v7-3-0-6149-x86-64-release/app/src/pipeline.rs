@@ -222,6 +222,18 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_change_placeholders_name_both_nozzles() {
+        let mut printer = dual_printer();
+        printer.tool_change_gcode = "M117 {tool}>{next_tool}".into();
+        let text = cubes(&printer, &[-30.0, 30.0], &left_and_right(1, 0), false);
+        assert!(
+            text.contains("M117 1>0\n") || text.contains("M117 0>1\n"),
+            "no tool-change note"
+        );
+        assert!(!text.contains("M117 0>0") && !text.contains("M117 1>1"));
+    }
+
+    #[test]
     fn one_nozzle_printers_get_the_same_g_code_as_before() {
         use crate::model::{Mesh, PlacedObject};
         let printer = Printer::presets().remove(0);

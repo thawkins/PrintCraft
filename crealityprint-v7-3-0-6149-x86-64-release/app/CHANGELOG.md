@@ -9,12 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Placeholders in custom G-code (gap plan task M2.3): `{bed_temp}`, `{nozzle_temp}`,
+  `{layer_num}`, `{layer_z}`, the print's bounds, `{tool}`/`{next_tool}` and more (26 in
+  all; hover the note in the editor for the list), `{name-1}`-style offsets, and
+  `{if ...}`/`{else}`/`{endif}`. A mistake (an unknown name, an unclosed `{if}`) stops
+  the slice with a message naming the box and the tag. "Insert default" for Start now
+  writes the temperatures as placeholders, so the text follows the filament.
 - Custom G-code per printer (gap plan task M2.2), in the printer editor under
   "Custom G-code": a start block that replaces PrintCraft's heating, homing and purge;
   an end block that replaces its end sequence; and blocks added before every layer
   change and at every tool change. All are empty by default, which leaves the G-code
-  unchanged, and are saved with the printer in projects. The text is used as written
-  for now; placeholders such as `{bed_temp}` come with M2.3. An "Insert default"
+  unchanged, and are saved with the printer in projects. An "Insert default"
   button beside each box adds PrintCraft's own G-code for that place to edit: the
   built-in start, an end that turns the heaters off before lifting, and comments
   describing what PrintCraft writes at layer and tool changes.

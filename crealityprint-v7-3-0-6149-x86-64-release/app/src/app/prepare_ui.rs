@@ -705,6 +705,21 @@ fn custom_gcode_editor(
                     &mut printer.tool_change_gcode,
                 ),
             ];
+            let names: String = crate::gcode::PLACEHOLDERS
+                .iter()
+                .map(|(n, what)| format!("{{{n}}}  {what}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            ui.label(
+                RichText::new("Placeholders like {bed_temp} are filled in; hover for the list")
+                    .small()
+                    .color(theme::TEXT_DIM),
+            )
+            .on_hover_text(format!(
+                "{names}\n\n{{name-1}} or {{name+5}} adds or subtracts a number.\n\
+                 {{if a > b}} ... {{else}} ... {{endif}} keeps one part (also ==, !=, <, <=, >=;\n\
+                 {{if name}} is true when it isn't 0).\n{{{{ and }}}} write a brace."
+            ));
             for ((label, hint, text), default) in boxes.into_iter().zip(defaults) {
                 ui.horizontal(|ui| {
                     ui.label(label).on_hover_text(hint);
