@@ -7,53 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-18
+
 ### Added
 
 - Speeds per kind of line (gap plan task M1.1). With Advanced on, the Speed section has
   outer wall, inner wall, sparse infill, solid infill, top surface and support speeds.
   Each is "Auto" until set: Auto follows the print speed (outer walls at half of it), as
   before, so existing settings print exactly as they did. A speed you set is saved in
-  the project and kept when you pick a quality preset.
+  the project and kept when you pick a quality preset. (dd572bd)
 - Accelerations (gap plan task M1.2). The printer editor has the printer's own
   acceleration (presets filled in, estimated). With Advanced on, the Speed section has
   outer wall, infill, travel and first layer accelerations, each "Auto" until set. Set
   ones are written as `M204 P`/`M204 T` (Marlin, Prusa) or `SET_VELOCITY_LIMIT ACCEL=`
   (Klipper), only when the value changes; nothing is written while all are on Auto, and
-  never for X3G printers.
-
+  never for X3G printers. (3368c7e)
 - Bridge detection (gap plan task M1.3). An area of a layer with nothing under it, but
   with solid model on both sides, is filled with solid "Bridge" lines across the
   shortest anchored span, reaching 2 mm onto the supported area. One-sided overhangs are
   left as before. Bridges have their own colour in the preview. Models without such
   areas slice exactly as before; the XYZ calibration cube changes on the layer above its
-  engraved letters.
-
+  engraved letters. (d4509bf)
 - Bridge speed, flow and fan (gap plan task M1.4). Bridges print at their own speed
   (a new "Bridge" row in the Advanced speeds; Auto is half the print speed), with
   "Bridge flow" (95 %) and "Bridge fan" (100 %) in Cooling and travel. The fan switches
   for bridges and back only when the bridge fan differs from the filament's fan.
-
+  (83a9371)
 - Gap fill (gap plan task M1.5). Where a shape is too narrow for its next wall or for
   infill, one line runs down the middle of the space left, as wide as the space, so
   thin walls and slots are no longer left hollow. Walls too thin for even one wall loop
   get a gap-fill line too. Models without such spaces slice exactly as before.
-
+  (57e1f7b)
 - Avoid crossing walls (gap plan task M1.6), in Advanced, off by default. A travel that
   would leave the part and come back (across a slot, a bay or a hole) goes round along
   the inside of the outer wall instead, and isn't retracted. Travels that must leave
   the part, or whose detour is over twice as long, are made as before. On the ORBIT
-  fixture this cuts retractions by 63 %. With it off, the G-code is unchanged.
-
+  fixture this cuts retractions by 63 %. With it off, the G-code is unchanged. (a4c19c5)
 - Calibration settings (gap plan task M1.7): a flow ratio per filament (in
   "Temperatures and cooling"), and in Advanced, infill/wall overlap, elephant-foot
   compensation (first layer drawn in, not with a raft) and hole compensation (holes made
   larger). They are saved in projects, and at their defaults the G-code is unchanged.
-
+  (f30b66f)
 - A bridge and overhang test part, `assets/models/bridge-overhang-test.stl` (made for
   PrintCraft, described in the .txt beside it): bridges of 10-40 mm over pillars, and
   overhang wedges at 30-70 degrees with a flat shelf on top. For checking M1 on a printer.
   `bridge-overhang-test.printcraft` beside it is a ready-to-run project with the test's
-  settings (supports off, avoid crossing walls on, Ender-3 V3 KE preset).
+  settings (supports off, avoid crossing walls on, Ender-3 V3 KE preset, retraction
+  raised to 1.2 mm after the first test print strung between the pieces).
+  (5c26315, 59bab3e, 8f1b7e5, c4af139)
+- `docs/PCGAP.md`, a gap analysis against PrusaSlicer and Simplify3D, and
+  `docs/PCGAPPLAN.md`, a plan of milestones M1-M7 to close the gaps; M1 (print quality)
+  is done. (f0d277f, 8b5a28c)
 
 ### Changed
 
@@ -61,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   speeds (new `motion.rs`) instead of adding a flat 15 %. With default settings the
   G-code is unchanged except the "; estimated time" comment (for example a 20 mm cube:
   19.9 min before, 19.7 min now; a 12 mm cylinder: 17.3 min before, 16.3 min now).
+  (3368c7e)
 
 ### Fixed
 
@@ -68,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   corners, from outline points in the middle of a straight edge. Those points are now
   dropped before offsetting: the same shapes with fewer points per loop. Seams can move
   slightly. (c321fa2)
+- Clippy's field_reassign_with_default warnings in the device page tests. (bbf5215)
 
 ## [0.0.5] - 2026-11-18
 
@@ -317,7 +323,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects (`.printcraft`) that save the plate, settings and printer.
 - Command-line slicing (`printcraft --slice`).
 
-[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/thawkins/PrintCraft/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/thawkins/PrintCraft/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/thawkins/PrintCraft/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/thawkins/PrintCraft/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/thawkins/PrintCraft/compare/v0.0.2...v0.0.3
