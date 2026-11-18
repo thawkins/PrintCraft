@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Separate X, Y and Z scale (gap plan task M3.2). On the Objects tab, unticking Lock
+  beside Scale shows a field per axis; with Lock ticked (the default) the slider scales
+  all three together, keeping their proportions. The axes are the model's own, before
+  it is turned, so turning a stretched part keeps its shape. Projects save the three
+  figures; older projects load their one figure on every axis, and new files still write
+  it for older versions.
 - Undo and redo (gap plan task M3.1): an Edit menu beside File, Ctrl+Z, and Ctrl+Y or
   Ctrl+Shift+Z. Every change to the plate (adding, deleting, moving, turning, scaling,
   arranging parts) and to the settings, printer, filament, two-nozzle choices and

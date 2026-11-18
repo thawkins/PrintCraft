@@ -108,7 +108,7 @@ struct GizmoDrag {
     start_plate: Vec3,
     start_x: f32,
     start_y: f32,
-    start_scale: f32,
+    start_scale: Vec3,
     start_rotation: Vec3,
     /// The box centre on screen when the drag began.
     center: egui::Pos2,
@@ -148,6 +148,8 @@ pub struct PrintCraftApp {
     /// Two-nozzle printers: colour the preview by nozzle instead of by path type.
     /// What the preview colours paths by.
     preview_colour: PreviewColour,
+    /// The selected part's scale: X, Y and Z together (true) or each on its own.
+    scale_lock: bool,
     status: String,
     screenshot: Option<ScreenshotTask>,
     device: DevicePage,
@@ -269,6 +271,7 @@ impl PrintCraftApp {
             layer: 0,
             hidden_kinds: Vec::new(),
             preview_colour: PreviewColour::Type,
+            scale_lock: true,
             status: "Open a model (STL, OBJ or 3MF) or add a shape to start.".into(),
             screenshot: start.screenshot.clone().map(|path| ScreenshotTask {
                 path,
@@ -454,12 +457,12 @@ impl PrintCraftApp {
         );
         for o in &self.objects {
             s += &format!(
-                "|{}:{}:{}:{:?}:{}:{}:{}",
+                "|{}:{}:{}:{:?}:{:?}:{}:{}",
                 o.name,
                 o.x,
                 o.y,
                 o.rotation,
-                o.scale_percent,
+                o.scale,
                 o.mesh.triangles.len(),
                 o.extruder
             );
@@ -918,7 +921,7 @@ impl PrintCraftApp {
                         });
                 });
             }
-            changed |= object_placement_grid(ui, o, ox, oy);
+            changed |= object_placement_grid(ui, o, ox, oy, &mut self.scale_lock);
             let (edited, clicked) = object_buttons(ui, o);
             changed |= edited;
             action = clicked;
@@ -1227,7 +1230,14 @@ impl PrintCraftApp {
             }
             Handle::ScaleCorner(_) => {
                 let ratio = gizmo::scale_ratio(g.center, g.start_pointer, at);
-                o.scale_percent = (g.start_scale * ratio).clamp(1.0, 2000.0).round();
+                // The corner handle scales evenly: every axis by the same ratio, so the
+                // part keeps its proportions.
+                let axis = |s: f32| (s * ratio).clamp(1.0, 2000.0).round();
+                o.scale = Vec3::new(
+                    axis(g.start_scale.x),
+                    axis(g.start_scale.y),
+                    axis(g.start_scale.z),
+                );
             }
             Handle::RotateX | Handle::RotateY | Handle::RotateZ => {
                 let turn = gizmo::ring_turn(
@@ -1432,7 +1442,7 @@ impl PrintCraftApp {
                 start_plate: self.camera.plate_point(at, rect).unwrap_or_default(),
                 start_x: o.x,
                 start_y: o.y,
-                start_scale: o.scale_percent,
+                start_scale: o.scale,
                 start_rotation: o.rotation,
                 center,
                 start_angle: gizmo::screen_angle(center, at),
@@ -1915,7 +1925,13 @@ fn prepare_view_hint(ui: &Ui, rect: egui::Rect) {
 
 /// Position (shown from the plate's corner; `ox`/`oy` is the plate's centre), rotation
 /// and scale of one object. Returns whether anything changed.
-fn object_placement_grid(ui: &mut Ui, o: &mut PlacedObject, ox: f32, oy: f32) -> bool {
+fn object_placement_grid(
+    ui: &mut Ui,
+    o: &mut PlacedObject,
+    ox: f32,
+    oy: f32,
+    scale_lock: &mut bool,
+) -> bool {
     let mut changed = false;
     settings_grid(ui, "object_grid", |ui| {
         let (mut px, mut py) = (o.x + ox, o.y + oy);
@@ -1946,15 +1962,45 @@ fn object_placement_grid(ui: &mut Ui, o: &mut PlacedObject, ox: f32, oy: f32) ->
                 .changed();
             ui.end_row();
         }
+        // Locked: one slider scaling all three axes together (in proportion, if they
+        // differ). Unlocked: a field per axis, along the model's own axes.
         ui.label("Scale");
-        changed |= ui
-            .add(
-                egui::Slider::new(&mut o.scale_percent, 10.0..=500.0)
+        ui.horizontal(|ui| {
+            if *scale_lock {
+                let mut s = o.scale.x;
+                let slider = egui::Slider::new(&mut s, 10.0..=500.0)
                     .suffix(" %")
-                    .logarithmic(true),
-            )
-            .changed();
+                    .logarithmic(true);
+                if ui.add(slider).changed() {
+                    let ratio = s / o.scale.x.max(0.01);
+                    let axis = |v: f32| (v * ratio).clamp(1.0, 2000.0);
+                    o.scale = Vec3::new(s, axis(o.scale.y), axis(o.scale.z));
+                    changed = true;
+                }
+            }
+            ui.checkbox(scale_lock, "Lock")
+                .on_hover_text("Scale X, Y and Z together. Untick to set each axis on its own");
+        });
         ui.end_row();
+        if !*scale_lock {
+            for (label, v) in [
+                ("Scale X", &mut o.scale.x),
+                ("Scale Y", &mut o.scale.y),
+                ("Scale Z", &mut o.scale.z),
+            ] {
+                ui.label(label)
+                    .on_hover_text("Along the model's own axis, before it is turned");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(v)
+                            .speed(1.0)
+                            .range(1.0..=2000.0)
+                            .suffix(" %"),
+                    )
+                    .changed();
+                ui.end_row();
+            }
+        }
     });
     changed
 }
@@ -1986,7 +2032,7 @@ fn object_buttons(ui: &mut Ui, o: &mut PlacedObject) -> (bool, Option<ObjectActi
             .clicked()
         {
             o.rotation = Vec3::default();
-            o.scale_percent = 100.0;
+            o.scale = Vec3::new(100.0, 100.0, 100.0);
             changed = true;
         }
     });

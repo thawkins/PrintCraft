@@ -275,8 +275,9 @@ pub struct PlacedObject {
     pub y: f32,
     /// Rotation around each axis, in degrees.
     pub rotation: Vec3,
-    /// Uniform scale, in percent.
-    pub scale_percent: f32,
+    /// Scale along the model's own X, Y and Z (before it is turned), in percent. Equal
+    /// on all three unless the person unlocks them.
+    pub scale: Vec3,
     /// The nozzle that prints this part on a two-nozzle printer (0 = right, 1 = left). New
     /// parts get the printer's primary nozzle. Ignored on a one-nozzle printer.
     pub extruder: u8,
@@ -290,7 +291,7 @@ impl PlacedObject {
             x: 0.0,
             y: 0.0,
             rotation: Vec3::default(),
-            scale_percent: 100.0,
+            scale: Vec3::new(100.0, 100.0, 100.0),
             extruder: crate::profiles::PRIMARY_TOOL,
         }
     }
@@ -306,12 +307,12 @@ impl PlacedObject {
 
     /// Triangles in plate coordinates; the object always rests on the plate (z = 0).
     pub fn world_triangles(&self) -> Vec<Triangle> {
-        let s = self.scale_percent / 100.0;
+        let s = self.scale * 0.01;
         let mut tris: Vec<Triangle> = self
             .mesh
             .triangles
             .iter()
-            .map(|t| t.map(|v| self.rotate(v * s)))
+            .map(|t| t.map(|v| self.rotate(Vec3::new(v.x * s.x, v.y * s.y, v.z * s.z))))
             .collect();
         let b = Bounds::of(tris.iter().flatten().copied());
         if b.is_valid() {
@@ -533,6 +534,27 @@ mod tests {
         assert!((r - Vec3::new(30.0, 0.0, 0.0)).length() < 1e-4, "{r:?}");
         let r = rotation_turned_about(Vec3::default(), 1, -45.0);
         assert!((r - Vec3::new(0.0, -45.0, 0.0)).length() < 1e-4, "{r:?}");
+    }
+
+    #[test]
+    fn test_scale_per_axis_stretches_along_the_models_own_axes() {
+        let mut o = PlacedObject::new("c", Mesh::cube(Vec3::new(10.0, 10.0, 10.0)));
+        o.scale = Vec3::new(200.0, 100.0, 100.0);
+        let size = o.world_bounds().size();
+        assert!(
+            (size.x - 20.0).abs() < 1e-3 && (size.y - 10.0).abs() < 1e-3,
+            "{size:?}"
+        );
+        assert!((size.z - 10.0).abs() < 1e-3);
+        // Stretched along its own X, then turned a quarter turn: long along the plate's Y.
+        o.rotation = Vec3::new(0.0, 0.0, 90.0);
+        let size = o.world_bounds().size();
+        assert!(
+            (size.x - 10.0).abs() < 1e-3 && (size.y - 20.0).abs() < 1e-3,
+            "{size:?}"
+        );
+        // Still resting on the plate.
+        assert!(o.world_bounds().min.z.abs() < 1e-4);
     }
 
     #[test]

@@ -72,7 +72,9 @@ pub fn to_json(p: &Project) -> String {
                 "x": o.x,
                 "y": o.y,
                 "rotation": [o.rotation.x, o.rotation.y, o.rotation.z],
-                "scale_percent": o.scale_percent,
+                "scale": [o.scale.x, o.scale.y, o.scale.z],
+                // For versions before per-axis scale, which read one figure.
+                "scale_percent": o.scale.x,
                 "extruder": o.extruder,
                 "triangles": o.mesh.triangles.len(),
                 "mesh": crate::codec::base64(&mesh_bytes(&o.mesh.triangles)),
@@ -303,7 +305,18 @@ fn project_from(v: &Value) -> Result<Project, String> {
             let c = |k: usize| r.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
             obj.rotation = Vec3::new(c(0), c(1), c(2));
         }
-        obj.scale_percent = num(o, "scale_percent", 100.0).clamp(1.0, 10_000.0);
+        // Per-axis scale; a file from before it has one figure for all three.
+        let uniform = num(o, "scale_percent", 100.0);
+        let axis = |k: usize| {
+            o.get("scale")
+                .and_then(|s| s.as_array())
+                .and_then(|s| s.get(k))
+                .and_then(|x| x.as_f64())
+                .map(|x| x as f32)
+                .unwrap_or(uniform)
+                .clamp(1.0, 10_000.0)
+        };
+        obj.scale = Vec3::new(axis(0), axis(1), axis(2));
         obj.extruder = num(o, "extruder", printer.primary_nozzle as f32).clamp(0.0, 1.0) as u8;
         objects.push(obj);
     }
@@ -481,7 +494,7 @@ mod tests {
         cube.x = 30.0;
         cube.y = -12.5;
         cube.rotation = Vec3::new(0.0, 0.0, 45.0);
-        cube.scale_percent = 150.0;
+        cube.scale = Vec3::new(150.0, 80.0, 120.0);
         cube.extruder = 1;
         let tube = PlacedObject::new("tube", SampleShape::Tube.mesh());
         let mut printer = Printer::presets()
@@ -570,8 +583,8 @@ mod tests {
         assert_eq!(back.objects.len(), 2);
         let (a, b) = (&back.objects[0], &p.objects[0]);
         assert_eq!(
-            (a.name.as_str(), a.x, a.y, a.rotation, a.scale_percent),
-            (b.name.as_str(), b.x, b.y, b.rotation, b.scale_percent)
+            (a.name.as_str(), a.x, a.y, a.rotation, a.scale),
+            (b.name.as_str(), b.x, b.y, b.rotation, b.scale)
         );
         assert_eq!(
             a.mesh.triangles, b.mesh.triangles,
@@ -815,6 +828,23 @@ mod tests {
             Some(*limits::ACCELERATION.end())
         );
         assert_eq!(s.adhesion, d.adhesion);
+    }
+
+    #[test]
+    fn test_project_old_uniform_scale_loads_on_every_axis() {
+        let mut p = sample();
+        p.objects.truncate(1);
+        let text = to_json(&p);
+        // A project from before per-axis scale: only "scale_percent".
+        let mut v: Value = serde_json::from_str(&text).unwrap();
+        let o = v["objects"][0].as_object_mut().unwrap();
+        o.remove("scale");
+        o.insert("scale_percent".into(), json!(150.0));
+        let back = from_json(&v.to_string()).unwrap();
+        assert_eq!(back.objects[0].scale, Vec3::new(150.0, 150.0, 150.0));
+        // New files still say scale_percent for older versions (the X scale).
+        let saved: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(saved["objects"][0]["scale_percent"], json!(150.0));
     }
 
     #[test]
