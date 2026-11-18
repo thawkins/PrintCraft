@@ -1864,43 +1864,48 @@ impl<'a> Writer<'a> {
         if fuzzy {
             pts = resample(&pts, FUZZY_TOP_STEP_MM);
         }
+        let arcs = s.arc_fitting && !self.printer.x3g && !climb && !fuzzy;
         let total_len = path_length(&pts, false).max(1e-6);
         let mut done_len = 0.0;
         let mut first = true;
-        for (wi, w) in pts.windows(2).enumerate() {
-            let len = w[0].distance(w[1]);
-            if len < 1e-4 {
-                continue;
+        if arcs {
+            self.extrude_moves(layer, style, &pts, flow, speed);
+        } else {
+            for (wi, w) in pts.windows(2).enumerate() {
+                let len = w[0].distance(w[1]);
+                if len < 1e-4 {
+                    continue;
+                }
+                done_len += len;
+                let de = filament_for(len, style.width, layer.height, self.filament_now().diameter)
+                    * flow;
+                let e = self.ext.extrude(de);
+                self.by_tool[self.tool as usize] += de as f64;
+                let z = if climb {
+                    format!(
+                        " Z{:.3}",
+                        layer.z - layer.height + layer.height * done_len / total_len
+                    )
+                } else if fuzzy {
+                    let lift = fuzzy_unit(style.li, style.pi, wi) * s.fuzzy_top_mm;
+                    format!(" Z{:.3}", layer.z + lift)
+                } else {
+                    String::new()
+                };
+                let feed = if first {
+                    format!(" F{:.0}", speed * 60.0)
+                } else {
+                    String::new()
+                };
+                first = false;
+                let _ = writeln!(
+                    self.g,
+                    "G1 X{:.3} Y{:.3}{z} E{:.5}{feed}",
+                    w[1].x + self.ox,
+                    w[1].y + self.oy,
+                    e
+                );
             }
-            done_len += len;
-            let de =
-                filament_for(len, style.width, layer.height, self.filament_now().diameter) * flow;
-            let e = self.ext.extrude(de);
-            self.by_tool[self.tool as usize] += de as f64;
-            let z = if climb {
-                format!(
-                    " Z{:.3}",
-                    layer.z - layer.height + layer.height * done_len / total_len
-                )
-            } else if fuzzy {
-                let lift = fuzzy_unit(style.li, style.pi, wi) * s.fuzzy_top_mm;
-                format!(" Z{:.3}", layer.z + lift)
-            } else {
-                String::new()
-            };
-            let feed = if first {
-                format!(" F{:.0}", speed * 60.0)
-            } else {
-                String::new()
-            };
-            first = false;
-            let _ = writeln!(
-                self.g,
-                "G1 X{:.3} Y{:.3}{z} E{:.5}{feed}",
-                w[1].x + self.ox,
-                w[1].y + self.oy,
-                e
-            );
         }
         if fuzzy {
             // Back to the layer height before anything else moves.
@@ -1908,6 +1913,51 @@ impl<'a> Writer<'a> {
         }
         self.pos = *pts.last().unwrap();
         self.last_path = pts;
+    }
+
+    /// The extrusion of `pts` with runs that lie on a circle written as G2/G3 arcs (see
+    /// `arcs`), at `speed` mm/s and `flow` times the normal amount of filament.
+    fn extrude_moves(
+        &mut self,
+        layer: &Layer,
+        style: &PathStyle,
+        pts: &[Point2],
+        flow: f32,
+        speed: f32,
+    ) {
+        let mut from = pts[0];
+        let mut first = true;
+        for m in crate::arcs::fit_arcs(pts) {
+            let len = m.length(from);
+            if len < 1e-4 {
+                continue;
+            }
+            let de =
+                filament_for(len, style.width, layer.height, self.filament_now().diameter) * flow;
+            let e = self.ext.extrude(de);
+            self.by_tool[self.tool as usize] += de as f64;
+            let feed = if first {
+                format!(" F{:.0}", speed * 60.0)
+            } else {
+                String::new()
+            };
+            first = false;
+            let to = m.end();
+            let (x, y) = (to.x + self.ox, to.y + self.oy);
+            let _ = match m {
+                crate::arcs::Move::Line(_) => {
+                    writeln!(self.g, "G1 X{x:.3} Y{y:.3} E{e:.5}{feed}")
+                }
+                crate::arcs::Move::Arc { centre, ccw, .. } => writeln!(
+                    self.g,
+                    "{} X{x:.3} Y{y:.3} I{:.3} J{:.3} E{e:.5}{feed}",
+                    if ccw { "G3" } else { "G2" },
+                    centre.x - from.x,
+                    centre.y - from.y
+                ),
+            };
+            from = to;
+        }
     }
 
     /// The end sequence (retract, lift, present the print, heaters and motors off), the
@@ -3568,5 +3618,81 @@ mod tests {
         let x3g = Printer::presets().into_iter().find(|p| p.x3g).unwrap();
         let text = generate_with_tools(&r, &x3g, filament, &on, &tools).text;
         assert!(!text.contains("EXCLUDE_OBJECT") && !text.contains("M486"));
+    }
+
+    #[test]
+    fn test_arc_fitting_writes_round_walls_as_arcs() {
+        let tris = PlacedObject::new("c", Mesh::cylinder(10.0, 10.0, 2.0, 64)).world_triangles();
+        let plain = PrintSettings::default();
+        let arcs = PrintSettings {
+            arc_fitting: true,
+            ..Default::default()
+        };
+        let r = crate::slicer::slice(&tris, &plain, 0.42, &|_| {});
+        let printer = &Printer::presets()[0];
+        let filament = &Filament::presets()[0];
+        let a = generate(&r, printer, filament, &plain);
+        let b = generate(&r, printer, filament, &arcs);
+        assert!(!a.text.contains("\nG2 ") && !a.text.contains("\nG3 "));
+        let arc_lines = b
+            .text
+            .lines()
+            .filter(|l| l.starts_with("G2 ") || l.starts_with("G3 "))
+            .count();
+        assert!(arc_lines > 10, "{arc_lines} arcs");
+        assert!(
+            b.text.len() < a.text.len() * 3 / 4,
+            "{} vs {}",
+            b.text.len(),
+            a.text.len()
+        );
+        // Each arc starts and ends on its circle (to within the file's 0.001 mm digits),
+        // as the firmware needs.
+        let word = |l: &str, k: char| -> Option<f32> {
+            l.split_whitespace()
+                .find_map(|w| w.strip_prefix(k).and_then(|v| v.parse().ok()))
+        };
+        let mut at = (0.0f32, 0.0f32);
+        for l in b.text.lines() {
+            let (Some(x), Some(y)) = (word(l, 'X'), word(l, 'Y')) else {
+                continue;
+            };
+            if l.starts_with("G2 ") || l.starts_with("G3 ") {
+                let (i, j) = (word(l, 'I').unwrap(), word(l, 'J').unwrap());
+                let c = (at.0 + i, at.1 + j);
+                let r0 = (i * i + j * j).sqrt();
+                let r1 = ((x - c.0).powi(2) + (y - c.1).powi(2)).sqrt();
+                assert!((r0 - r1).abs() < 0.01, "{l}: radius {r0} then {r1}");
+                assert!(l.contains(" E"), "{l}");
+            }
+            if l.starts_with("G0 ")
+                || l.starts_with("G1 ")
+                || l.starts_with("G2 ")
+                || l.starts_with("G3 ")
+            {
+                at = (x, y);
+            }
+        }
+        // The same time and filament, within 2 % and 1 %.
+        let dt = (b.estimate.seconds / a.estimate.seconds - 1.0).abs();
+        assert!(
+            dt < 0.02,
+            "time {} vs {}",
+            b.estimate.seconds,
+            a.estimate.seconds
+        );
+        let dg = (b.estimate.grams / a.estimate.grams - 1.0).abs();
+        assert!(
+            dg < 0.01,
+            "grams {} vs {}",
+            b.estimate.grams,
+            a.estimate.grams
+        );
+        // No arcs in files for X3G printers, whose firmware has none.
+        let x3g = Printer::presets().into_iter().find(|p| p.x3g).unwrap();
+        let text = generate(&r, &x3g, filament, &arcs).text;
+        assert!(!text
+            .lines()
+            .any(|l| l.starts_with("G2 ") || l.starts_with("G3 ")));
     }
 }

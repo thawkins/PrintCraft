@@ -107,6 +107,7 @@ a project file fall back to defaults, so older and newer files still open.
 | 3D layer preview with a slider, colour by feature type | Yes (ironing is now its own colour) |
 | Time, filament, weight and cost estimates | Yes |
 | Plain G-code export | Yes |
+| Arc moves (G2/G3) | **Yes (new)**, off by default: "Arc fitting" under Special mode (Advanced). Round walls become arcs within 0.01 mm of the sliced points; the ORBIT file shrinks from 23.2 MB to 13.0 MB with the same time and filament. Klipper needs `[gcode_arcs]`. Not used for X3G. |
 | Object labels in the G-code | **Yes (new)**, off by default: "Label objects" under Special mode (Advanced). Klipper gets `EXCLUDE_OBJECT_DEFINE` with each object's outline and `EXCLUDE_OBJECT_START`/`END` around it on every layer; Marlin and Prusa firmware get M486. Not written into X3G files. |
 | Binary G-code (.bgcode) | Not yet (PrusaLink accepts plain G-code) |
 | Printer profiles | **More (new)**: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool) and Creality Ender-3 V3 KE, plus four generic sizes |

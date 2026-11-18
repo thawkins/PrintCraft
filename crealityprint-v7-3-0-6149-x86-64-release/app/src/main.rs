@@ -10,6 +10,7 @@
 //! `printcraft --help` lists every option (preview, printer connection and more).
 
 mod app;
+mod arcs;
 mod codec;
 mod contour;
 mod cut;
@@ -93,6 +94,7 @@ Slicing options:
   --fuzzy                         fuzzy skin on outer walls
   --variable-walls                variable-width walls for thin parts (experimental)
   --label-objects                 name each object in the G-code (EXCLUDE_OBJECT / M486)
+  --arc-fitting                   write round walls as G2/G3 arcs (not for X3G)
   --fuzzy-top                     textured top surface (random lift up to 0.1 mm)
 
 Models can be STL, OBJ or 3MF files.
@@ -123,6 +125,7 @@ struct Args {
     fuzzy: bool,
     variable_walls: bool,
     label_objects: bool,
+    arc_fitting: bool,
     fuzzy_top: bool,
     infill_pattern: Option<String>,
     seam: Option<String>,
@@ -180,6 +183,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--fuzzy" => a.fuzzy = true,
             "--variable-walls" => a.variable_walls = true,
             "--label-objects" => a.label_objects = true,
+            "--arc-fitting" => a.arc_fitting = true,
             "--fuzzy-top" => a.fuzzy_top = true,
             "--infill-pattern" => a.infill_pattern = Some(value("--infill-pattern")?),
             "--seam" => a.seam = Some(value("--seam")?),
@@ -326,6 +330,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
     settings.fuzzy_skin = args.fuzzy;
     settings.variable_walls = args.variable_walls;
     settings.label_objects = args.label_objects;
+    settings.arc_fitting = args.arc_fitting;
     settings.fuzzy_top = args.fuzzy_top;
     if let Some(p) = &args.infill_pattern {
         match profiles::InfillPattern::ALL

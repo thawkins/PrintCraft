@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Arc fitting (gap plan task M6.2). With Advanced on, "Arc fitting" under Special mode
+  (off by default, so files are unchanged) writes runs of short lines that lie on a
+  circle as G2/G3 arcs: every point within 0.01 mm of the arc, every segment's middle
+  within 0.05 mm. Round parts print smoother and files get smaller (ORBIT: 23.2 MB to
+  13.0 MB) with the same time and filament estimate. Not used for X3G printers, the
+  spiral vase wall or fuzzy top. Klipper needs `[gcode_arcs]` in its config. The
+  command line has `--arc-fitting`.
+
 - Object labels (gap plan task M6.1). With Advanced on, "Label objects" under Special
   mode (off by default, so files are unchanged) names each object in the G-code: Klipper
   gets `EXCLUDE_OBJECT_DEFINE` lines with each object's centre and outline, and

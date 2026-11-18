@@ -513,6 +513,13 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
 * **Layer count.** The header has `;LAYER_COUNT:N` and `; total layer number: N`. Files sent
   to Klipper printers also get `SET_PRINT_STATS_INFO TOTAL_LAYER=N` / `CURRENT_LAYER=k`
   (src/printer/layer_info.rs).
+* **Arc fitting** (src/arcs.rs; "Arc fitting", off by default). A run of at least 3
+  segments becomes one G2 (clockwise) or G3 (counter-clockwise) arc when every point is
+  within 0.01 mm of the circle through its first, middle and last points, every
+  segment's middle is within 0.05 mm of it, the radius is 0.5-500 mm, and it turns one
+  way by at most 1.9 pi. Runs grow greedily from each point. I and J are the centre
+  relative to the start. E follows the arc's length; the time estimate still uses the
+  lines. Not used for X3G, spiral vase walls or fuzzy top. Decided 2026-11-19.
 
 ## Controls (src/app.rs, src/view3d.rs)
 
@@ -538,6 +545,6 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
 
 * Multi-colour and multi-material printing, painting supports or seams, and per-object
   settings.
-* Tree supports, adaptive layers, arc moves, Arachne walls, more infill patterns, and cloud
+* Tree supports, adaptive layers, Arachne walls, more infill patterns, and cloud
   services. See FEATURES.md for the full comparison with PrusaSlicer.
 * STEP/AMF import and binary G-code.

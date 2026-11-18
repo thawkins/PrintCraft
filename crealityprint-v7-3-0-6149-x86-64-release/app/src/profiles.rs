@@ -520,6 +520,8 @@ pub struct PrintSettings {
     /// Name each object in the G-code (Klipper `EXCLUDE_OBJECT`, M486 elsewhere), so one
     /// object can be cancelled while the others go on printing.
     pub label_objects: bool,
+    /// Write runs of short segments that lie on a circle as G2/G3 arcs (not for X3G).
+    pub arc_fitting: bool,
 }
 
 /// Infill reaches 15 % of a line width into the innermost wall, to bond to it.
@@ -765,6 +767,7 @@ impl Quality {
             solid_pattern: SolidPattern::Lines,
             variable_walls: false,
             label_objects: false,
+            arc_fitting: false,
         };
         match self {
             Self::Fine => PrintSettings {

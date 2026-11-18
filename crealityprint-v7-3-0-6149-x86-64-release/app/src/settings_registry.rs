@@ -1026,6 +1026,24 @@ fn build() -> Vec<Setting> {
                 )
             },
         ),
+        hinted(
+            r!(
+                "arc_fitting",
+                "Arc fitting",
+                G::SpecialMode,
+                A,
+                Kind::Flag,
+                Flag,
+                arc_fitting
+            ),
+            |_| {
+                Some(
+                    "Write round walls as G2/G3 arcs instead of many short lines: smoother \
+                     curves and smaller files (Klipper needs [gcode_arcs] in its config; \
+                     never used for X3G)",
+                )
+            },
+        ),
     ]
 }
 
@@ -1102,6 +1120,7 @@ mod tests {
             solid_pattern: SolidPattern::Concentric,
             variable_walls: true,
             label_objects: true,
+            arc_fitting: true,
         }
     }
 
