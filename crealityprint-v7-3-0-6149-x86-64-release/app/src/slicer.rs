@@ -458,7 +458,7 @@ pub fn slice_modified(
                 paths.extend(sparse_infill_paths(
                     &region,
                     &skip,
-                    i,
+                    (i, z - h / 2.0),
                     line_width,
                     settings.infill_percent,
                     settings.infill_pattern,
@@ -481,7 +481,13 @@ pub fn slice_modified(
                     paths.extend(order_open_paths(lines, from));
                 } else if percent > 0.5 {
                     paths.extend(sparse_infill_paths(
-                        &region, &skip, i, line_width, percent, pattern, from,
+                        &region,
+                        &skip,
+                        (i, z - h / 2.0),
+                        line_width,
+                        percent,
+                        pattern,
+                        from,
                     ));
                 }
             }
@@ -972,7 +978,7 @@ fn solid_infill_paths(
 fn sparse_infill_paths(
     region: &[Polygon],
     skip: &dyn Fn(Point2) -> bool,
-    layer: usize,
+    (layer, z): (usize, f32),
     line_width: f32,
     percent: f32,
     pattern: InfillPattern,
@@ -980,6 +986,26 @@ fn sparse_infill_paths(
 ) -> Vec<ToolPath> {
     let mut paths: Vec<ToolPath> = Vec::new();
     let base = line_width * 100.0 / percent.min(100.0);
+    if pattern == InfillPattern::Gyroid {
+        let area = crate::gyroid::AreaTest::new(region);
+        let inside = |p: Point2| area.contains(p) && !skip(p);
+        let (mut lo, mut hi) = (
+            Point2::new(f32::MAX, f32::MAX),
+            Point2::new(f32::MIN, f32::MIN),
+        );
+        for p in region.iter().flatten() {
+            (lo.x, lo.y) = (lo.x.min(p.x), lo.y.min(p.y));
+            (hi.x, hi.y) = (hi.x.max(p.x), hi.y.max(p.y));
+        }
+        if lo.x > hi.x {
+            return paths;
+        }
+        let set: Vec<ToolPath> = crate::gyroid::gyroid_lines(lo, hi, base, z, line_width, &inside)
+            .into_iter()
+            .map(|l| open_path(PathKind::SparseInfill, l))
+            .collect();
+        return order_open_paths(set, from);
+    }
     let (angles, spacing) = infill_angles(pattern, layer, base);
     // Each direction is ordered on its own, so one set of lines is laid before the next
     // crosses it, starting where the previous set ended.
@@ -1117,6 +1143,8 @@ pub fn infill_angles(pattern: InfillPattern, layer: usize, base: f32) -> (Vec<f3
         InfillPattern::Lines => (vec![if layer % 2 == 0 { 45.0 } else { 135.0 }], base),
         InfillPattern::Grid => (vec![45.0, 135.0], base * 2.0),
         InfillPattern::Triangles => (vec![0.0, 60.0, 120.0], base * 3.0),
+        // Not straight lines: traced by `gyroid`, at the base spacing.
+        InfillPattern::Gyroid => (Vec::new(), base),
     }
 }
 
@@ -2461,6 +2489,32 @@ mod tests {
             .paths
             .iter()
             .any(|p| p.kind == PathKind::InnerWall));
+    }
+
+    #[test]
+    fn test_gyroid_infill_waves_inside_the_walls_and_changes_with_height() {
+        let tris = block_at(20.0, 10.0, 0.0);
+        let s = PrintSettings {
+            infill_pattern: InfillPattern::Gyroid,
+            ..PrintSettings::default()
+        };
+        let r = slice(&tris, &s, 0.42, &|_| {});
+        let infill = |i: usize| -> Vec<&ToolPath> {
+            r.layers[i]
+                .paths
+                .iter()
+                .filter(|p| p.kind == PathKind::SparseInfill)
+                .collect()
+        };
+        let (a, b) = (infill(20), infill(23));
+        assert!(!a.is_empty() && !b.is_empty());
+        // Curves (many points per line), inside the cube's walls (10 mm half-width).
+        assert!(a.iter().any(|p| p.points.len() > 10));
+        assert!(a
+            .iter()
+            .flat_map(|p| &p.points)
+            .all(|q| q.x.abs() < 10.0 && q.y.abs() < 10.0));
+        assert_ne!(format!("{a:?}"), format!("{b:?}"));
     }
 
     #[test]

@@ -264,6 +264,15 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     are worked out once from the whole plate and given to every slice of a plate with
     per-part settings, so their layers line up.
 
+22. **Gyroid infill** (`src/gyroid.rs`, gap plan M5.1). The lines are where
+    sin X cos Y + sin Y cos Z + sin Z cos X = 0 at the layer's middle height, with a
+    period of 2.41 line spacings (spacing = line width x 100 / density). They are
+    traced by marching squares, 12 samples per period, over the infill area's box
+    (saddle squares decided by the square's average), joined into curves through the
+    edge points they share, and cut where they leave the infill area or enter a solid
+    or modifier part, each cut placed by 10 halvings. Pieces shorter than a line width
+    are dropped. The inside test files the area's edges in 1 mm bands of height.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

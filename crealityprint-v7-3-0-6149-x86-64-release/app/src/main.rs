@@ -19,6 +19,7 @@ mod gcode;
 mod gcode_template;
 mod geometry;
 mod gizmo;
+mod gyroid;
 mod heat;
 mod history;
 mod layer_events;
@@ -79,7 +80,7 @@ Slicing options:
   --no-support-raft               no raft under supports
   --brim                          print a brim instead of a skirt
   --raft                          print the model on a raft
-  --infill-pattern lines|grid|triangles
+  --infill-pattern lines|grid|triangles|gyroid
   --seam aligned|nearest|rear|random
   --ironing                       smooth top surfaces with an ironing pass
   --vase                          spiral vase mode
@@ -311,7 +312,8 @@ fn slice_without_window(args: &Args) -> ExitCode {
             Some(x) => settings.infill_pattern = *x,
             None => {
                 eprintln!(
-                    "printcraft: unknown infill pattern \"{p}\" (use lines, grid or triangles)"
+                    "printcraft: unknown infill pattern \"{p}\" (use lines, grid, triangles or \
+                     gyroid)"
                 );
                 return ExitCode::from(2);
             }

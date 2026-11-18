@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Gyroid infill (gap plan task M5.1). Infill pattern now offers Gyroid: waving lines
+  that follow a gyroid surface, turning from layer to layer, about equally strong in
+  every direction with no crossings within a layer. Its lines are as long, for the
+  same density, as Grid's. On the command line, `--infill-pattern gyroid`.
+
 ## [0.0.9] - 2026-11-18
 
 ### Added

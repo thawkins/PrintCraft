@@ -312,16 +312,20 @@ pub enum InfillPattern {
     Grid,
     /// Three sets of lines 60° apart: stiff in every direction.
     Triangles,
+    /// Waving lines that follow a gyroid surface, changing from layer to layer: about
+    /// equally strong in every direction, with no crossings within a layer.
+    Gyroid,
 }
 
 impl InfillPattern {
-    pub const ALL: [InfillPattern; 3] = [Self::Lines, Self::Grid, Self::Triangles];
+    pub const ALL: [InfillPattern; 4] = [Self::Lines, Self::Grid, Self::Triangles, Self::Gyroid];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Lines => "Lines",
             Self::Grid => "Grid",
             Self::Triangles => "Triangles",
+            Self::Gyroid => "Gyroid",
         }
     }
 }

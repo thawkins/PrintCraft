@@ -1021,7 +1021,10 @@ mod tests {
             other => panic!("{key} is {other:?}"),
         };
         assert_eq!(labels("seam"), ["Aligned", "Nearest", "Rear", "Random"]);
-        assert_eq!(labels("infill_pattern"), ["Lines", "Grid", "Triangles"]);
+        assert_eq!(
+            labels("infill_pattern"),
+            ["Lines", "Grid", "Triangles", "Gyroid"]
+        );
         assert_eq!(labels("adhesion"), ["None", "Skirt", "Brim", "Raft"]);
     }
 
