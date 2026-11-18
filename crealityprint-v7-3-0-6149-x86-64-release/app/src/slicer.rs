@@ -887,6 +887,10 @@ fn orient_by_nesting(loops: Vec<Polygon>) -> Vec<Polygon> {
 /// Moves every edge of a loop `d` mm to its left (into the material). A negative `d`
 /// moves it outwards. Returns None when the loop would vanish or turn inside out.
 pub fn offset_left(poly: &[Point2], d: f32) -> Option<Polygon> {
+    // A point in the middle of a straight edge doesn't move along the edge when the loop
+    // shrinks, so near a corner it would end up beyond the shortened edge as a spike.
+    let corners = corners_only(poly);
+    let poly = &corners[..];
     let n = poly.len();
     if n < 3 {
         return None;
@@ -937,6 +941,39 @@ pub fn offset_left(poly: &[Point2], d: f32) -> Option<Polygon> {
         None
     } else {
         Some(out)
+    }
+}
+
+/// `poly` without repeated points and without points in the middle of a straight edge.
+fn corners_only(poly: &[Point2]) -> Polygon {
+    let mut out: Polygon = Vec::with_capacity(poly.len());
+    for &p in poly {
+        if out.last().is_none_or(|q| q.distance(p) > 1e-6) {
+            out.push(p);
+        }
+    }
+    while out.len() > 1 && out[0].distance(out[out.len() - 1]) <= 1e-6 {
+        out.pop();
+    }
+    loop {
+        let n = out.len();
+        if n < 4 {
+            return out;
+        }
+        let straight = (0..n).find(|&i| {
+            let (a, b, c) = (out[(i + n - 1) % n], out[i], out[(i + 1) % n]);
+            let (ux, uy) = (b.x - a.x, b.y - a.y);
+            let (vx, vy) = (c.x - b.x, c.y - b.y);
+            let cross = ux * vy - uy * vx;
+            let lens = (ux * ux + uy * uy).sqrt() * (vx * vx + vy * vy).sqrt();
+            ux * vx + uy * vy > 0.0 && cross.abs() <= 1e-5 * lens
+        });
+        match straight {
+            Some(i) => {
+                out.remove(i);
+            }
+            None => return out,
+        }
     }
 }
 
@@ -1591,6 +1628,19 @@ mod tests {
             Point2::new(0.0, 10.0),
         ];
         let o = offset_left(&sq, 1.0).unwrap();
+        // A point on an edge near a corner doesn't stick out once the loop has shrunk past
+        // it (it used to stay where it was along the edge).
+        let thin = vec![
+            Point2::new(-10.0, -0.5),
+            Point2::new(10.0, -0.5),
+            Point2::new(10.0, 0.45),
+            Point2::new(10.0, 0.5),
+            Point2::new(-10.0, 0.5),
+            Point2::new(-10.0, -0.45),
+        ];
+        let shrunk = offset_left(&thin, 0.4).unwrap();
+        assert_eq!(shrunk.len(), 4);
+        assert!(shrunk.iter().all(|p| p.y.abs() < 0.11), "{shrunk:?}");
         assert!((area(&o) - 64.0).abs() < 1e-3);
         assert!(offset_left(&sq, 6.0).is_none());
     }
