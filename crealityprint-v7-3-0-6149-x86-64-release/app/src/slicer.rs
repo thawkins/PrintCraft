@@ -3,7 +3,7 @@
 
 use crate::geometry::{Bounds, Point2, Vec3};
 use crate::model::Triangle;
-use crate::profiles::{Adhesion, InfillPattern, PrintSettings};
+use crate::profiles::{Adhesion, InfillPattern, PrintSettings, SolidPattern};
 use std::collections::HashMap;
 
 mod lightning;
@@ -488,9 +488,16 @@ pub fn slice_modified(
                 .zip(&not_bridged)
                 .map(|(e, n)| *e && *n)
                 .collect();
-            let solid = solid_infill_paths(&region, &grid, &solid_cells, &top, angle, line_width);
+            let area = SolidArea {
+                grid: &grid,
+                solid: &solid_cells,
+                top: &top,
+            };
+            let patterns = (settings.top_pattern, settings.solid_pattern);
             let from = last_point(&paths);
-            paths.extend(order_open_paths(solid, from));
+            paths.extend(solid_infill_paths(
+                &region, &area, angle, line_width, patterns, from,
+            ));
             let kept_off: Vec<bool> = exposed
                 .iter()
                 .zip(&not_bridged)
@@ -1012,32 +1019,222 @@ fn bridge_paths(
 
 /// Solid lines over the exposed (top/bottom) cells; the parts over `top` cells are
 /// marked as the visible top surface.
+/// The cells of a layer that are solid, and of those, the visible top surface.
+struct SolidArea<'a> {
+    grid: &'a Grid,
+    solid: &'a [bool],
+    top: &'a [bool],
+}
+
+/// The solid infill and top surface lines of a layer, in printing order from `from`:
+/// each filled with its pattern (`patterns`: the top's, then the other solid layers').
 fn solid_infill_paths(
     region: &[Polygon],
-    grid: &Grid,
-    exposed: &[bool],
-    top: &[bool],
+    area: &SolidArea,
     angle: f32,
     line_width: f32,
+    patterns: (SolidPattern, SolidPattern),
+    from: Option<Point2>,
 ) -> Vec<ToolPath> {
-    let mut paths = Vec::new();
-    for seg in scan_fill(region, line_width, angle) {
-        for piece in split_by(&seg, |p| exposed[grid.index_of(p)]) {
-            if !piece.1 {
-                continue;
+    let (grid, solid, top) = (area.grid, area.solid, area.top);
+    if patterns == (SolidPattern::Lines, SolidPattern::Lines) {
+        let mut paths = Vec::new();
+        for seg in scan_fill(region, line_width, angle) {
+            for piece in split_by(&seg, |p| solid[grid.index_of(p)]) {
+                if !piece.1 {
+                    continue;
+                }
+                let line = [piece.0[0], piece.0[1]];
+                for part in split_by(&line, |p| top[grid.index_of(p)]) {
+                    let kind = if part.1 {
+                        PathKind::TopSurface
+                    } else {
+                        PathKind::SolidInfill
+                    };
+                    paths.push(open_path(kind, part.0));
+                }
             }
-            let solid = [piece.0[0], piece.0[1]];
-            for part in split_by(&solid, |p| top[grid.index_of(p)]) {
-                let kind = if part.1 {
-                    PathKind::TopSurface
-                } else {
-                    PathKind::SolidInfill
-                };
-                paths.push(open_path(kind, part.0));
+        }
+        return order_open_paths(paths, from);
+    }
+    let mut out: Vec<ToolPath> = Vec::new();
+    let kinds = [
+        (false, patterns.1, PathKind::SolidInfill),
+        (true, patterns.0, PathKind::TopSurface),
+    ];
+    for (is_top, pattern, kind) in kinds {
+        let keep = |p: Point2| {
+            let c = grid.index_of(p);
+            solid[c] && top[c] == is_top
+        };
+        let lines = || -> Vec<ToolPath> {
+            scan_fill(region, line_width, angle)
+                .iter()
+                .flat_map(|seg| split_by(seg, keep))
+                .filter(|piece| piece.1)
+                .map(|piece| open_path(kind, piece.0))
+                .collect()
+        };
+        let from = last_point(&out).or(from);
+        let set = match pattern {
+            SolidPattern::Lines => order_open_paths(lines(), from),
+            // `scan_fill` gives the rows in order across, each the other way from the
+            // last: kept as they come, every line is laid after its neighbour.
+            SolidPattern::Monotonic => lines(),
+            SolidPattern::Concentric => concentric_paths(region, line_width, &keep, kind),
+        };
+        out.extend(set);
+    }
+    out
+}
+
+/// Loops one line width apart working inwards from every loop of `region` (holes'
+/// loops grow outwards into the material), each cut where it comes closer to another
+/// loop of the region than to its own (so loops from two edges never overlap) and
+/// where `keep` is false or it leaves the region. A loop kept whole is a closed path.
+/// Each ring is made from the one before, a line width in; when an outline's rings
+/// end whole, the little left in the middle is filled with straight lines.
+fn concentric_paths(
+    region: &[Polygon],
+    line_width: f32,
+    keep: &dyn Fn(Point2) -> bool,
+    kind: PathKind,
+) -> Vec<ToolPath> {
+    let mut out: Vec<ToolPath> = Vec::new();
+    // A hole's rings grow outwards; past the outline they must stop, not carry on.
+    let inside = crate::gyroid::AreaTest::new(region);
+    // Each loop's box, to skip loops too far away to matter.
+    let boxes: Vec<(Point2, Point2)> = region
+        .iter()
+        .map(|p| loops_box(std::slice::from_ref(p)).unwrap_or_default())
+        .collect();
+    // Each loop's latest ring, while it still lays something.
+    let mut rings: Vec<Option<Polygon>> = region
+        .iter()
+        .map(|p| offset_left(&merge_short_edges(p, line_width * 0.5), line_width * 0.5))
+        .collect();
+    for k in 0..10_000 {
+        let d = line_width * (0.5 + k as f32);
+        if rings.iter().all(Option::is_none) {
+            break;
+        }
+        for (j, slot) in rings.iter_mut().enumerate() {
+            let Some(ring) = slot.take() else {
+                continue;
+            };
+            let own = |p: Point2| {
+                keep(p)
+                    && inside.contains(p)
+                    && region.iter().enumerate().all(|(q, other)| {
+                        let need = d - line_width * 0.25;
+                        q == j
+                            || distance_to_box(p, boxes[q]) >= need
+                            || distance_to_loop(p, other) >= need
+                    })
+            };
+            let mut closed = ring.clone();
+            closed.push(ring[0]);
+            let whole = closed.iter().all(|p| own(*p));
+            if whole {
+                out.push(ToolPath {
+                    kind,
+                    points: ring.clone(),
+                    closed: true,
+                    width: None,
+                });
+            } else {
+                let pieces: Vec<ToolPath> = crate::gyroid::clip(&closed, &own)
+                    .into_iter()
+                    .filter(|piece| crate::gyroid::length(piece) >= line_width)
+                    .map(|piece| open_path(kind, piece))
+                    .collect();
+                if pieces.is_empty() {
+                    // Nothing of this loop's rings is left to lay.
+                    continue;
+                }
+                out.extend(pieces);
+            }
+            // Short edges (a chamfered corner) would shrink past nothing and fold the
+            // next ring over: they are merged away first.
+            *slot = offset_left(&merge_short_edges(&ring, line_width), line_width);
+            if slot.is_none() && whole && area(&ring) > 0.0 {
+                out.extend(centre_lines(&ring, line_width, &own, kind));
             }
         }
     }
-    paths
+    out
+}
+
+/// Straight lines filling what is left inside the last whole ring `ring` of a
+/// concentric fill, half a line width clear of it.
+fn centre_lines(
+    ring: &[Point2],
+    line_width: f32,
+    keep: &dyn Fn(Point2) -> bool,
+    kind: PathKind,
+) -> Vec<ToolPath> {
+    let half = line_width * 0.5;
+    scan_fill(&[ring.to_vec()], line_width, std::f32::consts::FRAC_PI_4)
+        .into_iter()
+        .filter_map(|[a, b]| {
+            let len = a.distance(b);
+            if len < line_width * 2.0 {
+                return None;
+            }
+            let t = half / len;
+            let lerp = |u: f32| Point2::new(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
+            let (p, q) = (lerp(t), lerp(1.0 - t));
+            (keep(p) && keep(q)).then(|| open_path(kind, vec![p, q]))
+        })
+        .collect()
+}
+
+/// `poly` with every edge shorter than `min_len` merged into a point at its middle
+/// (while at least three points are left).
+fn merge_short_edges(poly: &[Point2], min_len: f32) -> Polygon {
+    let mut out = poly.to_vec();
+    while out.len() > 3 {
+        let n = out.len();
+        let Some((i, len)) = (0..n)
+            .map(|i| (i, out[i].distance(out[(i + 1) % n])))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        else {
+            break;
+        };
+        if len >= min_len {
+            break;
+        }
+        let j = (i + 1) % n;
+        let mid = Point2::new((out[i].x + out[j].x) / 2.0, (out[i].y + out[j].y) / 2.0);
+        out[i] = mid;
+        out.remove(j);
+    }
+    out
+}
+
+/// The distance from `p` to the box `lo`..`hi` (0 inside it).
+fn distance_to_box(p: Point2, (lo, hi): (Point2, Point2)) -> f32 {
+    let dx = (lo.x - p.x).max(p.x - hi.x).max(0.0);
+    let dy = (lo.y - p.y).max(p.y - hi.y).max(0.0);
+    dx.hypot(dy)
+}
+
+/// The distance from `p` to the nearest edge of the loop `poly`.
+fn distance_to_loop(p: Point2, poly: &[Point2]) -> f32 {
+    let n = poly.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 > 0.0 {
+                (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            p.distance(Point2::new(a.x + dx * t, a.y + dy * t))
+        })
+        .fold(f32::MAX, f32::min)
 }
 
 /// Where sparse infill is laid: the layer, its middle height (mm), and whether a point
@@ -2708,6 +2905,145 @@ mod tests {
             lay(InfillPattern::Honeycomb, 2.0),
             lay(InfillPattern::Honeycomb, 2.6)
         );
+    }
+
+    fn of_kind(l: &Layer, kind: PathKind) -> Vec<&ToolPath> {
+        l.paths.iter().filter(|p| p.kind == kind).collect()
+    }
+
+    #[test]
+    fn test_monotonic_top_lines_are_laid_in_order_across() {
+        let tris = block_at(20.0, 5.0, 0.0);
+        let s = PrintSettings {
+            top_pattern: SolidPattern::Monotonic,
+            ..PrintSettings::default()
+        };
+        let r = slice(&tris, &s, 0.42, &|_| {});
+        let i = r.layers.len() - 1;
+        let lines = of_kind(&r.layers[i], PathKind::TopSurface);
+        assert!(lines.len() > 20);
+        // Across the lines: the solid lines run at 45 or 135 degrees by layer.
+        let angle = if i % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
+        let across = |p: Point2| -p.x * angle.sin() + p.y * angle.cos();
+        let rows: Vec<f32> = lines.iter().map(|l| across(l.points[0])).collect();
+        assert!(rows.windows(2).all(|w| w[1] >= w[0] - 0.01), "{rows:?}");
+        // Each row the other way from the last.
+        let dir = |l: &ToolPath| {
+            let (a, b) = (l.points[0], l.points[l.points.len() - 1]);
+            (b.x - a.x) * angle.cos() + (b.y - a.y) * angle.sin() > 0.0
+        };
+        assert!(lines.windows(2).all(|w| dir(w[0]) != dir(w[1])));
+    }
+
+    #[test]
+    fn test_concentric_top_loops_fill_a_ring_without_overlapping() {
+        // A tube (outer radius 14, hole radius 9): its top is a ring between the walls.
+        let tube =
+            PlacedObject::new("tube", crate::model::SampleShape::Tube.mesh()).world_triangles();
+        let s = PrintSettings {
+            top_pattern: SolidPattern::Concentric,
+            ..PrintSettings::default()
+        };
+        let r = slice(&tube, &s, 0.42, &|_| {});
+        let top = of_kind(r.layers.last().unwrap(), PathKind::TopSurface);
+        assert!(top.len() >= 4, "{} loops", top.len());
+        let points: Vec<(usize, Point2)> = top
+            .iter()
+            .enumerate()
+            .flat_map(|(k, l)| l.points.iter().map(move |p| (k, *p)))
+            .collect();
+        for (_, p) in &points {
+            let rad = p.x.hypot(p.y);
+            assert!((9.5..13.6).contains(&rad), "a point at radius {rad}");
+        }
+        // Loops from the outer edge and from the hole meet without overlapping: points
+        // of two different loops are never closer than half a line width (corners of
+        // a loop lie a whole width from the next).
+        for (a, p) in &points {
+            for (b, q) in &points {
+                if a != b {
+                    assert!(p.distance(*q) > 0.2, "{p:?} and {q:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_concentric_rings_round_a_hole_stay_in_the_region() {
+        // A 20 mm square with a hole reaching to within a hair of one side (as an
+        // engraved letter makes): the hole's rings grow outwards and must stop at the
+        // square's edge.
+        let square = |x0: f32, y0: f32, x1: f32, y1: f32| {
+            vec![
+                Point2::new(x0, y0),
+                Point2::new(x1, y0),
+                Point2::new(x1, y1),
+                Point2::new(x0, y1),
+            ]
+        };
+        let mut hole = square(4.0, -2.0, 9.95, 2.0);
+        hole.reverse();
+        let region = vec![square(-10.0, -10.0, 10.0, 10.0), hole];
+        let paths = concentric_paths(&region, 0.42, &|_| true, PathKind::SolidInfill);
+        for p in paths.iter().flat_map(|p| &p.points) {
+            assert!(
+                p.x.abs() <= 10.0 && p.y.abs() <= 10.0,
+                "{p:?} outside the square"
+            );
+            assert!(
+                !(p.x > 4.05 && p.x < 9.9 && p.y.abs() < 1.95),
+                "{p:?} in the hole"
+            );
+        }
+        // About one line width of line per 0.42 mm2 of area (376 mm2), not runaway rings.
+        let length: f32 = paths
+            .iter()
+            .map(|p| {
+                let mut pts = p.points.clone();
+                if p.closed {
+                    pts.push(pts[0]);
+                }
+                pts.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>()
+            })
+            .sum();
+        let filled = length * 0.42 / 376.2;
+        assert!((0.75..1.15).contains(&filled), "{filled}");
+    }
+
+    #[test]
+    fn test_concentric_rings_keep_going_past_chamfered_corners() {
+        // A 20 mm square with 1 mm chamfers at its corners (as the XYZ cube has): the
+        // short edges must not stop the rings early.
+        let c = 1.0;
+        let outline = vec![
+            Point2::new(-10.0 + c, -10.0),
+            Point2::new(10.0 - c, -10.0),
+            Point2::new(10.0, -10.0 + c),
+            Point2::new(10.0, 10.0 - c),
+            Point2::new(10.0 - c, 10.0),
+            Point2::new(-10.0 + c, 10.0),
+            Point2::new(-10.0, 10.0 - c),
+            Point2::new(-10.0, -10.0 + c),
+        ];
+        let paths = concentric_paths(&[outline], 0.42, &|_| true, PathKind::SolidInfill);
+        let rings = paths.iter().filter(|p| p.closed).count();
+        assert!(rings >= 20, "{rings} rings");
+    }
+
+    #[test]
+    fn test_concentric_bottom_is_nested_loops() {
+        let tris = block_at(20.0, 5.0, 0.0);
+        let s = PrintSettings {
+            solid_pattern: SolidPattern::Concentric,
+            ..PrintSettings::default()
+        };
+        let r = slice(&tris, &s, 0.42, &|_| {});
+        let loops = of_kind(&r.layers[1], PathKind::SolidInfill);
+        // Nested rings about every line width in, then a few lines in the middle.
+        let rings: Vec<&&ToolPath> = loops.iter().filter(|l| l.closed).collect();
+        assert!(rings.len() > 18, "{} rings", rings.len());
+        let areas: Vec<f32> = rings.iter().map(|l| area(&l.points).abs()).collect();
+        assert!(areas.windows(2).all(|w| w[1] < w[0]), "{areas:?}");
     }
 
     #[test]

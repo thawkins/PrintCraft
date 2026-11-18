@@ -514,7 +514,7 @@ mod tests {
     use crate::printer::Api;
     use crate::profiles::{
         AccelFeature, Adhesion, FeatureAccels, FeatureSpeeds, InfillPattern, SeamPosition,
-        SpeedFeature,
+        SolidPattern, SpeedFeature,
     };
 
     fn sample() -> Project {
@@ -769,6 +769,8 @@ mod tests {
             adaptive_layers: true,
             adaptive_quality: 80.0,
             adaptive_smoothing: 2.5,
+            top_pattern: SolidPattern::Monotonic,
+            solid_pattern: SolidPattern::Concentric,
         }
     }
 
@@ -825,7 +827,9 @@ mod tests {
             "min_layer_time": 10.0f32,
             "adaptive_layers": true,
             "adaptive_quality": 80.0f32,
-            "adaptive_smoothing": 2.5f32
+            "adaptive_smoothing": 2.5f32,
+            "top_pattern": "Monotonic",
+            "solid_pattern": "Concentric"
         });
         // Both sides go through text, as a saved file does (float parsing differs in the
         // last digit otherwise).

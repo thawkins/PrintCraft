@@ -84,6 +84,8 @@ Slicing options:
   --infill-pattern lines|grid|triangles|gyroid|honeycomb|cubic|adaptive-cubic|
                                   lightning
   --seam aligned|nearest|rear|random
+  --top-pattern lines|monotonic|concentric    the visible top surface
+  --solid-pattern lines|monotonic|concentric  bottoms and other solid layers
   --ironing                       smooth top surfaces with an ironing pass
   --vase                          spiral vase mode
   --fuzzy                         fuzzy skin on outer walls
@@ -117,6 +119,8 @@ struct Args {
     fuzzy_top: bool,
     infill_pattern: Option<String>,
     seam: Option<String>,
+    top_pattern: Option<String>,
+    solid_pattern: Option<String>,
 }
 
 fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -169,6 +173,8 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--fuzzy-top" => a.fuzzy_top = true,
             "--infill-pattern" => a.infill_pattern = Some(value("--infill-pattern")?),
             "--seam" => a.seam = Some(value("--seam")?),
+            "--top-pattern" => a.top_pattern = Some(value("--top-pattern")?),
+            "--solid-pattern" => a.solid_pattern = Some(value("--solid-pattern")?),
             s if s.starts_with('-') => return Err(format!("unknown option \"{s}\"")),
             s => a.models.push(PathBuf::from(s)),
         }
@@ -335,6 +341,26 @@ fn slice_without_window(args: &Args) -> ExitCode {
                 eprintln!(
                     "printcraft: unknown seam \"{p}\" (use {})",
                     names.join(", ")
+                );
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    for (asked, field, name) in [
+        (&args.top_pattern, &mut settings.top_pattern, "top"),
+        (&args.solid_pattern, &mut settings.solid_pattern, "solid"),
+    ] {
+        let Some(p) = asked else { continue };
+        match profiles::SolidPattern::ALL
+            .into_iter()
+            .find(|x| x.label().eq_ignore_ascii_case(p))
+        {
+            Some(x) => *field = x,
+            None => {
+                eprintln!(
+                    "printcraft: unknown {name} pattern \"{p}\" (use lines, monotonic or \
+                     concentric)"
                 );
                 return ExitCode::from(2);
             }

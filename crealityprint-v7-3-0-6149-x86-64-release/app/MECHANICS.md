@@ -295,6 +295,18 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     already laid; branches are cut at the infill area's edge (by bisection) and at
     solid or modifier cells. Modifiers set to lightning use the plate's trees.
 
+25. **Top and solid patterns** (`slicer::solid_infill_paths`, gap plan M5.4). Lines:
+    the solid scan lines split into top and other solid pieces, laid nearest-first
+    (unchanged). Monotonic: the same pieces in the order the scan makes them, rows in
+    order across, each the other way from the last. Concentric: rings one line width
+    apart, each made from the one before (short edges, under a line width, merged into
+    their middle first so chamfers don't fold the ring); holes' rings grow outwards.
+    A ring point is kept where it is solid (or top) as asked, inside the infill area,
+    and no nearer another loop of the area than its own offset less a quarter width;
+    a ring kept whole is closed, the rest open pieces. The middle left inside an
+    outline's last whole ring gets straight lines at 45 degrees. Solid infill is laid
+    first, then the top.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

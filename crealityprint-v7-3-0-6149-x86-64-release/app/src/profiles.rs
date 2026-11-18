@@ -354,6 +354,30 @@ impl InfillPattern {
     }
 }
 
+/// How solid layers (tops, bottoms, solid infill) are filled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolidPattern {
+    /// Straight lines side by side, laid in the quickest order.
+    Lines,
+    /// The same lines, always laid in order across the surface, so each lies against
+    /// its neighbour the same way: a more even finish.
+    Monotonic,
+    /// Loops following the edge, working inwards.
+    Concentric,
+}
+
+impl SolidPattern {
+    pub const ALL: [SolidPattern; 3] = [Self::Lines, Self::Monotonic, Self::Concentric];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lines => "Lines",
+            Self::Monotonic => "Monotonic",
+            Self::Concentric => "Concentric",
+        }
+    }
+}
+
 /// Where each wall loop starts (and leaves its small "seam" mark).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeamPosition {
@@ -443,6 +467,10 @@ pub struct PrintSettings {
     pub adaptive_quality: f32,
     /// How far (mm) thin variable layers spread, so heights don't jump.
     pub adaptive_smoothing: f32,
+    /// How the visible top surface is filled.
+    pub top_pattern: SolidPattern,
+    /// How bottoms and other solid layers are filled.
+    pub solid_pattern: SolidPattern,
 }
 
 /// Infill reaches 15 % of a line width into the innermost wall, to bond to it.
@@ -676,6 +704,8 @@ impl Quality {
             adaptive_layers: false,
             adaptive_quality: 50.0,
             adaptive_smoothing: 1.0,
+            top_pattern: SolidPattern::Lines,
+            solid_pattern: SolidPattern::Lines,
         };
         match self {
             Self::Fine => PrintSettings {

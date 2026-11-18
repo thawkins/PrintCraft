@@ -12,7 +12,8 @@
 //! `serde_json` for the values written in project files.
 
 use crate::profiles::{
-    limits, AccelFeature, Adhesion, InfillPattern, PrintSettings, SeamPosition, SpeedFeature,
+    limits, AccelFeature, Adhesion, InfillPattern, PrintSettings, SeamPosition, SolidPattern,
+    SpeedFeature,
 };
 use serde_json::{json, Value as Json};
 use std::ops::RangeInclusive;
@@ -398,6 +399,8 @@ fn build() -> Vec<Setting> {
     let (seam_get, seam_set, seam_labels) = choice_field!(SeamPosition, seam);
     let (pattern_get, pattern_set, pattern_labels) = choice_field!(InfillPattern, infill_pattern);
     let (adhesion_get, adhesion_set, adhesion_labels) = choice_field!(Adhesion, adhesion);
+    let (top_get, top_set, top_labels) = choice_field!(SolidPattern, top_pattern);
+    let (solid_get, solid_set, solid_labels) = choice_field!(SolidPattern, solid_pattern);
     macro_rules! r {
         ($key:literal, $label:literal, $g:expr, $l:expr, $kind:expr, $variant:ident, $($f:ident).+) => {{
             let (get, set) = field!($variant, $($f).+);
@@ -534,6 +537,37 @@ fn build() -> Vec<Setting> {
             },
             Count,
             bottom_layers
+        ),
+        hinted(
+            row(
+                "top_pattern",
+                "Top surface pattern",
+                G::WallsAndSurfaces,
+                A,
+                Kind::Choice { labels: top_labels },
+                top_get,
+                top_set,
+            ),
+            |_| {
+                Some(
+                    "Lines: quickest. Monotonic: lines laid in order across the surface, for \
+                     an even sheen. Concentric: loops following the edge",
+                )
+            },
+        ),
+        hinted(
+            row(
+                "solid_pattern",
+                "Solid infill pattern",
+                G::WallsAndSurfaces,
+                A,
+                Kind::Choice {
+                    labels: solid_labels,
+                },
+                solid_get,
+                solid_set,
+            ),
+            |_| Some("How bottoms and other solid layers are filled"),
         ),
         r!(
             "ironing",
@@ -834,7 +868,7 @@ mod tests {
     }
     use crate::profiles::{
         AccelFeature, Adhesion, FeatureAccels, FeatureSpeeds, InfillPattern, PrintSettings,
-        SeamPosition, SpeedFeature,
+        SeamPosition, SolidPattern, SpeedFeature,
     };
 
     /// Every print setting away from its default. A struct literal with no `..`: adding a
@@ -885,6 +919,8 @@ mod tests {
             adaptive_layers: true,
             adaptive_quality: 80.0,
             adaptive_smoothing: 2.5,
+            top_pattern: SolidPattern::Monotonic,
+            solid_pattern: SolidPattern::Concentric,
         }
     }
 
@@ -1035,6 +1071,9 @@ mod tests {
             ]
         );
         assert_eq!(labels("adhesion"), ["None", "Skirt", "Brim", "Raft"]);
+        for key in ["top_pattern", "solid_pattern"] {
+            assert_eq!(labels(key), ["Lines", "Monotonic", "Concentric"]);
+        }
     }
 
     #[test]

@@ -71,6 +71,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Accelerations (outer wall, infill, travel, first layer) | **Yes (new)**, in Advanced; M204 or Klipper SET_VELOCITY_LIMIT, only when set. The time estimate models acceleration and corners |
 | Quality presets | Yes (Fine / Standard / Draft). They now change only quality values, so your other choices stay |
 | Infill patterns | **Simpler**: Lines, Grid, Triangles, and new Gyroid, Honeycomb, Cubic, Adaptive cubic and Lightning. Not offered: support cubic |
+| Top and solid patterns | **Yes (new)**: Lines, Monotonic or Concentric, set apart for the visible top and for other solid layers (Advanced, Walls and surfaces) |
 | Arachne variable-width walls | Not yet (fixed-width walls) |
 | Seam position (nearest / aligned-rear / random) | **Yes (new)** |
 | Seam and support painting | Not yet |

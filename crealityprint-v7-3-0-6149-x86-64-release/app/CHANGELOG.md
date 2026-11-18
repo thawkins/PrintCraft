@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Top and solid patterns (gap plan task M5.4). With Advanced on, "Top surface
+  pattern" and "Solid infill pattern" under Walls and surfaces choose how the visible
+  top and the other solid layers (bottoms, skins) are filled: Lines (as before, the
+  default), Monotonic (the same lines always laid in order across, for an even
+  sheen) or Concentric (loops following the edge, working inwards; rings round holes
+  stop where they meet, and the middle is finished with short lines). On the command
+  line, `--top-pattern` and `--solid-pattern`.
 - Lightning infill (gap plan task M5.3). Infill pattern now offers Lightning: thin
   branches only under top surfaces, reaching out to the walls, and hollow elsewhere.
   It uses much less plastic (43 % less than Grid on the XYZ test cube) for parts that
