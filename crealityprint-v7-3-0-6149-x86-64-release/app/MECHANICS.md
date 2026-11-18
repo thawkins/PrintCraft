@@ -202,6 +202,16 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     open sheet). A closed part with negative volume is turned inside out. With nothing
     to fix, the mesh is returned untouched.
 
+16. **Planar cut** (`src/cut.rs`, gap plan M3.5). The part's placed triangles are split
+    at the height (moved up 0.001 mm while a corner lies on it). A triangle crossing
+    the plane is cut into one triangle on one side and two on the other; the cut points
+    are computed with the edge's ends in a fixed order, so neighbours get identical
+    points. Slivers whose cut is a single point add nothing to the cut. The cut edges
+    are chained into loops; loops are outlines or holes by how many others they lie in.
+    Each outline and its holes (joined by a bridge edge from each hole's rightmost point,
+    after Eberly) is filled by ear clipping. The lower part gets the cap facing up, the
+    upper part the same cap facing down, and is then turned half a turn about X.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

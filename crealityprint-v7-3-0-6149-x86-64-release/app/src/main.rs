@@ -11,6 +11,7 @@
 
 mod app;
 mod codec;
+mod cut;
 mod device_ui;
 mod formats;
 mod fsutil;

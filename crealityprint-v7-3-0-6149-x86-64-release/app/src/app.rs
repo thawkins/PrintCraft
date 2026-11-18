@@ -67,6 +67,7 @@ enum ObjectAction {
     Turn90,
     Duplicate,
     Delete,
+    Cut,
 }
 
 struct Sliced {
@@ -178,6 +179,11 @@ pub struct PrintCraftApp {
     gizmo_hover: Option<gizmo::Handle>,
     /// With the Face tool: the part and the triangles of the flat face under the mouse.
     face_hover: Option<(usize, Vec<usize>)>,
+    /// The cut controls: height over the plate (mm), the parts to keep, and whether the
+    /// mouse is over them (the 3D view then shows the cut plane).
+    cut_z: f32,
+    cut_keep: crate::cut::CutKeep,
+    cut_preview: bool,
     /// The last few projects opened or saved, listed in the File menu.
     recent: crate::recent::RecentProjects,
     /// Open the File menu on the first frame (`--file-menu`, for checking pictures).
@@ -295,6 +301,9 @@ impl PrintCraftApp {
             tool: gizmo::Tool::Move,
             gizmo_hover: None,
             face_hover: None,
+            cut_z: 0.0,
+            cut_keep: crate::cut::CutKeep::Both,
+            cut_preview: false,
             recent,
             open_file_menu: start.file_menu,
         };
@@ -434,7 +443,39 @@ impl PrintCraftApp {
             }
             ObjectAction::Duplicate => self.duplicate_selected(),
             ObjectAction::Delete => self.delete_selected(),
+            ObjectAction::Cut => self.cut_selected(),
         }
+    }
+
+    /// Cuts the selected object at `cut_z`, replacing it with the parts `cut_keep` asks
+    /// for (the first selected), and arranges the plate.
+    fn cut_selected(&mut self) {
+        let Some(i) = self.selected.filter(|&i| i < self.objects.len()) else {
+            return;
+        };
+        let height = self.object_bounds(i).size().z;
+        let (z, keep) = (self.cut_z, self.cut_keep);
+        if !(z > 0.0 && z < height) {
+            self.status = format!("Choose a cut height between 0 and {height:.1} mm.");
+            return;
+        }
+        let o = &self.objects[i];
+        let parts = o.cut(z, keep);
+        let name = o.name.clone();
+        if parts.is_empty() {
+            self.status = format!("Nothing of {name} is on that side of {z:.1} mm.");
+            return;
+        }
+        let count = parts.len();
+        self.drag = Drag::None;
+        self.objects.splice(i..=i, parts);
+        self.selected = Some(i);
+        self.arrange();
+        self.status = if count == 2 {
+            format!("Cut {name} at {z:.1} mm into two parts.")
+        } else {
+            format!("Cut {name} at {z:.1} mm and kept one part.")
+        };
     }
 
     fn delete_selected(&mut self) {
@@ -936,6 +977,11 @@ impl PrintCraftApp {
             let (edited, clicked) = object_buttons(ui, o);
             changed |= edited;
             action = clicked;
+            let (cut, over) = cut_row(ui, &mut self.cut_z, &mut self.cut_keep, size.z);
+            if cut {
+                action = Some(ObjectAction::Cut);
+            }
+            self.cut_preview = over;
         });
         if changed {
             self.refresh_object(i);
@@ -1195,6 +1241,31 @@ impl PrintCraftApp {
         }
 
         self.handle_view_input(ui, rect, &response, preview);
+        // Where the cut controls would cut the selected part.
+        if std::mem::take(&mut self.cut_preview) {
+            if let Some((_, b)) = self.selected_bounds() {
+                let (lo, hi) = (b.min, b.max);
+                let z = lo.z + self.cut_z;
+                let pad = 3.0;
+                let corners: Vec<egui::Pos2> = [
+                    (lo.x - pad, lo.y - pad),
+                    (hi.x + pad, lo.y - pad),
+                    (hi.x + pad, hi.y + pad),
+                    (lo.x - pad, hi.y + pad),
+                ]
+                .into_iter()
+                .filter_map(|(x, y)| self.camera.project(Vec3::new(x, y, z), rect))
+                .map(|(p, _)| p)
+                .collect();
+                if corners.len() == 4 {
+                    painter.add(egui::Shape::convex_polygon(
+                        corners,
+                        theme::WARNING.gamma_multiply(0.25),
+                        egui::Stroke::new(1.5, theme::WARNING),
+                    ));
+                }
+            }
+        }
         // Selection marks and the current tool's handles, over the models.
         if let Some((_, b)) = self.selected_bounds() {
             let active = match self.drag {
@@ -2117,6 +2188,43 @@ fn object_buttons(ui: &mut Ui, o: &mut PlacedObject) -> (bool, Option<ObjectActi
     (changed, action)
 }
 
+/// "Cut at [height] [parts to keep] [Cut]" for an object `height` mm tall; a height
+/// outside the object starts again at half its height. Returns whether Cut was clicked,
+/// and whether the mouse is over the row or its height is being edited.
+fn cut_row(ui: &mut Ui, z: &mut f32, keep: &mut crate::cut::CutKeep, height: f32) -> (bool, bool) {
+    if !(*z > 0.0 && *z < height) {
+        *z = (height / 2.0 * 10.0).round() / 10.0;
+    }
+    let mut clicked = false;
+    let mut editing = false;
+    let row = ui.horizontal(|ui| {
+        ui.label("Cut at");
+        let field = ui.add(
+            egui::DragValue::new(z)
+                .speed(0.1)
+                .range(0.1..=(height - 0.1).max(0.1))
+                .suffix(" mm"),
+        );
+        editing = field.dragged() || field.has_focus();
+        egui::ComboBox::from_id_salt("cut_keep")
+            .selected_text(keep.label())
+            .show_ui(ui, |ui| {
+                for k in crate::cut::CutKeep::ALL {
+                    ui.selectable_value(keep, k, k.label());
+                }
+            });
+        clicked = ui
+            .button("Cut")
+            .on_hover_text(
+                "Cut the part across at this height. The upper part is turned over so its cut \
+                 face sits on the plate",
+            )
+            .clicked();
+    });
+    let over = ui.rect_contains_pointer(row.response.rect);
+    (clicked, over || editing)
+}
+
 /// A nozzle of a two-nozzle printer, as the window names it (tool 0 is the right nozzle on
 /// the Creator Pro / Replicator Dual family), marked when it is the printer's primary.
 pub(crate) fn nozzle_name(tool: u8, primary: u8) -> String {
@@ -2442,6 +2550,43 @@ mod tests {
 
     fn cube(name: &str) -> PlacedObject {
         PlacedObject::new(name, Mesh::cube(Vec3::new(10.0, 10.0, 10.0)))
+    }
+
+    #[test]
+    fn test_cut_selected_object_replaces_it_with_its_parts() {
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(PlacedObject::new(
+            "box",
+            Mesh::cube(Vec3::new(20.0, 20.0, 20.0)),
+        ));
+        app.note_changes(true);
+        // A height outside the part (here the plate itself) cuts nothing.
+        app.cut_z = 0.0;
+        app.apply_to_selected(ObjectAction::Cut);
+        assert_eq!(app.objects.len(), 1);
+        assert_eq!(app.status, "Choose a cut height between 0 and 20.0 mm.");
+        app.cut_z = 5.0;
+        app.cut_keep = crate::cut::CutKeep::Both;
+        app.apply_to_selected(ObjectAction::Cut);
+        assert_eq!(app.status, "Cut box at 5.0 mm into two parts.");
+        let names: Vec<&str> = app.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, ["box (lower)", "box (upper)"]);
+        assert_eq!(app.plate.len(), 2);
+        let heights: Vec<f32> = (0..2).map(|i| app.object_bounds(i).size().z).collect();
+        assert!((heights[0] - 5.0).abs() < 1e-2 && (heights[1] - 15.0).abs() < 1e-2);
+        assert_eq!(app.selected, Some(0));
+        // One undo step brings the box back.
+        app.note_changes(true);
+        app.undo();
+        assert_eq!(app.objects.len(), 1);
+        assert_eq!(app.objects[0].name, "box");
+        // Keeping only the upper part.
+        app.selected = Some(0);
+        app.cut_keep = crate::cut::CutKeep::Upper;
+        app.apply_to_selected(ObjectAction::Cut);
+        assert_eq!(app.objects.len(), 1);
+        assert_eq!(app.objects[0].name, "box (upper)");
+        assert_eq!(app.status, "Cut box at 5.0 mm and kept one part.");
     }
 
     #[test]

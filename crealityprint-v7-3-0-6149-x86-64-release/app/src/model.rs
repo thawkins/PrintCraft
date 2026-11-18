@@ -467,6 +467,36 @@ impl PlacedObject {
     pub fn world_bounds(&self) -> Bounds {
         Bounds::of(self.world_triangles().iter().flatten().copied())
     }
+
+    /// The parts of this object below and above `z` mm over the plate, as new objects
+    /// with its turn and scale built in, standing where it stood. The upper part is
+    /// turned over so its cut face rests on the plate. Empty parts are left out, as
+    /// are parts `keep` doesn't ask for.
+    pub fn cut(&self, z: f32, keep: crate::cut::CutKeep) -> Vec<PlacedObject> {
+        use crate::cut::CutKeep;
+        let (lower, upper) = crate::cut::cut(&self.world_triangles(), z);
+        // Upside down: half a turn about X.
+        let upper = Mesh {
+            triangles: upper
+                .triangles
+                .iter()
+                .map(|t| t.map(|v| Vec3::new(v.x, -v.y, -v.z)))
+                .collect(),
+        };
+        let wanted = [
+            (lower, "lower", keep != CutKeep::Upper),
+            (upper, "upper", keep != CutKeep::Lower),
+        ];
+        wanted
+            .into_iter()
+            .filter(|(m, _, want)| *want && !m.triangles.is_empty())
+            .map(|(m, side, _)| {
+                let mut o = PlacedObject::new(format!("{} ({side})", self.name), m);
+                (o.x, o.y, o.extruder) = (self.x, self.y, self.extruder);
+                o
+            })
+            .collect()
+    }
 }
 
 /// The rotation angles after turning `degrees` about a world axis (0 = X, 1 = Y, 2 = Z).
@@ -638,6 +668,46 @@ mod tests {
     fn world_normal(o: &PlacedObject, i: usize) -> Vec3 {
         let t = o.world_triangles()[i];
         (t[1] - t[0]).cross(t[2] - t[0]).normalized()
+    }
+
+    #[test]
+    fn test_cut_object_gives_parts_resting_on_their_cut_faces() {
+        use crate::cut::CutKeep;
+        // A 20 mm cube stretched to 30 mm tall, cut 10 mm up.
+        let mut o = PlacedObject::new("box", Mesh::cube(Vec3::new(20.0, 20.0, 20.0)));
+        o.scale = Vec3::new(100.0, 100.0, 150.0);
+        (o.x, o.y) = (5.0, -3.0);
+        let parts = o.cut(10.0, CutKeep::Both);
+        assert_eq!(parts.len(), 2);
+        let volume = |p: &PlacedObject| -> f32 {
+            p.world_triangles()
+                .iter()
+                .map(|t| t[0].dot(t[1].cross(t[2])) / 6.0)
+                .sum()
+        };
+        let (lower, upper) = (&parts[0], &parts[1]);
+        assert_eq!(lower.name, "box (lower)");
+        assert_eq!(upper.name, "box (upper)");
+        assert!((lower.world_bounds().size().z - 10.0).abs() < 1e-2);
+        assert!((upper.world_bounds().size().z - 20.0).abs() < 1e-2);
+        assert!((volume(lower) - 4000.0).abs() < 1.0, "{}", volume(lower));
+        assert!((volume(upper) - 8000.0).abs() < 1.0, "{}", volume(upper));
+        // The scale is built in, and the parts stand where the box stood.
+        assert_eq!(upper.scale, Vec3::new(100.0, 100.0, 100.0));
+        let c = upper.world_bounds().center();
+        assert!((c.x - 5.0).abs() < 1e-3 && (c.y + 3.0).abs() < 1e-3);
+        // The upper part's cut face (20 x 20) is on the plate, facing down.
+        let down: f32 = upper
+            .world_triangles()
+            .iter()
+            .filter(|t| t.iter().all(|v| v.z.abs() < 1e-3))
+            .map(|t| (t[1] - t[0]).cross(t[2] - t[0]).z / 2.0)
+            .sum();
+        assert!((down + 400.0).abs() < 0.5, "{down}");
+        // Keeping one part; and a cut above the part keeps it whole.
+        assert_eq!(o.cut(10.0, CutKeep::Upper).len(), 1);
+        assert_eq!(o.cut(10.0, CutKeep::Lower)[0].name, "box (lower)");
+        assert!(o.cut(40.0, CutKeep::Upper).is_empty());
     }
 
     #[test]

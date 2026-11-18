@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Planar cut (gap plan task M3.5). The Selected object card on the Objects tab has a
+  "Cut at" row: a height, which parts to keep (both, lower or upper) and a Cut button.
+  While the mouse is over the row, an orange plane shows where the cut goes. The part
+  is cut across at that height and each cut is closed with a flat face (holes in it
+  included), so both parts stay solid. The upper part is turned over so its cut face
+  sits on the plate. The parts take the part's turn and scale with them and can be
+  undone in one step.
 - Mesh repair on import (gap plan task M3.4). Models opened in the app or sliced from
   the command line are checked: points less than 0.0001 mm apart are merged, faces
   collapsed to a line or point are removed, faces turned the wrong way round are
