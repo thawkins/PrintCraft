@@ -147,7 +147,7 @@ impl PrintCraftApp {
         }
     }
 
-    fn run(&mut self, action: ProjectAction) {
+    pub(super) fn run(&mut self, action: ProjectAction) {
         match action {
             ProjectAction::New => self.new_project(),
             ProjectAction::Open(Some(path)) => self.open_project(&path),
@@ -155,12 +155,12 @@ impl PrintCraftApp {
                 if self.screenshot.is_some() {
                     return;
                 }
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("PrintCraft project", &[project::EXTENSION])
-                    .pick_file()
-                {
-                    self.open_project(&path);
-                }
+                self.ask_file(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("PrintCraft project", &[project::EXTENSION])
+                        .pick_file()
+                        .map(super::dialogs::Picked::OpenProject)
+                });
             }
         }
     }
@@ -269,6 +269,11 @@ impl PrintCraftApp {
     }
 
     pub(super) fn save_project_as(&mut self) {
+        self.save_project_as_then(None);
+    }
+
+    /// Asks where to save the project, saves it there, then does `then` (when saved).
+    fn save_project_as_then(&mut self, then: Option<ProjectAction>) {
         if self.screenshot.is_some() {
             return;
         }
@@ -279,13 +284,13 @@ impl PrintCraftApp {
             .map(|s| s.to_string_lossy().into_owned())
             .or_else(|| self.objects.first().map(|o| o.name.clone()))
             .unwrap_or_else(|| "plate".into());
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("PrintCraft project", &[project::EXTENSION])
-            .set_file_name(format!("{name}.{}", project::EXTENSION))
-            .save_file()
-        {
-            self.save_to(&project::with_project_extension(path));
-        }
+        self.ask_file(move || {
+            rfd::FileDialog::new()
+                .add_filter("PrintCraft project", &[project::EXTENSION])
+                .set_file_name(format!("{name}.{}", project::EXTENSION))
+                .save_file()
+                .map(|path| super::dialogs::Picked::SaveProject { path, then })
+        });
     }
 
     pub(super) fn save_to(&mut self, path: &Path) {
@@ -346,9 +351,15 @@ impl PrintCraftApp {
         match answer {
             Some(0) => {
                 self.pending_project = None;
-                self.save_project();
-                if !self.has_unsaved_changes() {
-                    self.run(action);
+                match self.project_path.clone() {
+                    Some(path) => {
+                        self.save_to(&path);
+                        if !self.has_unsaved_changes() {
+                            self.run(action);
+                        }
+                    }
+                    // Never saved: the action waits for the Save As dialog.
+                    None => self.save_project_as_then(Some(action)),
                 }
             }
             Some(1) => {

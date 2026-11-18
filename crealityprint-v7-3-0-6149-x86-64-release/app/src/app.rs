@@ -2,6 +2,7 @@
 //! Filament / Process settings (or slice results) on the right, and a status bar.
 //! The Prepare screen's parts live in prepare_ui.rs.
 
+mod dialogs;
 mod prepare_ui;
 mod project_ui;
 mod settings_ui;
@@ -175,6 +176,8 @@ pub struct PrintCraftApp {
     /// New / Open waiting for an answer about unsaved changes.
     pending_project: Option<project_ui::ProjectAction>,
     egui_ctx: egui::Context,
+    /// The file dialog that is open, if any: its answer arrives here (`dialogs`).
+    file_dialog: Option<Receiver<Option<dialogs::Picked>>>,
     /// The selection tool: move arrows, scale corners or rotate rings.
     tool: gizmo::Tool,
     gizmo_hover: Option<gizmo::Handle>,
@@ -299,6 +302,7 @@ impl PrintCraftApp {
             settled_fp: String::new(),
             pending_project: None,
             egui_ctx: ctx.clone(),
+            file_dialog: None,
             tool: gizmo::Tool::Move,
             gizmo_hover: None,
             face_hover: None,
@@ -381,15 +385,15 @@ impl PrintCraftApp {
         if self.screenshot.is_some() {
             return;
         }
-        if let Some(paths) = rfd::FileDialog::new()
-            .add_filter(
-                "3D models (STL, OBJ, 3MF)",
-                &["stl", "STL", "obj", "OBJ", "3mf", "3MF"],
-            )
-            .pick_files()
-        {
-            self.load_paths(&paths);
-        }
+        self.ask_file(|| {
+            rfd::FileDialog::new()
+                .add_filter(
+                    "3D models (STL, OBJ, 3MF)",
+                    &["stl", "STL", "obj", "OBJ", "3mf", "3MF"],
+                )
+                .pick_files()
+                .map(dialogs::Picked::Models)
+        });
     }
 
     /// Lays the models out in rows, centred on the plate.
@@ -911,16 +915,20 @@ impl PrintCraftApp {
                 Vec::new(),
             )
         };
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter(kind, &[ext])
-            .set_file_name(format!("{name}.{ext}"))
-            .save_file()
-        else {
-            return;
-        };
-        self.status = match std::fs::write(&path, &bytes) {
-            Ok(()) if notes.is_empty() => format!("Saved {}.", display_name(&path)),
-            Ok(()) => format!("Saved {}. Note: {}", display_name(&path), notes.join(" ")),
+        self.ask_file(move || {
+            let path = rfd::FileDialog::new()
+                .add_filter(kind, &[ext])
+                .set_file_name(format!("{name}.{ext}"))
+                .save_file()?;
+            Some(dialogs::Picked::Export { path, bytes, notes })
+        });
+    }
+
+    /// Writes the print file chosen in the export dialog.
+    fn write_export(&mut self, path: &Path, bytes: &[u8], notes: &[String]) {
+        self.status = match std::fs::write(path, bytes) {
+            Ok(()) if notes.is_empty() => format!("Saved {}.", display_name(path)),
+            Ok(()) => format!("Saved {}. Note: {}", display_name(path), notes.join(" ")),
             Err(e) => format!("Could not save the file: {e}"),
         };
     }
@@ -1985,6 +1993,7 @@ impl eframe::App for PrintCraftApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_slice(&ctx);
+        self.poll_file_dialog();
         // Last frame's change becomes an undo step once the edit is finished: no mouse
         // button held and no field being typed in.
         let idle = !ctx.input(|i| i.pointer.any_down()) && ctx.memory(|m| m.focused().is_none());
@@ -2579,6 +2588,73 @@ mod tests {
 
     fn cube(name: &str) -> PlacedObject {
         PlacedObject::new(name, Mesh::cube(Vec3::new(10.0, 10.0, 10.0)))
+    }
+
+    /// Waits (up to 5 s) for the open file dialog's answer and acts on it.
+    fn finish_dialog(app: &mut PrintCraftApp) {
+        for _ in 0..500 {
+            app.poll_file_dialog();
+            if app.file_dialog.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the dialog never answered");
+    }
+
+    #[test]
+    fn test_file_dialog_answers_from_its_own_thread() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/temp/dialogs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cube.stl");
+        std::fs::write(
+            &path,
+            Mesh::cube(Vec3::new(10.0, 10.0, 10.0)).to_binary_stl(),
+        )
+        .unwrap();
+        let mut app = PrintCraftApp::for_tests();
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+        let picked = path.clone();
+        app.ask_file(move || {
+            // The "person" picks only when the test says so.
+            gate_rx.recv().ok()?;
+            Some(dialogs::Picked::Models(vec![picked]))
+        });
+        // The window carries on while the dialog is open, and a second one waits.
+        app.poll_file_dialog();
+        assert!(app.file_dialog.is_some() && app.objects.is_empty());
+        app.ask_file(|| panic!("a second dialog must not open"));
+        gate_tx.send(()).unwrap();
+        finish_dialog(&mut app);
+        assert_eq!(app.objects.len(), 1);
+        // A cancelled dialog does nothing.
+        app.ask_file(|| None);
+        finish_dialog(&mut app);
+        assert_eq!(app.objects.len(), 1);
+    }
+
+    #[test]
+    fn test_save_as_from_save_changes_then_does_the_new_project() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/temp/dialogs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("saved-then-new");
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(PlacedObject::new(
+            "box",
+            Mesh::cube(Vec3::new(10.0, 10.0, 10.0)),
+        ));
+        let target = path.clone();
+        app.ask_file(move || {
+            Some(dialogs::Picked::SaveProject {
+                path: target,
+                then: Some(project_ui::ProjectAction::New),
+            })
+        });
+        finish_dialog(&mut app);
+        let saved = crate::project::with_project_extension(path);
+        assert!(saved.exists(), "saved first");
+        assert!(app.objects.is_empty(), "then the new project");
+        std::fs::remove_file(saved).unwrap();
     }
 
     #[test]
