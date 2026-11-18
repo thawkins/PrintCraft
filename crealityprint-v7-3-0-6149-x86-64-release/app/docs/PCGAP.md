@@ -223,7 +223,7 @@ The largest gaps, in order of how much they affect print quality or daily use:
 | Translations | No (English only) | Yes | Part |
 | Projects with plate, settings and printer | Yes | Yes (3MF) | Yes (factory files) |
 | Save project as 3MF (interchange) | No | Yes | No |
-| Command-line slicing | No | Yes | No |
+| Command-line slicing | Yes (`--slice`, G-code or X3G) | Yes | No |
 | Keyboard shortcuts list | Part | Yes | Yes |
 | 3D mouse | No | Yes | No |
 
