@@ -67,7 +67,7 @@ pub fn to_json(p: &Project) -> String {
         .objects
         .iter()
         .map(|o| {
-            json!({
+            let mut v = json!({
                 "name": o.name,
                 "x": o.x,
                 "y": o.y,
@@ -78,7 +78,12 @@ pub fn to_json(p: &Project) -> String {
                 "extruder": o.extruder,
                 "triangles": o.mesh.triangles.len(),
                 "mesh": crate::codec::base64(&mesh_bytes(&o.mesh.triangles)),
-            })
+            });
+            // Only parts with overrides say so, so other files stay as they were.
+            if !o.overrides.is_empty() {
+                v["overrides"] = o.overrides.to_json();
+            }
+            v
         })
         .collect();
     let v = json!({
@@ -318,6 +323,9 @@ fn project_from(v: &Value) -> Result<Project, String> {
         };
         obj.scale = Vec3::new(axis(0), axis(1), axis(2));
         obj.extruder = num(o, "extruder", printer.primary_nozzle as f32).clamp(0.0, 1.0) as u8;
+        if let Some(raw) = o.get("overrides") {
+            obj.overrides = crate::overrides::Overrides::from_json(raw);
+        }
         objects.push(obj);
     }
 
@@ -828,6 +836,29 @@ mod tests {
             Some(*limits::ACCELERATION.end())
         );
         assert_eq!(s.adhesion, d.adhesion);
+    }
+
+    #[test]
+    fn test_project_object_overrides_round_trip() {
+        use crate::settings_registry::Value as SettingValue;
+        let mut p = sample();
+        p.objects[0]
+            .overrides
+            .set("infill_percent", SettingValue::Num(60.0));
+        p.objects[0]
+            .overrides
+            .set("infill_pattern", SettingValue::Choice("Lines"));
+        let text = to_json(&p);
+        let saved: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            saved["objects"][0]["overrides"],
+            json!({"infill_percent": 60.0, "infill_pattern": "Lines"})
+        );
+        // A part without overrides writes no "overrides" at all.
+        assert!(saved["objects"][1].get("overrides").is_none());
+        let back = from_json(&text).unwrap();
+        assert_eq!(back.objects[0].overrides, p.objects[0].overrides);
+        assert!(back.objects[1].overrides.is_empty());
     }
 
     #[test]

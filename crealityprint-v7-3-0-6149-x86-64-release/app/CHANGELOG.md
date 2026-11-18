@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-object settings, the model underneath (gap plan task M4.1). A part can override
+  some of the plate's print settings: walls, top and bottom layers, infill density,
+  pattern and overlap, ironing, fuzzy skin, and elephant-foot and hole compensation.
+  Parts with overrides are sliced with their own settings; the skirt, brim, raft and
+  supports still come from the whole plate. Projects save a part's overrides (parts
+  without any are written as before). A cut or split part keeps its overrides. The
+  panel to edit them comes next (M4.2); until then they come from project files.
+
+### Fixed
+
+- The window no longer stops responding while a file dialog is open (opening a
+  model or project, saving a project, exporting G-code), so the desktop no longer
+  offers to force-quit PrintCraft. "Save" in the "Save changes?" prompt on a project
+  that was never saved now carries on with the New or Open once it is saved.
+
 ## [0.0.8] - 2026-11-18
 
 ### Added

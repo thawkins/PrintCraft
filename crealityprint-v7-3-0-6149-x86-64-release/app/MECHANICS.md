@@ -218,6 +218,16 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     box holds it. Each piece becomes an object centred where it stood, with the turn and
     scale built in; pieces always rest on the plate.
 
+18. **Per-object settings** (`src/overrides.rs`, `slicer::slice_groups`, gap plan M4.1).
+    A part's overrides are registry keys and values, limited to settings the slicer
+    uses to shape a part. Parts are grouped by the settings they end up with; with no
+    overrides on the plate the plate is sliced as before. Otherwise the whole plate is
+    sliced with the plate's settings for the skirt, brim, raft and supports, each group
+    is sliced with its own (supports off), and layer i of every slice is put together:
+    the plate's skirt, brim and raft lines, then each group's part lines, then the
+    supports. Layer heights depend only on the plate's settings and the height, so
+    layer i is at the same height in every slice.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

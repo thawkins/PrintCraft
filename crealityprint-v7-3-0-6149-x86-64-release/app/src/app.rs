@@ -535,14 +535,15 @@ impl PrintCraftApp {
         );
         for o in &self.objects {
             s += &format!(
-                "|{}:{}:{}:{:?}:{:?}:{}:{}",
+                "|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}",
                 o.name,
                 o.x,
                 o.y,
                 o.rotation,
                 o.scale,
                 o.mesh.triangles.len(),
-                o.extruder
+                o.extruder,
+                o.overrides
             );
         }
         s
@@ -747,6 +748,14 @@ impl PrintCraftApp {
             return;
         }
         let tris: Vec<Triangle> = self.plate.concat();
+        // Parts with settings of their own slice apart from the rest (none: one slice).
+        let parts: Vec<(&[Triangle], &crate::overrides::Overrides)> = self
+            .plate
+            .iter()
+            .zip(&self.objects)
+            .map(|(t, o)| (t.as_slice(), &o.overrides))
+            .collect();
+        let groups = pipeline::settings_groups(&parts, &self.settings);
         let tools = match self.tools() {
             Ok(t) => t,
             Err(why) => {
@@ -773,8 +782,9 @@ impl PrintCraftApp {
                 result,
                 gcode,
                 picture,
-            } = pipeline::slice_plate_with_tools(
+            } = pipeline::slice_plate_grouped(
                 &tris,
+                &groups,
                 &printer,
                 &filament,
                 &settings,

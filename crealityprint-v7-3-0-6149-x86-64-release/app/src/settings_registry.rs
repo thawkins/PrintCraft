@@ -192,13 +192,7 @@ impl Setting {
     /// This setting's value in `s` as it is written in a project file: a number, a whole
     /// number, a bool, the choice's label, or a number / `null` (Auto).
     pub fn to_json(&self, s: &PrintSettings) -> Json {
-        match (self.get)(s) {
-            Value::Num(x) => json!(x),
-            Value::Count(n) => json!(n),
-            Value::Flag(b) => json!(b),
-            Value::Choice(c) => json!(c),
-            Value::Auto(a) => json!(a),
-        }
+        value_json((self.get)(s))
     }
 
     /// The value written as `raw` in a project file, sanitized; `None` when `raw` isn't
@@ -230,6 +224,18 @@ impl Setting {
     /// The value in `PrintSettings::default()`.
     pub fn default_value(&self) -> Value {
         (self.get)(&PrintSettings::default())
+    }
+}
+
+/// A value as a project file writes it: a number, a whole number, a bool, the
+/// choice's label, or a number / `null` (Auto).
+pub fn value_json(v: Value) -> Json {
+    match v {
+        Value::Num(x) => json!(x),
+        Value::Count(n) => json!(n),
+        Value::Flag(b) => json!(b),
+        Value::Choice(c) => json!(c),
+        Value::Auto(a) => json!(a),
     }
 }
 

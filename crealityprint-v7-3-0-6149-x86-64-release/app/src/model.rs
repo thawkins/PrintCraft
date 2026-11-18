@@ -281,6 +281,8 @@ pub struct PlacedObject {
     /// The nozzle that prints this part on a two-nozzle printer (0 = right, 1 = left). New
     /// parts get the printer's primary nozzle. Ignored on a one-nozzle printer.
     pub extruder: u8,
+    /// Print settings this part doesn't take from the plate (empty: all the plate's).
+    pub overrides: crate::overrides::Overrides,
 }
 
 impl PlacedObject {
@@ -293,6 +295,7 @@ impl PlacedObject {
             rotation: Vec3::default(),
             scale: Vec3::new(100.0, 100.0, 100.0),
             extruder: crate::profiles::PRIMARY_TOOL,
+            overrides: Default::default(),
         }
     }
 
@@ -480,6 +483,7 @@ impl PlacedObject {
                 let c = m.bounds().center();
                 let mut o = PlacedObject::new(format!("{} {}", self.name, n + 1), m);
                 (o.x, o.y, o.extruder) = (c.x, c.y, self.extruder);
+                o.overrides = self.overrides.clone();
                 o
             })
             .collect()
@@ -510,6 +514,7 @@ impl PlacedObject {
             .map(|(m, side, _)| {
                 let mut o = PlacedObject::new(format!("{} ({side})", self.name), m);
                 (o.x, o.y, o.extruder) = (self.x, self.y, self.extruder);
+                o.overrides = self.overrides.clone();
                 o
             })
             .collect()

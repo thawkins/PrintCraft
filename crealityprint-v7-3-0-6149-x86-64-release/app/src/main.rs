@@ -24,6 +24,7 @@ mod history;
 mod layer_events;
 mod model;
 mod motion;
+mod overrides;
 mod pipeline;
 mod printer;
 mod profiles;

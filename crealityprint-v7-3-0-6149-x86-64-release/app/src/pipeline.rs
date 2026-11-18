@@ -4,6 +4,7 @@
 use crate::gcode::{self, GcodeOutput};
 use crate::geometry::Bounds;
 use crate::model::Triangle;
+use crate::overrides::Overrides;
 use crate::profiles::{Filament, PrintSettings, Printer};
 use crate::slicer::{self, SliceResult};
 use image::RgbaImage;
@@ -60,7 +61,43 @@ pub fn slice_plate_with_tools(
     tools: &gcode::Tools,
     progress: &dyn Fn(f32),
 ) -> Sliced {
-    let mut result = slicer::slice(triangles, settings, line_width(printer), progress);
+    slice_plate_grouped(triangles, &[], printer, filament, settings, tools, progress)
+}
+
+/// The parts on the plate grouped by the settings they print with: `parts` are each
+/// part's placed triangles and overrides. Parts with the same settings slice together.
+/// Empty when no part has overrides (the whole plate prints with `plate`).
+pub fn settings_groups(
+    parts: &[(&[Triangle], &Overrides)],
+    plate: &PrintSettings,
+) -> Vec<(Vec<Triangle>, PrintSettings)> {
+    if parts.iter().all(|(_, o)| o.is_empty()) {
+        return Vec::new();
+    }
+    let mut groups: Vec<(Vec<Triangle>, PrintSettings)> = Vec::new();
+    for (tris, overrides) in parts {
+        let settings = overrides.apply(plate);
+        match groups.iter_mut().find(|(_, s)| *s == settings) {
+            Some((all, _)) => all.extend_from_slice(tris),
+            None => groups.push((tris.to_vec(), settings)),
+        }
+    }
+    groups
+}
+
+/// Like [`slice_plate_with_tools`], with parts that print with settings of their own:
+/// `groups` from [`settings_groups`] (empty: everything prints with `settings`).
+pub fn slice_plate_grouped(
+    triangles: &[Triangle],
+    groups: &[(Vec<Triangle>, PrintSettings)],
+    printer: &Printer,
+    filament: &Filament,
+    settings: &PrintSettings,
+    tools: &gcode::Tools,
+    progress: &dyn Fn(f32),
+) -> Sliced {
+    let mut result =
+        slicer::slice_groups(triangles, groups, settings, line_width(printer), progress);
     // The shield goes round what is printed, so it is added before the tower (which
     // stands apart).
     add_ooze_shield(&mut result, printer, tools);
@@ -732,5 +769,54 @@ mod tests {
             ..exact
         };
         assert!(!fits_on_plate(&tall, &printer));
+    }
+
+    #[test]
+    fn test_settings_groups_part_with_overrides_slices_with_them() {
+        use crate::model::{Mesh, PlacedObject};
+        use crate::settings_registry::Value;
+        let place = |x: f32, infill: Option<f32>| {
+            let mut o = PlacedObject::new("box", Mesh::cube(Vec3::new(10.0, 10.0, 5.0)));
+            o.x = x;
+            if let Some(v) = infill {
+                o.overrides.set("infill_percent", Value::Num(v));
+            }
+            o
+        };
+        let plate = PrintSettings::default();
+        let objects = [
+            place(-15.0, Some(0.0)),
+            place(15.0, None),
+            place(40.0, None),
+        ];
+        let placed: Vec<Vec<Triangle>> = objects.iter().map(|o| o.world_triangles()).collect();
+        let parts: Vec<(&[Triangle], &Overrides)> = placed
+            .iter()
+            .zip(&objects)
+            .map(|(t, o)| (t.as_slice(), &o.overrides))
+            .collect();
+        let groups = settings_groups(&parts, &plate);
+        assert_eq!(groups.len(), 2, "the two plain boxes slice together");
+        assert_eq!(groups[0].1.infill_percent, 0.0);
+        assert_eq!(groups[1].0.len(), 24);
+        let all: Vec<Triangle> = placed.concat();
+        let printer = Printer::presets().remove(0);
+        let filament = &Filament::presets()[0];
+        let tools = gcode::Tools::default();
+        let out = slice_plate_grouped(&all, &groups, &printer, filament, &plate, &tools, &|_| {});
+        let sparse_left = out
+            .result
+            .layers
+            .iter()
+            .flat_map(|l| &l.paths)
+            .filter(|p| p.kind == slicer::PathKind::SparseInfill)
+            .any(|p| p.points.iter().any(|q| q.x < 0.0));
+        assert!(!sparse_left, "the left box has no infill");
+        // No overrides: no groups, and the plate slices exactly as before.
+        let plain: Vec<(&[Triangle], &Overrides)> = parts
+            .iter()
+            .map(|(t, _)| (*t, &objects[1].overrides))
+            .collect();
+        assert!(settings_groups(&plain, &plate).is_empty());
     }
 }

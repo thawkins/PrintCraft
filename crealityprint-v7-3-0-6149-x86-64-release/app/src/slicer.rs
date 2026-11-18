@@ -357,6 +357,76 @@ pub fn slice(
     SliceResult { layers, line_width }
 }
 
+/// Slices a plate whose parts don't all print with the plate's settings. `groups` are
+/// the parts' triangles with the settings each set prints with (it may be the plate's);
+/// `all` is every triangle on the plate. With no groups, or one on the plate's
+/// settings, this is plain [`slice`].
+///
+/// Otherwise every group is sliced on its own with its settings, and the layers are put
+/// together: layer heights are the plate's for all of them, so layer `i` is the same
+/// height everywhere. What belongs to the plate as a whole, the skirt, brim, raft and
+/// supports, comes from slicing `all` with the plate's settings (supports are a plate
+/// setting, and stand on whatever is below them, from any part).
+pub fn slice_groups(
+    all: &[Triangle],
+    groups: &[(Vec<Triangle>, PrintSettings)],
+    plate: &PrintSettings,
+    line_width: f32,
+    progress: &dyn Fn(f32),
+) -> SliceResult {
+    let plain = match groups {
+        [] => true,
+        [(_, only)] => only == plate,
+        _ => false,
+    };
+    if plain {
+        return slice(all, plate, line_width, progress);
+    }
+    let n = groups.len() as f32 + 1.0;
+    let base = slice(all, plate, line_width, &|v| progress(v / n));
+    let parts: Vec<SliceResult> = groups
+        .iter()
+        .enumerate()
+        .map(|(k, (tris, s))| {
+            // Supports come from the plate's slice; leaving them out here saves time.
+            let own = PrintSettings {
+                supports: false,
+                ..s.clone()
+            };
+            slice(tris, &own, line_width, &|v| {
+                progress((k as f32 + 1.0 + v) / n)
+            })
+        })
+        .collect();
+    let whole_plate = |k: PathKind| {
+        matches!(
+            k,
+            PathKind::Skirt | PathKind::Brim | PathKind::Raft | PathKind::Support
+        )
+    };
+    let layers = base
+        .layers
+        .into_iter()
+        .enumerate()
+        .map(|(i, layer)| {
+            let (support, mut paths): (Vec<ToolPath>, Vec<ToolPath>) = layer
+                .paths
+                .into_iter()
+                .filter(|p| whole_plate(p.kind))
+                .partition(|p| p.kind == PathKind::Support);
+            for part in &parts {
+                if let Some(l) = part.layers.get(i) {
+                    paths.extend(l.paths.iter().filter(|p| !whole_plate(p.kind)).cloned());
+                }
+            }
+            paths.extend(support);
+            Layer { paths, ..layer }
+        })
+        .collect();
+    progress(1.0);
+    SliceResult { layers, line_width }
+}
+
 /// Size compensation on the layer outlines: every hole grows by `hole_compensation`
 /// all round, and, when the model sits on the plate (no raft), the first layer's
 /// outlines are drawn in by `elephant_foot` (outer loops shrink, holes grow). A loop
@@ -1885,6 +1955,90 @@ mod tests {
 
     fn cube_tris(size: f32) -> Vec<Triangle> {
         PlacedObject::new("c", Mesh::cube(Vec3::new(size, size, size))).world_triangles()
+    }
+
+    /// A cube of `size` mm standing with its centre at (x, 0), `height` tall.
+    fn block_at(size: f32, height: f32, x: f32) -> Vec<Triangle> {
+        let mut o = PlacedObject::new("b", Mesh::cube(Vec3::new(size, size, height)));
+        o.x = x;
+        o.world_triangles()
+    }
+
+    #[test]
+    fn test_slice_groups_with_plate_settings_slices_as_before() {
+        let mut all = block_at(10.0, 4.0, -15.0);
+        all.extend(block_at(10.0, 6.0, 15.0));
+        let plate = PrintSettings {
+            supports: true,
+            ..PrintSettings::default()
+        };
+        let plain = slice(&all, &plate, 0.42, &|_| {});
+        let grouped = slice_groups(&all, &[(all.clone(), plate.clone())], &plate, 0.42, &|_| {});
+        assert_eq!(format!("{grouped:?}"), format!("{plain:?}"));
+    }
+
+    #[test]
+    fn test_slice_groups_two_objects_with_different_infill_slice_differently() {
+        let (a, b) = (block_at(10.0, 4.0, -15.0), block_at(10.0, 6.0, 15.0));
+        let mut all = a.clone();
+        all.extend(b.clone());
+        let plate = PrintSettings::default();
+        let empty = PrintSettings {
+            infill_percent: 0.0,
+            walls: 3,
+            ..plate.clone()
+        };
+        let r = slice_groups(
+            &all,
+            &[(a, empty), (b, plate.clone())],
+            &plate,
+            0.42,
+            &|_| {},
+        );
+        // As many layers as the taller box needs.
+        assert_eq!(
+            r.layers.len(),
+            slice(&all, &plate, 0.42, &|_| {}).layers.len()
+        );
+        let xs = |kind: PathKind| -> Vec<f32> {
+            r.layers
+                .iter()
+                .flat_map(|l| &l.paths)
+                .filter(|p| p.kind == kind)
+                .flat_map(|p| p.points.iter().map(|q| q.x))
+                .collect()
+        };
+        // Sparse infill only in the right-hand box, which keeps the plate's 25 %.
+        let sparse = xs(PathKind::SparseInfill);
+        assert!(!sparse.is_empty());
+        assert!(
+            sparse.iter().all(|&x| x > 5.0),
+            "sparse infill in the left box"
+        );
+        // The left box has three walls: three loops on a middle layer, the right two.
+        let mid = &r.layers[10];
+        let loops = |left: bool| {
+            mid.paths
+                .iter()
+                .filter(|p| matches!(p.kind, PathKind::OuterWall | PathKind::InnerWall))
+                .filter(|p| (p.points[0].x < 0.0) == left)
+                .count()
+        };
+        assert_eq!((loops(true), loops(false)), (3, 2));
+        // One skirt round both boxes, on the first layer.
+        let skirt = xs(PathKind::Skirt);
+        let (lo, hi) = skirt
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+        assert!(lo < -20.0 && hi > 20.0, "{lo} {hi}");
+        assert_eq!(
+            r.layers[0]
+                .paths
+                .iter()
+                .filter(|p| p.kind == PathKind::Skirt)
+                .count(),
+            SKIRT_LOOPS
+        );
     }
 
     #[test]
