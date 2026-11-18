@@ -31,6 +31,7 @@ pub fn path_color(kind: PathKind) -> Color32 {
         PathKind::Support => Color32::from_rgb(70, 196, 220),
         PathKind::Ironing => Color32::from_rgb(120, 150, 255),
         PathKind::TopSurface => Color32::from_rgb(236, 120, 196),
+        PathKind::Bridge => Color32::from_rgb(40, 110, 220),
         PathKind::Skirt | PathKind::Brim => Color32::from_rgb(140, 214, 140),
         PathKind::Raft => Color32::from_rgb(160, 160, 170),
         PathKind::PrimeTower => Color32::from_rgb(120, 200, 170),

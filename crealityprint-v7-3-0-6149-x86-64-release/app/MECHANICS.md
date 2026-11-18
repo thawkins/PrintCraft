@@ -141,6 +141,19 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     the nozzle goes back to the layer height (`G1 Z<layer> F600`). Only the visible top
     layer is textured, because the top layers under it are covered. Ironing is skipped
     while Fuzzy top is on, since it would flatten the texture.
+12b. **Bridges** (`slicer::bridge_areas`, gap plan M1.3). On every layer above the model's
+    first, a 1 mm cell that is model on this layer but not on the one below is
+    unsupported. Each 4-connected group of such cells is tried at 12 directions (every
+    15°). For each cell, a line in that direction is followed both ways out of the group:
+    it is anchored when both ends land on a cell that is model on this layer and the one
+    below. The direction with the most anchored lines wins; among equals, the one with the
+    shorter lines (the shortest span). A group with no anchored line (a one-sided
+    overhang) or under 4 cells stays normal solid infill. A bridge's cells are widened by
+    2 cells onto the supported area so its lines are anchored, and that area is taken out
+    of the solid and sparse infill. Bridge lines are solid (one line width apart), printed
+    before the layer's other infill, blue in the preview, and marked `;TYPE:SKIN` (the
+    Cura-style names printer screens read have no bridge type). Until M1.4 they print at
+    the print speed with normal flow and fan. Walls over air are not bridged.
 13. **Spiral vase.** One wall. The first `bottom_layers` layers are solid. After that there
     is only the outer wall: no infill, no top.
 14. **Lay flat** (`PlacedObject::lay_flat`). Faces are grouped by direction (about 1°).

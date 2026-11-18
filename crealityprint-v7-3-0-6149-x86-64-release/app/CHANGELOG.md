@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Klipper), only when the value changes; nothing is written while all are on Auto, and
   never for X3G printers.
 
+- Bridge detection (gap plan task M1.3). An area of a layer with nothing under it, but
+  with solid model on both sides, is filled with solid "Bridge" lines across the
+  shortest anchored span, reaching 2 mm onto the supported area. One-sided overhangs are
+  left as before. Bridges have their own colour in the preview. Models without such
+  areas slice exactly as before; the XYZ calibration cube changes on the layer above its
+  engraved letters.
+
 ### Changed
 
 - The time estimate now times every line with the printer's acceleration and corner

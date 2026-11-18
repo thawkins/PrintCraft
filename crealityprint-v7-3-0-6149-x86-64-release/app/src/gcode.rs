@@ -61,6 +61,7 @@ pub fn speed_feature(kind: PathKind) -> Option<SpeedFeature> {
         PathKind::Skirt
         | PathKind::Brim
         | PathKind::Ironing
+        | PathKind::Bridge
         | PathKind::Raft
         | PathKind::PrimeTower
         | PathKind::OozeShield => None,
@@ -1032,6 +1033,7 @@ impl<'a> Writer<'a> {
             | PathKind::Support
             | PathKind::Ironing
             | PathKind::TopSurface
+            | PathKind::Bridge
             | PathKind::Raft
             | PathKind::PrimeTower
             | PathKind::OozeShield => machine,

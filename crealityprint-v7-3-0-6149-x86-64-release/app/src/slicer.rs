@@ -22,6 +22,9 @@ pub enum PathKind {
     TopSurface,
     /// Lines of a raft under the print or under supports.
     Raft,
+    /// Solid lines laid over air (an unsupported area anchored at both ends), running
+    /// across the shortest anchored span.
+    Bridge,
     /// The prime tower of a two-nozzle print: each nozzle primes on it after a tool change.
     PrimeTower,
     /// The ooze shield of a two-nozzle print: a one-line wall around the print that the idle
@@ -30,11 +33,12 @@ pub enum PathKind {
 }
 
 impl PathKind {
-    pub const ALL: [PathKind; 12] = [
+    pub const ALL: [PathKind; 13] = [
         Self::OuterWall,
         Self::InnerWall,
         Self::TopSurface,
         Self::SolidInfill,
+        Self::Bridge,
         Self::SparseInfill,
         Self::Ironing,
         Self::Support,
@@ -57,6 +61,7 @@ impl PathKind {
             Self::Ironing => "Ironing",
             Self::TopSurface => "Top surface",
             Self::Raft => "Raft",
+            Self::Bridge => "Bridge",
             Self::PrimeTower => "Prime tower",
             Self::OozeShield => "Ooze shield",
         }
@@ -67,7 +72,8 @@ impl PathKind {
             Self::Skirt | Self::Brim => "SKIRT",
             Self::OuterWall => "WALL-OUTER",
             Self::InnerWall => "WALL-INNER",
-            Self::SolidInfill => "SKIN",
+            // Cura-style names have no bridge type; a bridge is solid skin to printer screens.
+            Self::SolidInfill | Self::Bridge => "SKIN",
             Self::SparseInfill => "FILL",
             Self::Support => "SUPPORT",
             Self::Ironing => "IRONING",
@@ -113,6 +119,12 @@ const INFILL_OVERLAP: f32 = 0.15;
 /// Raft: layers, how far it reaches past the print (cells of 1 mm), the base layer's line
 /// spacing, and the gap left between a full raft and the model.
 pub const RAFT_LAYERS: usize = 3;
+/// Bridge lines reach this many cells onto the supported area at each end, to anchor.
+const BRIDGE_ANCHOR_CELLS: usize = 2;
+/// Unsupported areas smaller than this many cells are left as normal solid infill.
+const MIN_BRIDGE_CELLS: usize = 4;
+/// Bridge directions tried, every 15 degrees over a half turn.
+const BRIDGE_ANGLE_STEPS: usize = 12;
 const RAFT_MARGIN_CELLS: usize = 3;
 const SUPPORT_RAFT_MARGIN_CELLS: usize = 2;
 const RAFT_BASE_SPACING_MM: f32 = 1.0;
@@ -259,13 +271,41 @@ pub fn slice(
             let exposed = exposed_cells(&masks, i, settings);
             let top = top_cells(&grid, &masks, i);
             let angle = if i % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
-            let solid = solid_infill_paths(&region, &grid, &exposed, &top, angle, line_width);
+            // Bridges: only above the model's first layer (nothing below it but plate or
+            // raft). Their areas are taken out of the normal solid and sparse infill.
+            let bridges = if i > raft_n {
+                bridge_areas(&grid, &masks, i)
+            } else {
+                Vec::new()
+            };
+            let mut not_bridged = vec![true; grid.cells()];
+            for (area, _) in &bridges {
+                for (n, b) in not_bridged.iter_mut().zip(area) {
+                    *n &= !*b;
+                }
+            }
+            if !bridges.is_empty() {
+                let from = last_point(&paths);
+                let lines = bridge_paths(&region, &grid, &bridges, line_width);
+                paths.extend(order_open_paths(lines, from));
+            }
+            let solid_cells: Vec<bool> = exposed
+                .iter()
+                .zip(&not_bridged)
+                .map(|(e, n)| *e && *n)
+                .collect();
+            let solid = solid_infill_paths(&region, &grid, &solid_cells, &top, angle, line_width);
             let from = last_point(&paths);
             paths.extend(order_open_paths(solid, from));
             if settings.infill_percent > 0.5 {
+                let kept_off: Vec<bool> = exposed
+                    .iter()
+                    .zip(&not_bridged)
+                    .map(|(e, n)| *e || !*n)
+                    .collect();
                 let from = last_point(&paths);
                 paths.extend(sparse_infill_paths(
-                    &region, &grid, &exposed, i, line_width, settings, from,
+                    &region, &grid, &kept_off, i, line_width, settings, from,
                 ));
             }
             // Only the very top layer of each surface is ironed. Fuzzy top wins: ironing
@@ -382,6 +422,77 @@ fn top_cells(grid: &Grid, masks: &[Vec<bool>], i: usize) -> Vec<bool> {
     (0..grid.cells())
         .map(|c| masks[i][c] && (i + 1 == n || !masks[i + 1][c]))
         .collect()
+}
+
+/// The bridges of layer `i`: each a mask of the cells its lines cover and the direction
+/// (radians) they run.
+///
+/// An unsupported cell is in this layer but not the one below. Each 4-connected group of
+/// them is tried at `BRIDGE_ANGLE_STEPS` directions. For every cell, a line through it in
+/// that direction is followed both ways out of the group; it is anchored when both ends
+/// land on a cell that is in this layer and the one below. The direction with the most
+/// anchored lines wins; among equals, the one with the shorter lines (the shortest span).
+/// A group with no anchored line, or smaller than `MIN_BRIDGE_CELLS`, is an overhang, not
+/// a bridge, and is left as normal solid infill. A bridge's cells are widened by
+/// `BRIDGE_ANCHOR_CELLS` onto the supported area so its lines are anchored.
+fn bridge_areas(grid: &Grid, masks: &[Vec<bool>], i: usize) -> Vec<(Vec<bool>, f32)> {
+    let (here, below) = (&masks[i], &masks[i - 1]);
+    let unsupported: Vec<bool> = here.iter().zip(below).map(|(h, b)| *h && !*b).collect();
+    let mut taken = vec![false; grid.cells()];
+    let mut out = Vec::new();
+    for group in grid.groups(&unsupported) {
+        if group.len() < MIN_BRIDGE_CELLS {
+            continue;
+        }
+        let mut in_group = vec![false; grid.cells()];
+        for c in &group {
+            in_group[*c] = true;
+        }
+        let best = (0..BRIDGE_ANGLE_STEPS)
+            .map(|k| {
+                let angle = std::f32::consts::PI * k as f32 / BRIDGE_ANGLE_STEPS as f32;
+                let (anchored, span) =
+                    grid.spans(&group, &in_group, angle, |c| here[c] && below[c]);
+                (angle, anchored, span)
+            })
+            .filter(|(_, anchored, _)| *anchored > 0)
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.2.total_cmp(&a.2)));
+        let Some((angle, _, _)) = best else {
+            continue;
+        };
+        let wide = grid.dilate(&in_group, BRIDGE_ANCHOR_CELLS);
+        let area: Vec<bool> = wide
+            .iter()
+            .zip(here)
+            .zip(&taken)
+            .map(|((w, h), t)| *w && *h && !*t)
+            .collect();
+        for (t, a) in taken.iter_mut().zip(&area) {
+            *t |= *a;
+        }
+        out.push((area, angle));
+    }
+    out
+}
+
+/// Bridge lines over each bridge's cells, at the bridge's direction.
+fn bridge_paths(
+    region: &[Polygon],
+    grid: &Grid,
+    bridges: &[(Vec<bool>, f32)],
+    line_width: f32,
+) -> Vec<ToolPath> {
+    let mut paths = Vec::new();
+    for (area, angle) in bridges {
+        for seg in scan_fill(region, line_width, *angle) {
+            for (points, inside) in split_by(&seg, |p| area[grid.index_of(p)]) {
+                if inside {
+                    paths.push(open_path(PathKind::Bridge, points));
+                }
+            }
+        }
+    }
+    paths
 }
 
 /// Solid lines over the exposed (top/bottom) cells; the parts over `top` cells are
@@ -1190,6 +1301,84 @@ impl Grid {
     }
 
     /// `mask` grown by `r` cells in every direction (a square around each cell).
+    /// The 4-connected groups of set cells in `mask`, each as a list of cell indices.
+    fn groups(&self, mask: &[bool]) -> Vec<Vec<usize>> {
+        let mut seen = vec![false; mask.len()];
+        let mut groups = Vec::new();
+        for start in 0..mask.len() {
+            if !mask[start] || seen[start] {
+                continue;
+            }
+            seen[start] = true;
+            let (mut group, mut todo) = (Vec::new(), vec![start]);
+            while let Some(c) = todo.pop() {
+                group.push(c);
+                let (cx, cy) = (c % self.w, c / self.w);
+                let near = [
+                    (cx > 0).then(|| c - 1),
+                    (cx + 1 < self.w).then(|| c + 1),
+                    (cy > 0).then(|| c - self.w),
+                    (cy + 1 < self.h).then(|| c + self.w),
+                ];
+                for n in near.into_iter().flatten() {
+                    if mask[n] && !seen[n] {
+                        seen[n] = true;
+                        todo.push(n);
+                    }
+                }
+            }
+            groups.push(group);
+        }
+        groups
+    }
+
+    /// For lines through each cell of `group` in direction `angle`: how many have both
+    /// ends on an `anchor` cell (the first cell outside the group each way), and their
+    /// mean length (mm).
+    fn spans(
+        &self,
+        group: &[usize],
+        in_group: &[bool],
+        angle: f32,
+        anchor: impl Fn(usize) -> bool,
+    ) -> (usize, f32) {
+        let step = 0.5 * CELL_MM;
+        let (dx, dy) = (angle.cos() * step, angle.sin() * step);
+        let outside = |p: Point2| {
+            p.x < self.x0
+                || p.y < self.y0
+                || p.x >= self.x0 + self.w as f32 * CELL_MM
+                || p.y >= self.y0 + self.h as f32 * CELL_MM
+        };
+        // Walks from `p` until it leaves the group: the cell reached (None off the grid)
+        // and the distance walked.
+        let walk = |mut p: Point2, sx: f32, sy: f32| {
+            let mut dist = 0.0;
+            loop {
+                p = Point2::new(p.x + sx, p.y + sy);
+                dist += step;
+                if outside(p) {
+                    return (None, dist);
+                }
+                let c = self.index_of(p);
+                if !in_group[c] {
+                    return (Some(c), dist);
+                }
+            }
+        };
+        let (mut anchored, mut total) = (0, 0.0);
+        for &c in group {
+            let p = self.center(c % self.w, c / self.w);
+            let (a, da) = walk(p, dx, dy);
+            let (b, db) = walk(p, -dx, -dy);
+            if a.is_some_and(&anchor) && b.is_some_and(&anchor) {
+                anchored += 1;
+            }
+            total += da + db;
+        }
+        (anchored, total / group.len().max(1) as f32)
+    }
+
     fn dilate(&self, mask: &[bool], r: usize) -> Vec<bool> {
         let mut out = vec![false; mask.len()];
         for cy in 0..self.h {
@@ -1281,6 +1470,89 @@ mod tests {
         assert!(!contains(&[], p));
         assert!(!contains(&[p], p));
         assert!(!contains(&[p, Point2::new(1.0, 1.0)], p));
+    }
+
+    /// A box `size` with its bottom face centred on `at`.
+    fn box_at(size: Vec3, at: Vec3) -> Vec<Triangle> {
+        Mesh::cube(size)
+            .triangles
+            .iter()
+            .map(|t| t.map(|v| v + at))
+            .collect()
+    }
+
+    /// Two 10 x 10 x 10 mm pillars 20 mm apart, with a 40 x 10 x 2 mm deck across them.
+    fn bridge_test() -> Vec<Triangle> {
+        let pillar = Vec3::new(10.0, 10.0, 10.0);
+        let mut tris = box_at(pillar, Vec3::new(-15.0, 0.0, 0.0));
+        tris.extend(box_at(pillar, Vec3::new(15.0, 0.0, 0.0)));
+        tris.extend(box_at(
+            Vec3::new(40.0, 10.0, 2.0),
+            Vec3::new(0.0, 0.0, 10.0),
+        ));
+        tris
+    }
+
+    fn bridge_layers(r: &SliceResult) -> Vec<usize> {
+        (0..r.layers.len())
+            .filter(|&i| r.layers[i].paths.iter().any(|p| p.kind == PathKind::Bridge))
+            .collect()
+    }
+
+    #[test]
+    fn test_bridge_spans_the_gap_between_pillars() {
+        let s = PrintSettings::default();
+        let r = slice(&bridge_test(), &s, 0.42, &|_| {});
+        let layers = bridge_layers(&r);
+        // Only the deck's first layer is over air.
+        assert_eq!(layers.len(), 1, "{layers:?}");
+        let layer = &r.layers[layers[0]];
+        assert!(layer.z > 10.0 && layer.z < 10.5, "{}", layer.z);
+        let bridge: Vec<&ToolPath> = layer
+            .paths
+            .iter()
+            .filter(|p| p.kind == PathKind::Bridge)
+            .collect();
+        // The lines run along X, pillar to pillar.
+        for p in &bridge {
+            let (a, b) = (p.points[0], *p.points.last().unwrap());
+            assert!((b.y - a.y).abs() < 0.01, "not along X: {a:?} -> {b:?}");
+        }
+        let xs = bridge.iter().flat_map(|p| p.points.iter().map(|q| q.x));
+        let (lo, hi) = xs.fold((f32::MAX, f32::MIN), |(l, h), x| (l.min(x), h.max(x)));
+        assert!(
+            lo < -10.5 && hi > 10.5,
+            "bridge {lo}..{hi} doesn't reach the pillars"
+        );
+        // The gap is fully bridged: no sparse or plain solid infill over it.
+        assert!(!layer.paths.iter().any(|p| {
+            matches!(p.kind, PathKind::SparseInfill | PathKind::SolidInfill)
+                && p.points.iter().any(|q| q.x.abs() < 8.0)
+        }));
+    }
+
+    #[test]
+    fn test_bridge_not_on_a_supported_top_or_the_first_layer() {
+        let s = PrintSettings::default();
+        let cube = box_at(Vec3::new(20.0, 20.0, 10.0), Vec3::new(0.0, 0.0, 0.0));
+        assert!(bridge_layers(&slice(&cube, &s, 0.42, &|_| {})).is_empty());
+        let raft = PrintSettings {
+            adhesion: Adhesion::Raft,
+            ..PrintSettings::default()
+        };
+        assert!(bridge_layers(&slice(&cube, &raft, 0.42, &|_| {})).is_empty());
+    }
+
+    #[test]
+    fn test_bridge_not_for_an_overhang_anchored_on_one_side() {
+        // A 20 mm shelf sticking out of one pillar: nothing to land on at the far end.
+        let mut tris = box_at(Vec3::new(10.0, 10.0, 10.0), Vec3::new(-15.0, 0.0, 0.0));
+        tris.extend(box_at(
+            Vec3::new(30.0, 10.0, 2.0),
+            Vec3::new(-5.0, 0.0, 10.0),
+        ));
+        let r = slice(&tris, &PrintSettings::default(), 0.42, &|_| {});
+        assert!(bridge_layers(&r).is_empty());
     }
 
     fn cube_tris(size: f32) -> Vec<Triangle> {
