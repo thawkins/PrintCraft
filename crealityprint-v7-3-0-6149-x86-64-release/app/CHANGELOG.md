@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Support settings (gap plan task M5.5). With supports on and Advanced on, the
+  Support section has Top Z gap (Auto: one layer, as before), Bottom Z gap (0 mm),
+  XY gap (1 mm), Line spacing (2 mm) and Interface layers (0). Interface layers are
+  laid one line width apart, across the normal support lines, at the top of each
+  support, for a cleaner underside. The XY gap and line spacing go in 1 mm steps.
+  The defaults keep supports exactly as they were.
 - Top and solid patterns (gap plan task M5.4). With Advanced on, "Top surface
   pattern" and "Solid infill pattern" under Walls and surfaces choose how the visible
   top and the other solid layers (bottoms, skins) are filled: Lines (as before, the

@@ -23,6 +23,10 @@ pub mod limits {
     pub const ADAPTIVE_SMOOTHING: RangeInclusive<f32> = 0.0..=10.0;
     pub const INFILL_PERCENT: RangeInclusive<f32> = 0.0..=100.0;
     pub const SUPPORT_ANGLE: RangeInclusive<f32> = 30.0..=80.0;
+    pub const SUPPORT_GAP: RangeInclusive<f32> = 0.0..=2.0;
+    pub const SUPPORT_XY_GAP: RangeInclusive<f32> = 1.0..=5.0;
+    pub const SUPPORT_SPACING: RangeInclusive<f32> = 1.0..=10.0;
+    pub const SUPPORT_INTERFACE: RangeInclusive<u32> = 0..=10;
     // Printing never goes slower than gcode::MIN_PRINT_SPEED (15 mm/s), so the panel
     // doesn't offer slower speeds that would have no effect.
     pub const PRINT_SPEED: RangeInclusive<f32> = 15.0..=500.0;
@@ -442,6 +446,17 @@ pub struct PrintSettings {
     /// Support columns that reach the plate stand on a small raft of their own, so they
     /// stick to the bed (not needed with a full raft, which already covers them).
     pub support_raft: bool,
+    /// Gap (mm) between the top of a support and the overhang it holds; `None` is one
+    /// layer.
+    pub support_top_gap: Option<f32>,
+    /// Gap (mm) between the model and a support standing on it.
+    pub support_bottom_gap: f32,
+    /// How far (mm) support keeps from the model's sides (in 1 mm steps).
+    pub support_xy_gap: f32,
+    /// Distance (mm) between support lines (in 1 mm steps).
+    pub support_spacing: f32,
+    /// Dense layers at the top of each support, for a cleaner underside.
+    pub support_interface_layers: u32,
     pub adhesion: Adhesion,
     pub infill_pattern: InfillPattern,
     pub seam: SeamPosition,
@@ -690,6 +705,11 @@ impl Quality {
             support_angle: 50.0,
             supports_on_plate_only: false,
             support_raft: true,
+            support_top_gap: None,
+            support_bottom_gap: 0.0,
+            support_xy_gap: 1.0,
+            support_spacing: 2.0,
+            support_interface_layers: 0,
             adhesion: Adhesion::Skirt,
             infill_pattern: InfillPattern::Grid,
             // The original's main window shows "Seam position: Aligned" (reference/picture-2.png).

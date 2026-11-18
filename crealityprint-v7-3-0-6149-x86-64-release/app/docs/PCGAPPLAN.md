@@ -104,7 +104,7 @@ Goal: PrusaSlicer's most used pattern and support choices are available.
 | M5.2 | **Done.** **Honeycomb, cubic, adaptive cubic.** Add these patterns. Adaptive cubic thins the infill away from the surfaces. | Tests per pattern: inside the region, density within 10 % of target. | 4 |
 | M5.3 | **Done.** **Lightning infill.** Infill only where needed to support top surfaces. | Test: a cube with a top gets a tree under the top only. | 4 |
 | M5.4 | **Done.** **Top/bottom patterns.** Monotonic and concentric for solid and top layers. | Tests and screenshot. | 1.5 |
-| M5.5 | **Support settings.** Interface layers, top/bottom Z gap, XY gap, pattern spacing, all advanced. | Tests: the gap layers are empty, and the interface layers are dense. | 2 |
+| M5.5 | **Done.** **Support settings.** Interface layers, top/bottom Z gap, XY gap, pattern spacing, all advanced. | Tests: the gap layers are empty, and the interface layers are dense. | 2 |
 | M5.6 | **Tree supports.** Branches that grow down from overhang points, avoid the model and merge, with tip and branch diameters. | Tests: an overhang test gets supports that don't touch the model sides. Volume is less than grid supports. Screenshot. | 10 |
 | M5.7 | **Variable-width walls (Arachne-style).** Make the wall line width vary to fill thin features without gaps. Off by default until it has been tested on prints. | Tests: a tapered wedge gets continuous walls with widths in the allowed range. Baseline unchanged when off. | 10 |
 

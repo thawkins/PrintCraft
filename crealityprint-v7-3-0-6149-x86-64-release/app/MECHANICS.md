@@ -307,6 +307,14 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     outline's last whole ring gets straight lines at 45 degrees. Solid infill is laid
     first, then the top.
 
+26. **Support settings** (`Grid::supports`, gap plan M5.5). A column's top layer is
+    the highest whose top is the top Z gap (Auto: that layer's height, at least
+    0.15 mm) below the overhang. A support layer is left out over a cell with model
+    less than the bottom Z gap below its bottom. Lines keep XY gap / 1 mm cells
+    (rounded, at least 1) from model cells, and run on every (spacing / 1 mm)-th row.
+    Each column counts its layers from its top; the first `Interface layers` of them
+    are laid as lines along Y, one line width apart, instead of the normal rows.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

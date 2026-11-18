@@ -734,6 +734,95 @@ fn build() -> Vec<Setting> {
                 support_raft
             )
         },
+        Setting {
+            shown: with_supports,
+            ..hinted(
+                r!(
+                    "support_top_gap",
+                    "Top Z gap",
+                    G::Support,
+                    A,
+                    Kind::Auto {
+                        range: limits::SUPPORT_GAP,
+                        step: 0.01,
+                        suffix: " mm",
+                        auto: |s, _| s.layer_height.max(0.15),
+                        auto_hint: "One layer",
+                    },
+                    Auto,
+                    support_top_gap
+                ),
+                |_| Some("Space between the top of a support and the overhang above it"),
+            )
+        },
+        Setting {
+            shown: with_supports,
+            ..hinted(
+                r!(
+                    "support_bottom_gap",
+                    "Bottom Z gap",
+                    G::Support,
+                    A,
+                    mm(limits::SUPPORT_GAP, 0.01),
+                    Num,
+                    support_bottom_gap
+                ),
+                |_| Some("Space between the model and a support standing on it"),
+            )
+        },
+        Setting {
+            shown: with_supports,
+            ..hinted(
+                r!(
+                    "support_xy_gap",
+                    "XY gap",
+                    G::Support,
+                    A,
+                    mm(limits::SUPPORT_XY_GAP, 0.1),
+                    Num,
+                    support_xy_gap
+                ),
+                |_| Some("How far supports keep from the model's sides (in 1 mm steps)"),
+            )
+        },
+        Setting {
+            shown: with_supports,
+            ..hinted(
+                r!(
+                    "support_spacing",
+                    "Line spacing",
+                    G::Support,
+                    A,
+                    mm(limits::SUPPORT_SPACING, 0.1),
+                    Num,
+                    support_spacing
+                ),
+                |_| Some("Distance between support lines (in 1 mm steps)"),
+            )
+        },
+        Setting {
+            shown: with_supports,
+            ..hinted(
+                r!(
+                    "support_interface_layers",
+                    "Interface layers",
+                    G::Support,
+                    A,
+                    Kind::Count {
+                        range: limits::SUPPORT_INTERFACE,
+                        suffix: ""
+                    },
+                    Count,
+                    support_interface_layers
+                ),
+                |_| {
+                    Some(
+                        "Dense layers at the top of each support, so the underside it holds \
+                         comes out cleaner",
+                    )
+                },
+            )
+        },
         // Adhesion
         row(
             "adhesion",
@@ -906,6 +995,11 @@ mod tests {
             support_angle: 55.0,
             supports_on_plate_only: true,
             support_raft: false,
+            support_top_gap: Some(0.3),
+            support_bottom_gap: 0.2,
+            support_xy_gap: 2.0,
+            support_spacing: 3.0,
+            support_interface_layers: 2,
             adhesion: Adhesion::Raft,
             infill_pattern: InfillPattern::Triangles,
             seam: SeamPosition::Rear,

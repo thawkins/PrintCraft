@@ -146,8 +146,6 @@ fn inside_mesh(tris: &[Triangle], p: Vec3) -> bool {
 
 /// Grid used for top/bottom detection and supports.
 const CELL_MM: f32 = 1.0;
-/// Support lines are laid on every n-th grid row (2 mm apart).
-const SUPPORT_ROW_STEP: usize = 2;
 const SKIRT_DISTANCE_MM: f32 = 5.0;
 const SKIRT_LOOPS: usize = 2;
 const BRIM_LINES: usize = 8;
@@ -317,13 +315,7 @@ pub fn slice_modified(
         }
         let blockers = lifted(&support_volumes.blockers);
         points.retain(|p| !blockers.iter().any(|v| inside_mesh(v, at(p))));
-        grid.supports(
-            &points,
-            &masks,
-            &heights,
-            settings.supports_on_plate_only,
-            line_width,
-        )
+        grid.supports(&points, &masks, &heights, settings, line_width)
     } else {
         (vec![Vec::new(); n], vec![false; grid.cells()])
     };
@@ -2233,9 +2225,10 @@ impl Grid {
         overhangs: &[(usize, f32)],
         masks: &[Vec<bool>],
         heights: &[(f32, f32)],
-        plate_only: bool,
+        settings: &PrintSettings,
         lw: f32,
     ) -> (Vec<Vec<ToolPath>>, Vec<bool>) {
+        let plate_only = settings.supports_on_plate_only;
         let n = heights.len();
         // Lowest layer with model in each cell (n when there is none).
         let mut first_model = vec![n; self.cells()];
@@ -2248,24 +2241,54 @@ impl Grid {
         }
         let mut starts: Vec<Vec<usize>> = vec![Vec::new(); n];
         for &(cell, h) in overhangs {
-            // Highest layer that stays at least one layer below the overhang.
-            let k = heights.partition_point(|(z, lh)| z + lh.max(0.15) < h);
+            // Highest layer that stays the top Z gap (one layer on Auto) below the
+            // overhang.
+            let k = heights.partition_point(|(z, lh)| {
+                z + settings.support_top_gap.unwrap_or(lh.max(0.15)) < h
+            });
             if k > 0 && (!plate_only || first_model[cell] >= k) {
                 starts[k - 1].push(cell);
             }
         }
         let mut active = vec![false; self.cells()];
+        // Layers since each column's top, for the interface layers.
+        let mut age = vec![0u32; self.cells()];
+        let look = SupportLook {
+            near_cells: ((settings.support_xy_gap / CELL_MM).round() as usize).max(1),
+            row_step: ((settings.support_spacing / CELL_MM).round() as usize).max(1),
+        };
         let mut out = vec![Vec::new(); n];
         for i in (0..n).rev() {
             for &c in &starts[i] {
                 active[c] = true;
+                age[c] = 0;
             }
             for (a, m) in active.iter_mut().zip(&masks[i]) {
                 if *m {
                     *a = false;
                 }
             }
-            out[i] = self.support_lines(&masks[i], &active, lw);
+            // Bottom Z gap: no support just above the model it stands on.
+            let (top, height) = heights[i];
+            let resting = |c: usize| {
+                settings.support_bottom_gap > 0.0
+                    && (0..i)
+                        .rev()
+                        .take_while(|&j| heights[j].0 > top - height - settings.support_bottom_gap)
+                        .any(|j| masks[j][c])
+            };
+            let here: Vec<bool> = (0..self.cells())
+                .map(|c| active[c] && !resting(c))
+                .collect();
+            let interface: Vec<bool> = (0..self.cells())
+                .map(|c| here[c] && age[c] < settings.support_interface_layers)
+                .collect();
+            out[i] = self.support_lines(&masks[i], &here, &interface, lw, &look);
+            for (g, a) in age.iter_mut().zip(&active) {
+                if *a {
+                    *g += 1;
+                }
+            }
         }
         // After the bottom layer, the cells still active are the columns on the plate.
         (out, active)
@@ -2383,19 +2406,28 @@ impl Grid {
 
     /// Lines along X through the active cells of every other row, keeping a one-cell
     /// gap from the model so supports peel off easily.
-    fn support_lines(&self, mask: &[bool], active: &[bool], lw: f32) -> Vec<ToolPath> {
+    fn support_lines(
+        &self,
+        mask: &[bool],
+        active: &[bool],
+        interface: &[bool],
+        lw: f32,
+        look: &SupportLook,
+    ) -> Vec<ToolPath> {
         let mut out = Vec::new();
+        let r = look.near_cells;
         let near_model = |cx: usize, cy: usize| {
-            let x_lo = cx.saturating_sub(1);
-            let y_lo = cy.saturating_sub(1);
-            (y_lo..=(cy + 1).min(self.h - 1))
-                .any(|y| (x_lo..=(cx + 1).min(self.w - 1)).any(|x| mask[y * self.w + x]))
+            let x_lo = cx.saturating_sub(r);
+            let y_lo = cy.saturating_sub(r);
+            (y_lo..=(cy + r).min(self.h - 1))
+                .any(|y| (x_lo..=(cx + r).min(self.w - 1)).any(|x| mask[y * self.w + x]))
         };
-        for (row_no, cy) in (0..self.h).step_by(SUPPORT_ROW_STEP).enumerate() {
+        for (row_no, cy) in (0..self.h).step_by(look.row_step).enumerate() {
             let mut runs: Vec<(usize, usize)> = Vec::new();
             let mut start = None;
             for cx in 0..=self.w {
-                let on = cx < self.w && active[cy * self.w + cx] && !near_model(cx, cy);
+                let c = cy * self.w + cx;
+                let on = cx < self.w && active[c] && !interface[c] && !near_model(cx, cy);
                 match (on, start) {
                     (true, None) => start = Some(cx),
                     (false, Some(s)) => {
@@ -2427,8 +2459,66 @@ impl Grid {
                 });
             }
         }
+        out.extend(self.interface_lines(interface, lw, &near_model));
         out
     }
+
+    /// Dense support lines one line width apart, running across the normal support
+    /// lines (along Y), over the `interface` cells clear of the model.
+    fn interface_lines(
+        &self,
+        interface: &[bool],
+        lw: f32,
+        near_model: &dyn Fn(usize, usize) -> bool,
+    ) -> Vec<ToolPath> {
+        let mut out = Vec::new();
+        if !interface.iter().any(|c| *c) {
+            return out;
+        }
+        let count = (self.w as f32 * CELL_MM / lw).floor() as usize;
+        for k in 0..count {
+            let x = self.x0 + lw * (0.5 + k as f32);
+            let cx = (((x - self.x0) / CELL_MM) as usize).min(self.w - 1);
+            let mut runs: Vec<(usize, usize)> = Vec::new();
+            let mut start = None;
+            for cy in 0..=self.h {
+                let on = cy < self.h && interface[cy * self.w + cx] && !near_model(cx, cy);
+                match (on, start) {
+                    (true, None) => start = Some(cy),
+                    (false, Some(s)) => {
+                        runs.push((s, cy - 1));
+                        start = None;
+                    }
+                    _ => {}
+                }
+            }
+            for (a, b) in runs {
+                let ya = self.y0 + a as f32 * CELL_MM + lw / 2.0;
+                let yb = self.y0 + (b + 1) as f32 * CELL_MM - lw / 2.0;
+                if yb - ya < 0.5 {
+                    continue;
+                }
+                let mut pts = vec![Point2::new(x, ya), Point2::new(x, yb)];
+                if k % 2 == 1 {
+                    pts.reverse();
+                }
+                out.push(ToolPath {
+                    kind: PathKind::Support,
+                    points: pts,
+                    closed: false,
+                    width: None,
+                });
+            }
+        }
+        out
+    }
+}
+
+/// How support lines are laid out: how many cells they keep from the model, and every
+/// how many rows a line runs.
+struct SupportLook {
+    near_cells: usize,
+    row_step: usize,
 }
 
 #[cfg(test)]
@@ -3539,6 +3629,140 @@ mod tests {
             "the enforcer supports the wall"
         );
         assert!(pts.iter().all(|p| p.x > -1.5), "only inside the enforcer");
+    }
+
+    fn with_supports(change: impl Fn(&mut PrintSettings)) -> PrintSettings {
+        let mut s = PrintSettings {
+            supports: true,
+            ..PrintSettings::default()
+        };
+        change(&mut s);
+        s
+    }
+
+    /// The layers with support lines, and each one's support length.
+    fn support_layers(r: &SliceResult) -> Vec<(usize, f32)> {
+        r.layers
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let len: f32 = l
+                    .paths
+                    .iter()
+                    .filter(|p| p.kind == PathKind::Support)
+                    .map(|p| {
+                        p.points
+                            .windows(2)
+                            .map(|w| w[0].distance(w[1]))
+                            .sum::<f32>()
+                    })
+                    .sum();
+                (i, len)
+            })
+            .filter(|(_, len)| *len > 0.0)
+            .collect()
+    }
+
+    #[test]
+    fn test_support_top_gap_leaves_the_layers_under_the_overhang_empty() {
+        // The slab's underside is at 10 mm.
+        let tris = slab_on_post();
+        let top_of = |s: &PrintSettings| {
+            let r = slice(&tris, s, 0.42, &|_| {});
+            let (i, _) = *support_layers(&r).last().unwrap();
+            r.layers[i].z
+        };
+        // Auto: one layer gap.
+        assert!((top_of(&with_supports(|_| {})) - 9.8).abs() < 1e-3);
+        // 1 mm: nothing above 9 mm.
+        let gapped = top_of(&with_supports(|s| s.support_top_gap = Some(1.0)));
+        assert!(gapped <= 9.0 + 1e-3 && gapped > 8.7, "{gapped}");
+    }
+
+    #[test]
+    fn test_support_interface_layers_are_dense() {
+        let tris = slab_on_post();
+        let s = with_supports(|s| s.support_interface_layers = 3);
+        let r = slice(&tris, &s, 0.42, &|_| {});
+        let layers = support_layers(&r);
+        let len = |i: usize| {
+            layers
+                .iter()
+                .find(|(j, _)| *j == i)
+                .map_or(0.0, |(_, l)| *l)
+        };
+        let top = layers.last().unwrap().0;
+        // The top three layers are interface: several times the support of a normal
+        // layer (lines a line width apart, not 2 mm).
+        let normal = len(top - 10);
+        for i in top - 2..=top {
+            assert!(len(i) > normal * 3.0, "layer {i}: {} vs {normal}", len(i));
+        }
+        assert!(
+            len(top - 3) < normal * 1.5,
+            "the fourth layer down is normal"
+        );
+        // Without interface layers the top is normal too.
+        let plain = support_layers(&slice(&tris, &with_supports(|_| {}), 0.42, &|_| {}));
+        let (ptop, plen) = *plain.last().unwrap();
+        assert_eq!(ptop, top);
+        assert!(plen < normal * 1.5);
+    }
+
+    #[test]
+    fn test_support_bottom_gap_keeps_off_the_model_below() {
+        // The slab on a post, the post on a 3 mm block: supports stand on the block.
+        let mut tris = slab_on_post();
+        tris.iter_mut().flatten().for_each(|v| v.z += 3.0);
+        tris.extend(
+            PlacedObject::new("block", Mesh::cube(Vec3::new(40.0, 40.0, 3.0))).world_triangles(),
+        );
+        let lowest = |s: &PrintSettings| {
+            let r = slice(&tris, s, 0.42, &|_| {});
+            let (i, _) = support_layers(&r)[0];
+            r.layers[i].z - r.layers[i].height
+        };
+        let base = |s: &mut PrintSettings| s.support_raft = false;
+        let touching = lowest(&with_supports(base));
+        assert!((touching - 3.0).abs() < 1e-3, "{touching}");
+        let gapped = lowest(&with_supports(|s| {
+            base(s);
+            s.support_bottom_gap = 0.6;
+        }));
+        assert!((3.6 - 1e-3..3.9).contains(&gapped), "{gapped}");
+    }
+
+    #[test]
+    fn test_support_xy_gap_and_line_spacing() {
+        let tris = slab_on_post();
+        let points = |s: &PrintSettings| -> Vec<Point2> {
+            let r = slice(&tris, s, 0.42, &|_| {});
+            r.layers[20]
+                .paths
+                .iter()
+                .filter(|p| p.kind == PathKind::Support)
+                .flat_map(|p| p.points.iter().copied())
+                .collect()
+        };
+        // The post is 4 mm square at the middle: with a 3 mm gap no support comes nearer
+        // than about 3 mm (2 mm half-width plus the gap, less half a cell).
+        let far = points(&with_supports(|s| s.support_xy_gap = 3.0));
+        assert!(
+            far.iter().all(|p| p.x.abs().max(p.y.abs()) > 4.4),
+            "near the post"
+        );
+        let near = points(&with_supports(|_| {}));
+        assert!(near.iter().any(|p| p.x.abs().max(p.y.abs()) < 4.4));
+        // Lines 4 mm apart: about half as many as 2 mm.
+        let count = |s: &PrintSettings| points(s).len() / 2;
+        let (two, four) = (
+            count(&with_supports(|_| {})),
+            count(&with_supports(|s| s.support_spacing = 4.0)),
+        );
+        assert!(
+            (four as f32 / two as f32 - 0.5).abs() < 0.15,
+            "{two} vs {four}"
+        );
     }
 
     fn kinds(layer: &Layer) -> Vec<PathKind> {
