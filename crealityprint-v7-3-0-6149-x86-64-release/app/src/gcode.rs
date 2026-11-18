@@ -44,6 +44,18 @@ impl Estimate {
     }
 }
 
+/// Adds custom G-code `text` to `g` as written, ending with a line break. Blank text
+/// adds nothing.
+fn push_block(g: &mut String, text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    g.push_str(text);
+    if !text.ends_with('\n') {
+        g.push('\n');
+    }
+}
+
 /// Filament (mm) needed for a line of this length, width and height.
 pub fn filament_for(length: f32, width: f32, height: f32, filament_diameter: f32) -> f32 {
     let filament_area = std::f32::consts::PI * (filament_diameter / 2.0).powi(2);
@@ -634,72 +646,95 @@ impl<'a> Writer<'a> {
         // prepares (levels) before running the file reads these to know the job temperature;
         // without them it may prepare at 0 °C and heat up again afterwards.
         g.push_str(&header_block(filament, s, printer));
-        let _ = writeln!(g, "M140 S{} ; bed temperature", filament.bed_temp);
-        if dual {
-            for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
-                let _ = writeln!(g, "M104 T{t} S{} ; nozzle {t} temperature", temp_of(t));
-            }
-        } else {
-            let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
-        }
-        let _ = writeln!(g, "G90 ; absolute positions");
-        let _ = writeln!(g, "M82 ; absolute extrusion");
-        let _ = writeln!(g, "G28 ; home all axes");
-        // Wait only while heating up: a nozzle or plate that is already hotter carries on.
-        g.push_str(&crate::heat::wait_bed(filament.bed_temp, printer.klipper));
-        if dual {
-            for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
-                let _ = writeln!(g, "M109 T{t} S{} ; wait for nozzle {t}", temp_of(t));
-            }
-        } else {
-            g.push_str(&crate::heat::wait_nozzle(
-                filament.nozzle_temp,
-                printer.klipper,
-            ));
-        }
-        let _ = writeln!(g, "M107 ; fan off");
-        let _ = writeln!(g, "G92 E0");
-        if dual {
-            let _ = writeln!(g, "T{start_tool} ; start with nozzle {start_tool}");
-            let _ = writeln!(g, "G92 E0");
-        }
-        // Purge: clear the nozzle with two side-by-side lines along the left edge.
+        // The start: a custom one in place of heating, homing and purging, or the built-in.
+        let custom_start = !printer.start_gcode.trim().is_empty();
         let purge = purge_lines(printer);
-        g.push_str(&purge.gcode);
-        let _ = writeln!(g, "G92 E0");
-        let mut prime_e = purge.filament_mm;
-        let mut purge_seconds = purge.seconds;
-        let mut parked = [0.0f32; 2];
-        let mut by_tool = [0.0f64; 2];
-        by_tool[start_tool as usize] = purge.filament_mm as f64;
-        if two {
-            // The other nozzle clears itself the same way, is set aside (pulled back and
-            // left to cool to its standby temperature), and the first is selected again.
-            let other = 1 - start_tool;
-            let _ = writeln!(g, "T{other} ; purge nozzle {other} too");
+        let (prime_e, purge_seconds, parked, by_tool, pos) = if custom_start {
+            push_block(&mut g, &printer.start_gcode);
+            // PrintCraft's own moves need these, whatever the custom start did.
+            let _ = writeln!(g, "G90 ; absolute positions");
+            let _ = writeln!(g, "M82 ; absolute extrusion");
             let _ = writeln!(g, "G92 E0");
+            if dual {
+                let _ = writeln!(g, "T{start_tool} ; start with nozzle {start_tool}");
+                let _ = writeln!(g, "G92 E0");
+            }
+            // Where the custom start leaves the nozzle isn't known: the printer's origin.
+            (0.0, 0.0, [0.0f32; 2], [0.0f64; 2], Point2::new(-ox, -oy))
+        } else {
+            let _ = writeln!(g, "M140 S{} ; bed temperature", filament.bed_temp);
+            if dual {
+                for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
+                    let _ = writeln!(g, "M104 T{t} S{} ; nozzle {t} temperature", temp_of(t));
+                }
+            } else {
+                let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
+            }
+            let _ = writeln!(g, "G90 ; absolute positions");
+            let _ = writeln!(g, "M82 ; absolute extrusion");
+            let _ = writeln!(g, "G28 ; home all axes");
+            // Wait only while heating up: a nozzle or plate that is already hotter carries on.
+            g.push_str(&crate::heat::wait_bed(filament.bed_temp, printer.klipper));
+            if dual {
+                for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
+                    let _ = writeln!(g, "M109 T{t} S{} ; wait for nozzle {t}", temp_of(t));
+                }
+            } else {
+                g.push_str(&crate::heat::wait_nozzle(
+                    filament.nozzle_temp,
+                    printer.klipper,
+                ));
+            }
+            let _ = writeln!(g, "M107 ; fan off");
+            let _ = writeln!(g, "G92 E0");
+            if dual {
+                let _ = writeln!(g, "T{start_tool} ; start with nozzle {start_tool}");
+                let _ = writeln!(g, "G92 E0");
+            }
+            // Purge: clear the nozzle with two side-by-side lines along the left edge.
             g.push_str(&purge.gcode);
-            let park = printer.tool_change_retract.max(0.0);
-            if park > 0.0 {
-                let f = printer.retract_speed * 60.0;
-                let _ = writeln!(
-                    g,
-                    "G1 E{:.5} F{f:.0} ; set nozzle {other} aside",
-                    purge_end_e(&purge.gcode) - park as f64
-                );
-            }
-            parked[other as usize] = park;
-            if printer.standby_drop > 0 {
-                let standby = temp_of(other).saturating_sub(printer.standby_drop);
-                let _ = writeln!(g, "M104 T{other} S{standby} ; standby");
-            }
             let _ = writeln!(g, "G92 E0");
-            let _ = writeln!(g, "T{start_tool} ; back to nozzle {start_tool}");
-            let _ = writeln!(g, "G92 E0");
-            prime_e += purge.filament_mm;
-            by_tool[other as usize] += purge.filament_mm as f64;
-            purge_seconds += purge.seconds + 2.0 * TOOL_CHANGE_SECONDS;
-        }
+            let mut prime_e = purge.filament_mm;
+            let mut purge_seconds = purge.seconds;
+            let mut parked = [0.0f32; 2];
+            let mut by_tool = [0.0f64; 2];
+            by_tool[start_tool as usize] = purge.filament_mm as f64;
+            if two {
+                // The other nozzle clears itself the same way, is set aside (pulled back and
+                // left to cool to its standby temperature), and the first is selected again.
+                let other = 1 - start_tool;
+                let _ = writeln!(g, "T{other} ; purge nozzle {other} too");
+                let _ = writeln!(g, "G92 E0");
+                g.push_str(&purge.gcode);
+                let park = printer.tool_change_retract.max(0.0);
+                if park > 0.0 {
+                    let f = printer.retract_speed * 60.0;
+                    let _ = writeln!(
+                        g,
+                        "G1 E{:.5} F{f:.0} ; set nozzle {other} aside",
+                        purge_end_e(&purge.gcode) - park as f64
+                    );
+                }
+                parked[other as usize] = park;
+                if printer.standby_drop > 0 {
+                    let standby = temp_of(other).saturating_sub(printer.standby_drop);
+                    let _ = writeln!(g, "M104 T{other} S{standby} ; standby");
+                }
+                let _ = writeln!(g, "G92 E0");
+                let _ = writeln!(g, "T{start_tool} ; back to nozzle {start_tool}");
+                let _ = writeln!(g, "G92 E0");
+                prime_e += purge.filament_mm;
+                by_tool[other as usize] += purge.filament_mm as f64;
+                purge_seconds += purge.seconds + 2.0 * TOOL_CHANGE_SECONDS;
+            }
+            (
+                prime_e,
+                purge_seconds,
+                parked,
+                by_tool,
+                Point2::new(purge.end.x - ox, purge.end.y - oy),
+            )
+        };
 
         Self {
             g,
@@ -710,7 +745,7 @@ impl<'a> Writer<'a> {
             oy,
             line_width: result.line_width,
             travel_f: s.travel_speed * 60.0,
-            pos: Point2::new(purge.end.x - ox, purge.end.y - oy),
+            pos,
             ext: Extruder::default(),
             prime_e,
             seconds: WARMUP_SECONDS + purge_seconds,
@@ -849,6 +884,7 @@ impl<'a> Writer<'a> {
             let standby = self.temp_of(old).saturating_sub(p.standby_drop);
             let _ = writeln!(self.g, "M104 T{old} S{standby} ; standby");
         }
+        push_block(&mut self.g, &self.printer.tool_change_gcode);
         let _ = writeln!(self.g, "T{tool}");
         let _ = writeln!(self.g, "G92 E0");
         if p.standby_drop > 0 {
@@ -1018,6 +1054,7 @@ impl<'a> Writer<'a> {
                 .collect();
         }
         let _ = writeln!(self.g, ";LAYER:{li}");
+        push_block(&mut self.g, &self.printer.layer_change_gcode);
         // Vase mode: above the solid bottom, the wall climbs continuously instead.
         let spiral = self.s.vase_mode && li >= self.s.bottom_layers as usize && li > 0;
         if !spiral {
@@ -1260,24 +1297,28 @@ impl<'a> Writer<'a> {
         let (printer, filament, g) = (self.printer, self.filament, &mut self.g);
         let top = result.layers.last().map(|l| l.z).unwrap_or(0.0);
         let _ = writeln!(g, ";END");
-        let _ = writeln!(g, "G1 E{:.5} F2400 ; retract", self.ext.e - 2.0);
-        let _ = writeln!(g, "G0 Z{:.2} F600", (top + 10.0).min(printer.max_z));
-        let _ = writeln!(
-            g,
-            "G0 X5 Y{:.0} F{:.0} ; present the print",
-            printer.bed_y - 10.0,
-            self.travel_f
-        );
-        if self.dual {
-            for t in [0u8, 1].into_iter().filter(|t| self.used[*t as usize]) {
-                let _ = writeln!(g, "M104 T{t} S0");
+        if printer.end_gcode.trim().is_empty() {
+            let _ = writeln!(g, "G1 E{:.5} F2400 ; retract", self.ext.e - 2.0);
+            let _ = writeln!(g, "G0 Z{:.2} F600", (top + 10.0).min(printer.max_z));
+            let _ = writeln!(
+                g,
+                "G0 X5 Y{:.0} F{:.0} ; present the print",
+                printer.bed_y - 10.0,
+                self.travel_f
+            );
+            if self.dual {
+                for t in [0u8, 1].into_iter().filter(|t| self.used[*t as usize]) {
+                    let _ = writeln!(g, "M104 T{t} S0");
+                }
+            } else {
+                let _ = writeln!(g, "M104 S0");
             }
+            let _ = writeln!(g, "M140 S0");
+            let _ = writeln!(g, "M107");
+            let _ = writeln!(g, "M84 ; motors off");
         } else {
-            let _ = writeln!(g, "M104 S0");
+            push_block(g, &printer.end_gcode);
         }
-        let _ = writeln!(g, "M140 S0");
-        let _ = writeln!(g, "M107");
-        let _ = writeln!(g, "M84 ; motors off");
 
         let total_e = (self.prime_e as f64 + self.ext.extruded) as f32;
         let seconds = self.seconds;
@@ -2371,6 +2412,74 @@ mod tests {
             ..PrintSettings::default()
         };
         assert!(!bridge_gcode(&same).text.contains("bridge fan"));
+    }
+
+    /// A 20 x 20 x 1 mm square, sliced and written on `printer`.
+    fn square_on(printer: &Printer) -> (SliceResult, GcodeOutput) {
+        let tris =
+            PlacedObject::new("sq", Mesh::cube(Vec3::new(20.0, 20.0, 1.0))).world_triangles();
+        let s = PrintSettings::default();
+        let r = crate::slicer::slice(&tris, &s, 0.42, &|_| {});
+        let out = generate(&r, printer, &Filament::presets()[0], &s);
+        (r, out)
+    }
+
+    #[test]
+    fn test_custom_start_replaces_heat_home_and_purge() {
+        let mut printer = Printer::presets()[0].clone();
+        printer.start_gcode = "START_PRINT BED=60\nM117 Hello".into();
+        let (_, out) = square_on(&printer);
+        let text = &out.text;
+        let start = text
+            .find("START_PRINT BED=60\nM117 Hello\n")
+            .expect("custom start");
+        let first_layer = text.find(";LAYER:0").unwrap();
+        // The built-in sequence is gone; the header comments stay before it.
+        assert!(text.find("; HEADER_BLOCK_START").unwrap() < start);
+        for gone in ["G28", "M109", "M190", "; purge line"] {
+            assert!(!text[..first_layer].contains(gone), "{gone} still there");
+        }
+        // PrintCraft's own modes follow, so its moves are right whatever the start did.
+        let after = &text[start..first_layer];
+        for needed in ["G90", "M82", "G92 E0"] {
+            assert!(after.contains(needed), "{needed} missing");
+        }
+    }
+
+    #[test]
+    fn test_custom_end_replaces_the_end_sequence() {
+        let mut printer = Printer::presets()[0].clone();
+        printer.end_gcode = "END_PRINT".into();
+        let (_, out) = square_on(&printer);
+        let end = &out.text[out.text.find(";END\n").unwrap()..];
+        assert!(end.contains("END_PRINT\n"));
+        for gone in ["M84", "present the print", "M140 S0"] {
+            assert!(!end.contains(gone), "{gone} still there");
+        }
+    }
+
+    #[test]
+    fn test_layer_change_gcode_follows_each_layer_marker() {
+        let mut printer = Printer::presets()[0].clone();
+        printer.layer_change_gcode = "M117 next layer".into();
+        let (r, out) = square_on(&printer);
+        let after_marker = out
+            .text
+            .lines()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter(|w| w[0].starts_with(";LAYER:") && w[1] == "M117 next layer")
+            .count();
+        assert_eq!(after_marker, r.layers.len());
+    }
+
+    #[test]
+    fn test_empty_templates_change_nothing() {
+        let plain = Printer::presets()[0].clone();
+        let mut blank = plain.clone();
+        blank.start_gcode = "  \n".into();
+        blank.end_gcode = String::new();
+        assert_eq!(square_on(&plain).1.text, square_on(&blank).1.text);
     }
 
     #[test]

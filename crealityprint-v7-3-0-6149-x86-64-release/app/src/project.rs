@@ -99,6 +99,10 @@ pub fn to_json(p: &Project) -> String {
             "primary_nozzle": p.printer.primary_nozzle,
             "nozzle_spacing": p.printer.nozzle_spacing,
             "acceleration": p.printer.acceleration,
+            "start_gcode": p.printer.start_gcode,
+            "end_gcode": p.printer.end_gcode,
+            "layer_change_gcode": p.printer.layer_change_gcode,
+            "tool_change_gcode": p.printer.tool_change_gcode,
         },
         "filament": filament_json(&p.filament),
         "dual": {
@@ -228,6 +232,11 @@ fn project_from(v: &Value) -> Result<Project, String> {
             crate::profiles::preset_acceleration(&text_of(pr, "name").unwrap_or_default()),
             limits::ACCELERATION,
         ),
+        // Custom G-code; projects from before it have none.
+        start_gcode: text_of(pr, "start_gcode").unwrap_or_default(),
+        end_gcode: text_of(pr, "end_gcode").unwrap_or_default(),
+        layer_change_gcode: text_of(pr, "layer_change_gcode").unwrap_or_default(),
+        tool_change_gcode: text_of(pr, "tool_change_gcode").unwrap_or_default(),
     };
 
     let filament = filament_from(v.get("filament").unwrap_or(&empty));
@@ -595,6 +604,10 @@ mod tests {
     fn test_project_accelerations_round_trip_and_default_by_printer() {
         let mut p = sample();
         p.printer.acceleration = 3456.0;
+        p.printer.start_gcode = "START_PRINT\nM117 go".into();
+        p.printer.end_gcode = "END_PRINT".into();
+        p.printer.layer_change_gcode = ";next".into();
+        p.printer.tool_change_gcode = "M117 swap".into();
         p.settings.accels.set(AccelFeature::Infill, Some(4200.0));
         p.settings.bridge_flow = 88.0;
         p.settings.bridge_fan = 70;
@@ -605,6 +618,10 @@ mod tests {
         p.filament.flow_percent = 96.5;
         let back = from_json(&to_json(&p)).unwrap();
         assert_eq!(back.printer.acceleration, 3456.0);
+        assert_eq!(back.printer.start_gcode, "START_PRINT\nM117 go");
+        assert_eq!(back.printer.end_gcode, "END_PRINT");
+        assert_eq!(back.printer.layer_change_gcode, ";next");
+        assert_eq!(back.printer.tool_change_gcode, "M117 swap");
         assert_eq!(back.settings.accels, p.settings.accels);
         assert_eq!(
             (back.settings.bridge_flow, back.settings.bridge_fan),

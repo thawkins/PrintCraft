@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Custom G-code per printer (gap plan task M2.2), in the printer editor under
+  "Custom G-code": a start block that replaces PrintCraft's heating, homing and purge;
+  an end block that replaces its end sequence; and blocks added before every layer
+  change and at every tool change. All are empty by default, which leaves the G-code
+  unchanged, and are saved with the printer in projects. The text is used as written
+  for now; placeholders such as `{bed_temp}` come with M2.3.
+
 ### Changed
 
 - Print settings are described once, in `src/settings_registry.rs` (gap plan task

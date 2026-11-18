@@ -279,6 +279,7 @@ impl PrintCraftApp {
                             );
                             ui.end_row();
                         });
+                        custom_gcode_editor(ui, &mut self.printer);
                             });
                     });
             });
@@ -662,6 +663,48 @@ impl PrintCraftApp {
                 }
             });
     }
+}
+
+/// The printer's custom G-code: four boxes, each empty unless set. Start and end replace
+/// PrintCraft's own; layer change and tool change are added to it.
+fn custom_gcode_editor(ui: &mut Ui, printer: &mut crate::profiles::Printer) {
+    egui::CollapsingHeader::new("Custom G-code")
+        .id_salt("printer_gcode")
+        .show(ui, |ui| {
+            let boxes: [(&str, &str, &mut String); 4] = [
+                (
+                    "Start",
+                    "Runs instead of PrintCraft's start (heating, homing, purge). Empty: PrintCraft's own start",
+                    &mut printer.start_gcode,
+                ),
+                (
+                    "End",
+                    "Runs instead of PrintCraft's end (retract, lift, park, heaters and motors off). Empty: PrintCraft's own end",
+                    &mut printer.end_gcode,
+                ),
+                (
+                    "Before each layer",
+                    "Added at every layer change, before the move up",
+                    &mut printer.layer_change_gcode,
+                ),
+                (
+                    "Tool change",
+                    "Added at every tool change, just before the new nozzle is selected",
+                    &mut printer.tool_change_gcode,
+                ),
+            ];
+            for (label, hint, text) in boxes {
+                ui.label(label).on_hover_text(hint);
+                ui.add(
+                    egui::TextEdit::multiline(text)
+                        .code_editor()
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Empty"),
+                );
+                ui.add_space(4.0);
+            }
+        });
 }
 
 /// The two-nozzle choices: which nozzle prints supports, and Ditto printing.

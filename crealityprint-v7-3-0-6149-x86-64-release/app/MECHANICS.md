@@ -234,6 +234,22 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   print at 25 mm/s. The person reported the old single 9 mm line didn't clear the nozzle;
   the new purge pushes about 3× as much.
 * **End.** Retract 2 mm, lift 10 mm, park at the back-left, heaters off, motors off.
+* **Custom G-code** (printer editor > Custom G-code, gap plan M2.2). Four blocks per
+  printer, all empty by default, which leaves the output unchanged. Text is used as
+  written (placeholders come in M2.3).
+  * **Start** replaces heating, homing and the purge lines (on a two-nozzle printer,
+    also the second nozzle's purge, parking and standby). The header comments come
+    before it. After it PrintCraft writes `G90`, `M82`, `G92 E0` and, with two nozzles,
+    selects the first one (`T0`/`T1`, `G92 E0`), so its own moves are right whatever
+    the start did. The nozzle is assumed to start at the printer's origin.
+  * **End** replaces everything after `;END` (retract, lift, park, heaters and motors
+    off).
+  * **Before each layer** is added right after each `;LAYER:` marker, before the move
+    up (and any layer-change retraction).
+  * **Tool change** is added at each tool change, just before the new nozzle is
+    selected (after the old one is set aside).
+  * X3G printers: custom code is translated like the rest; G-codes the translator
+    doesn't know stop the export with an error naming the line.
 * **Coordinates.** The app centres everything on the plate. The print file adds half the
   plate size, so (0, 0) is the printer's front-left corner.
 * **Time estimate.** Each printed line and each travel is timed with the printer's

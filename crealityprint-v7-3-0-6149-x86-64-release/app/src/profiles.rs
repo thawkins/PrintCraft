@@ -84,6 +84,17 @@ pub struct Printer {
     /// The printer's own acceleration (mm/s^2), as its firmware is set up. Used for the
     /// time estimate, and written back where a print setting's acceleration is "Auto".
     pub acceleration: f32,
+    /// Custom G-code run instead of PrintCraft's start (heat, home, purge). Empty: the
+    /// built-in start.
+    pub start_gcode: String,
+    /// Custom G-code run instead of PrintCraft's end (retract, lift, park, heaters and
+    /// motors off). Empty: the built-in end.
+    pub end_gcode: String,
+    /// Custom G-code added at every layer change, before the move up. Empty: nothing.
+    pub layer_change_gcode: String,
+    /// Custom G-code added at every tool change, just before the new nozzle is selected.
+    /// Empty: nothing.
+    pub tool_change_gcode: String,
 }
 
 impl Printer {
@@ -200,6 +211,10 @@ impl Printer {
             primary_nozzle: PRIMARY_TOOL,
             nozzle_spacing: DEFAULT_NOZZLE_SPACING_MM,
             acceleration: preset_acceleration(name),
+            start_gcode: String::new(),
+            end_gcode: String::new(),
+            layer_change_gcode: String::new(),
+            tool_change_gcode: String::new(),
         };
         // Build volumes of named printers are their makers' published specifications;
         // retraction values are common starting points (estimated).

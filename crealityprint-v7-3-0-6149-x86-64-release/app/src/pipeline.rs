@@ -197,6 +197,31 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_change_gcode_comes_before_each_tool_change() {
+        let mut printer = dual_printer();
+        printer.tool_change_gcode = "M117 changing".into();
+        let text = cubes(&printer, &[-30.0, 30.0], &left_and_right(1, 0), false);
+        let lines: Vec<&str> = text.lines().collect();
+        // Tool changes during the print (after the first layer marker).
+        let first_layer = lines.iter().position(|l| l.starts_with(";LAYER:")).unwrap();
+        let changes: Vec<usize> = (first_layer..lines.len())
+            .filter(|&i| lines[i] == "T0" || lines[i] == "T1")
+            .collect();
+        assert!(!changes.is_empty());
+        for i in changes {
+            assert!(
+                lines[..i]
+                    .iter()
+                    .rev()
+                    .take(4)
+                    .any(|l| *l == "M117 changing"),
+                "no custom code before line {i}: {}",
+                lines[i]
+            );
+        }
+    }
+
+    #[test]
     fn one_nozzle_printers_get_the_same_g_code_as_before() {
         use crate::model::{Mesh, PlacedObject};
         let printer = Printer::presets().remove(0);
