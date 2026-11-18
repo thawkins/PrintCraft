@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Variable layer height (gap plan task M4.6). With Advanced on, "Variable layer
+  height" under Layer height gives thinner layers where surfaces slope gently (domes,
+  chamfers) and thicker ones where walls are steep, from half to one and a half times
+  the layer height. "Variable layer quality" sets how thin they get, and "Variable
+  layer smoothing" how far (mm) thin layers spread so heights change gradually. One
+  profile is worked out from every part on the plate, so all parts share their layers
+  (two-nozzle tool changes and the prime tower are unchanged); the top layer still
+  ends exactly at the top of the print. Preview > Colour by > Layer height shows it.
 - Support blockers and enforcers (gap plan task M4.5). "Add modifier..." now also
   offers a support blocker (drawn red: no supports for overhangs inside it) and a
   support enforcer (drawn green: every surface facing down inside it is supported,

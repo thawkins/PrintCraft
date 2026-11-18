@@ -31,7 +31,7 @@ Status:
 | Height range settings | **Yes (new)**: "Height ranges" in "Settings for this object": different per-object settings between two heights |
 | Support blockers and enforcers | **Yes (new)**: from "Add modifier..." on a part; a blocker stops supports inside it, an enforcer supports every surface facing down inside it (even with supports off) |
 | Modifier volumes | **Yes (new)**: box, cylinder or sphere per part ("Modifiers" in "Settings for this object") with its own infill density and pattern; 100 % is solid infill. Not yet: imported meshes, walls or other settings inside a modifier |
-| Variable layer height | Not yet |
+| Variable layer height | **Yes (new)**: one profile for the whole plate from surface slopes, with quality and smoothing settings (Advanced, Layer height); not per object |
 | Multiple plates, sequential (one-at-a-time) printing | Not yet |
 
 ## Projects (src/project.rs, src/app/project_ui.rs)

@@ -202,17 +202,21 @@ pub fn slice(
         triangles,
         &[],
         &SupportVolumes::default(),
+        None,
         settings,
         line_width,
         progress,
     )
 }
 
-/// Like [`slice`], with infill modifiers: where they overlap, a later one wins.
+/// Like [`slice`], with infill modifiers (where they overlap, a later one wins),
+/// support volumes, and the layers to slice at (`None`: worked out from `triangles`;
+/// parts sliced apart are given the whole plate's, so their layers line up).
 pub fn slice_modified(
     triangles: &[Triangle],
     modifiers: &[InfillModifier],
     support_volumes: &SupportVolumes,
+    layers: Option<&[(f32, f32)]>,
     settings: &PrintSettings,
     line_width: f32,
     progress: &dyn Fn(f32),
@@ -238,7 +242,10 @@ pub fn slice_modified(
     };
     let bounds = Bounds::of(triangles.iter().flatten().copied());
 
-    let mut heights = layer_heights(bounds.max.z, settings);
+    let mut heights = match layers {
+        Some(given) => given.to_vec(),
+        None => plan_layers(triangles, settings, line_width),
+    };
     let n = heights.len();
     if raft_n >= n {
         return SliceResult {
@@ -566,7 +573,7 @@ pub fn slice_groups(
         _ => false,
     };
     if plain {
-        return slice_modified(all, &[], support_volumes, plate, line_width, progress);
+        return slice_modified(all, &[], support_volumes, None, plate, line_width, progress);
     }
     // Each group's distinct settings, and which of them each of its layers uses.
     let variants: Vec<Vec<&PrintSettings>> = groups
@@ -582,7 +589,12 @@ pub fn slice_groups(
         })
         .collect();
     let n = variants.iter().map(Vec::len).sum::<usize>() as f32 + 1.0;
-    let base = slice_modified(all, &[], support_volumes, plate, line_width, &|v| {
+    // Variable layer heights come from the whole plate, so every slice's layers line up.
+    let layers = plate
+        .adaptive_layers
+        .then(|| plate_layers(all, plate, line_width));
+    let layers = layers.as_deref();
+    let base = slice_modified(all, &[], support_volumes, layers, plate, line_width, &|v| {
         progress(v / n)
     });
     let mut done = 1.0;
@@ -600,7 +612,7 @@ pub fn slice_groups(
                     let at = done;
                     done += 1.0;
                     let none = SupportVolumes::default();
-                    slice_modified(tris, &ps.modifiers, &none, &own, line_width, &|v| {
+                    slice_modified(tris, &ps.modifiers, &none, layers, &own, line_width, &|v| {
                         progress((at + v) / n)
                     })
                 })
@@ -1141,6 +1153,142 @@ pub fn fuzz(poly: &[Point2], seed: u64) -> Polygon {
 }
 
 /// (top of layer, layer thickness) for every layer.
+/// Steps (mm) in which variable layer height measures the model.
+const ADAPTIVE_BIN_MM: f32 = 0.05;
+
+/// The layers (top and height) for `triangles` on the plate (already lifted onto a
+/// full raft): fixed heights, or variable ones with `adaptive_layers`.
+pub fn plan_layers(
+    triangles: &[Triangle],
+    settings: &PrintSettings,
+    line_width: f32,
+) -> Vec<(f32, f32)> {
+    let max_z = Bounds::of(triangles.iter().flatten().copied()).max.z;
+    if settings.adaptive_layers {
+        adaptive_layer_heights(triangles, max_z, settings, line_width)
+    } else {
+        layer_heights(max_z, settings)
+    }
+}
+
+/// The layers of a plate holding `triangles` (on the plate; lifted here onto a full
+/// raft, as `slice_modified` does).
+pub fn plate_layers(
+    triangles: &[Triangle],
+    settings: &PrintSettings,
+    line_width: f32,
+) -> Vec<(f32, f32)> {
+    if settings.adhesion == Adhesion::Raft {
+        let up = Vec3::new(0.0, 0.0, raft_height(settings));
+        let lifted: Vec<Triangle> = triangles.iter().map(|t| t.map(|v| v + up)).collect();
+        plan_layers(&lifted, settings, line_width)
+    } else {
+        plan_layers(triangles, settings, line_width)
+    }
+}
+
+/// Variable layer heights. Each layer is as thick as the most gently sloping surface
+/// it crosses allows: a layer `h` thick leaves steps about `h * |n.z|` deep on a
+/// surface whose normal is `n`, so it may be `tolerance / |n.z|` thick, between half
+/// and one and a half times the layer height (and at most three quarters of a line
+/// width). Flat tops and bottoms (|n.z| near 1) don't count: a layer edge lands on
+/// them exactly. The quality setting moves the tolerance from the thickest layer
+/// (0 %) to a quarter of the thinnest (100 %). Smoothing spreads each thin stretch
+/// up and down by that many millimetres. Below the model's bottom (a raft) layers are
+/// the normal height. Last, the layers above the bottom are stretched or squeezed a
+/// little so the top layer ends exactly at `max_z`.
+pub fn adaptive_layer_heights(
+    triangles: &[Triangle],
+    max_z: f32,
+    settings: &PrintSettings,
+    line_width: f32,
+) -> Vec<(f32, f32)> {
+    let first = settings.first_layer_height.max(0.05);
+    let lh = settings.layer_height.max(0.04);
+    let min_h = (lh * 0.5).max(0.04);
+    let max_h = (lh * 1.5).min(line_width * 0.75).max(min_h);
+    let q = (settings.adaptive_quality / 100.0).clamp(0.0, 1.0);
+    let tolerance = max_h * (1.0 - q) + min_h * 0.25 * q;
+    let bins = ((max_z / ADAPTIVE_BIN_MM).ceil() as usize).max(1);
+    let bin = |z: f32| ((z / ADAPTIVE_BIN_MM).floor().max(0.0) as usize).min(bins - 1);
+    let mut need = vec![max_h; bins];
+    let mut bottom = f32::MAX;
+    for t in triangles {
+        let n = (t[1] - t[0]).cross(t[2] - t[0]);
+        let len = n.length();
+        let lo = t.iter().map(|v| v.z).fold(f32::MAX, f32::min);
+        let hi = t.iter().map(|v| v.z).fold(f32::MIN, f32::max);
+        bottom = bottom.min(lo);
+        if len < 1e-9 {
+            continue;
+        }
+        let nz = (n.z / len).abs();
+        if nz > 0.999 {
+            continue;
+        }
+        let h = (tolerance / nz.max(1e-6)).clamp(min_h, max_h);
+        for b in &mut need[bin(lo)..=bin(hi)] {
+            *b = b.min(h);
+        }
+    }
+    // Smoothing: each step takes the thinnest need within the smoothing distance.
+    let reach = (settings.adaptive_smoothing.max(0.0) / ADAPTIVE_BIN_MM).round() as usize;
+    let need: Vec<f32> = (0..bins)
+        .map(|b| {
+            need[b.saturating_sub(reach)..=(b + reach).min(bins - 1)]
+                .iter()
+                .copied()
+                .fold(max_h, f32::min)
+        })
+        .collect();
+    let thinnest = |from: f32, to: f32| {
+        need[bin(from)..=bin(to.max(from))]
+            .iter()
+            .copied()
+            .fold(max_h, f32::min)
+    };
+    let mut out = vec![(first, first)];
+    let mut z = first;
+    while z + min_h * 0.5 < max_z {
+        let h = if z < bottom - 1e-4 {
+            lh
+        } else {
+            // Thinned until the layer's own span allows its thickness.
+            let mut h = max_h;
+            loop {
+                let fits = thinnest(z, z + h);
+                if fits >= h - 1e-6 {
+                    break h;
+                }
+                h = fits;
+            }
+        };
+        z += h;
+        out.push((z, h));
+    }
+    // End exactly at the top: scale the layers above the bottom (not the first layer,
+    // nor a raft's).
+    let fixed: f32 = out
+        .iter()
+        .enumerate()
+        .filter(|(i, (top, h))| *i == 0 || top - h < bottom - 1e-4)
+        .map(|(_, (_, h))| h)
+        .sum();
+    let free = z - fixed;
+    if free > 0.0 && max_z > fixed {
+        let k = (max_z - fixed) / free;
+        let mut top = 0.0;
+        for (i, (t, h)) in out.iter_mut().enumerate() {
+            if i > 0 && top + 1e-4 >= bottom {
+                *h *= k;
+            }
+            top += *h;
+            *t = top;
+        }
+    }
+    out
+}
+
 pub fn layer_heights(max_z: f32, settings: &PrintSettings) -> Vec<(f32, f32)> {
     let first = settings.first_layer_height.max(0.05);
     let lh = settings.layer_height.max(0.04);
@@ -2200,6 +2348,121 @@ mod tests {
         assert_eq!(format!("{grouped:?}"), format!("{plain:?}"));
     }
 
+    /// A sphere 20 mm across resting on the plate.
+    fn sphere() -> Vec<Triangle> {
+        crate::modifier::Modifier {
+            kind: crate::modifier::ModifierKind::Infill,
+            shape: crate::modifier::ModifierShape::Sphere,
+            size: Vec3::new(20.0, 20.0, 20.0),
+            at: Vec3::default(),
+            overrides: Default::default(),
+        }
+        .triangles(0.0, 0.0)
+    }
+
+    fn adaptive(quality: f32, smoothing: f32) -> PrintSettings {
+        PrintSettings {
+            adaptive_layers: true,
+            adaptive_quality: quality,
+            adaptive_smoothing: smoothing,
+            ..PrintSettings::default()
+        }
+    }
+
+    #[test]
+    fn test_adaptive_layers_are_thinner_near_the_top_of_a_sphere() {
+        let h = plate_layers(&sphere(), &adaptive(50.0, 0.0), 0.42);
+        let at = |z: f32| h.iter().find(|(top, _)| *top >= z).unwrap().1;
+        // Steep sides round the middle: thick layers; the gentle dome at the top: thin.
+        assert!(at(10.0) > 0.28, "middle {}", at(10.0));
+        assert!(at(19.8) < at(10.0) * 0.6, "top {}", at(19.8));
+        assert!(at(0.6) < at(10.0), "the underside is gentle too");
+        // Total height preserved: the last layer ends at the top of the sphere.
+        let (top, _) = *h.last().unwrap();
+        assert!((top - 20.0).abs() < 1e-3, "top {top}");
+        // Heights add up, and stay within half to one and a half layer heights (with a
+        // little room for the final stretch).
+        let mut z = 0.0;
+        for &(t, lh) in &h {
+            z += lh;
+            assert!((z - t).abs() < 1e-3);
+        }
+        assert!(
+            h[1..].iter().all(|(_, lh)| (0.095..=0.31).contains(lh)),
+            "{h:?}"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_layers_quality_smoothing_and_off() {
+        let ball = sphere();
+        let count = |s: &PrintSettings| plate_layers(&ball, s, 0.42).len();
+        assert!(count(&adaptive(100.0, 0.0)) > count(&adaptive(0.0, 0.0)) + 10);
+        // Quality 0: about the thickest layers everywhere.
+        assert!(count(&adaptive(0.0, 0.0)) <= 70);
+        // Smoothing spreads the thin layers: more of them.
+        let thin = |s: &PrintSettings| {
+            plate_layers(&ball, s, 0.42)
+                .iter()
+                .filter(|(_, h)| *h < 0.2)
+                .count()
+        };
+        assert!(thin(&adaptive(50.0, 3.0)) > thin(&adaptive(50.0, 0.0)));
+        // Off: the fixed heights.
+        let fixed = PrintSettings::default();
+        assert_eq!(
+            plate_layers(&ball, &fixed, 0.42),
+            layer_heights(20.0, &fixed)
+        );
+        // A box has only upright walls and flat faces: the thickest layers.
+        let cube = block_at(20.0, 9.0, 0.0);
+        let h = plate_layers(&cube, &adaptive(100.0, 1.0), 0.42);
+        assert!(
+            h[1..].iter().all(|(_, lh)| (lh - 0.3).abs() < 0.02),
+            "{h:?}"
+        );
+        assert!((h.last().unwrap().0 - 9.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_adaptive_layers_on_a_raft_and_shared_by_grouped_slices() {
+        let ball = sphere();
+        let raft = PrintSettings {
+            adhesion: Adhesion::Raft,
+            ..adaptive(50.0, 1.0)
+        };
+        let h = plate_layers(&ball, &raft, 0.42);
+        let bottom = raft_height(&raft);
+        // Raft layers keep the normal height; the model's top is where it is lifted to.
+        assert!(h
+            .iter()
+            .skip(1)
+            .take_while(|(t, _)| *t <= bottom + 1e-4)
+            .all(|(_, lh)| (lh - raft.layer_height).abs() < 1e-4));
+        assert!((h.last().unwrap().0 - (20.0 + bottom)).abs() < 1e-3);
+        // A part with settings of its own slices on the plate's variable layers.
+        let plate = adaptive(50.0, 1.0);
+        let own = PrintSettings {
+            walls: 4,
+            ..plate.clone()
+        };
+        let none = SupportVolumes::default();
+        let r = slice_groups(
+            &ball,
+            &[(ball.clone(), PartSettings::plain(own))],
+            &none,
+            &plate,
+            0.42,
+            &|_| {},
+        );
+        let zs: Vec<(f32, f32)> = r.layers.iter().map(|l| (l.z, l.height)).collect();
+        assert_eq!(zs, plate_layers(&ball, &plate, 0.42));
+        assert!(r.layers[r.layers.len() / 2]
+            .paths
+            .iter()
+            .any(|p| p.kind == PathKind::InnerWall));
+    }
+
     #[test]
     fn test_box_modifier_with_full_infill_is_solid_only_inside_the_box() {
         // A 30 mm cube, and a 10 x 10 mm box modifier through its middle (x and y from
@@ -2215,6 +2478,7 @@ mod tests {
             &tris,
             &[modifier],
             &SupportVolumes::default(),
+            None,
             &settings,
             0.42,
             &|_| {},
@@ -2266,6 +2530,7 @@ mod tests {
             &tris,
             &[],
             &SupportVolumes::default(),
+            None,
             &settings,
             0.42,
             &|_| {},
@@ -2535,7 +2800,7 @@ mod tests {
             free.iter().any(|p| p.x < -5.0),
             "supports on the left without it"
         );
-        let blocked = slice_modified(&tris, &[], &volumes, &s, 0.42, &|_| {});
+        let blocked = slice_modified(&tris, &[], &volumes, None, &s, 0.42, &|_| {});
         let pts = support_points(&blocked);
         assert!(
             pts.iter().any(|p| p.x > 5.0),
@@ -2569,7 +2834,15 @@ mod tests {
             blockers: Vec::new(),
             enforcers: vec![o.world_triangles()],
         };
-        let pts = support_points(&slice_modified(&tris, &[], &volumes, &s, 0.42, &|_| {}));
+        let pts = support_points(&slice_modified(
+            &tris,
+            &[],
+            &volumes,
+            None,
+            &s,
+            0.42,
+            &|_| {},
+        ));
         // Supports under the flaring wall (beyond the post), and only inside the enforcer.
         assert!(
             pts.iter().any(|p| p.x.hypot(p.y) > 6.0),

@@ -428,6 +428,64 @@ fn build() -> Vec<Setting> {
             Num,
             first_layer_height
         ),
+        hinted(
+            r!(
+                "adaptive_layers",
+                "Variable layer height",
+                G::LayerHeight,
+                A,
+                Kind::Flag,
+                Flag,
+                adaptive_layers
+            ),
+            |_| {
+                Some(
+                    "Thinner layers where surfaces slope gently (domes, chamfers), thicker \
+                     where walls are steep, between half and one and a half times the layer \
+                     height",
+                )
+            },
+        ),
+        Setting {
+            shown: |s| s.adaptive_layers,
+            ..hinted(
+                r!(
+                    "adaptive_quality",
+                    "Variable layer quality",
+                    G::LayerHeight,
+                    A,
+                    number(limits::ADAPTIVE_QUALITY, 1.0, " %"),
+                    Num,
+                    adaptive_quality
+                ),
+                |_| {
+                    Some(
+                        "Higher: thinner layers on gentle slopes, a smoother finish, a longer \
+                     print",
+                    )
+                },
+            )
+        },
+        Setting {
+            shown: |s| s.adaptive_layers,
+            ..hinted(
+                r!(
+                    "adaptive_smoothing",
+                    "Variable layer smoothing",
+                    G::LayerHeight,
+                    A,
+                    mm(limits::ADAPTIVE_SMOOTHING, 0.1),
+                    Num,
+                    adaptive_smoothing
+                ),
+                |_| {
+                    Some(
+                        "How far thin layers spread above and below where they are needed, so \
+                     layer heights change gradually",
+                    )
+                },
+            )
+        },
         // Seam
         row(
             "seam",
@@ -824,6 +882,9 @@ mod tests {
             vase_mode: true,
             z_hop: 0.4,
             min_layer_time: 10.0,
+            adaptive_layers: true,
+            adaptive_quality: 80.0,
+            adaptive_smoothing: 2.5,
         }
     }
 
@@ -991,5 +1052,16 @@ mod tests {
             ..PrintSettings::default()
         };
         assert!((amount.shown)(&fuzzy));
+        // Variable layer quality and smoothing show once variable layers are on.
+        let variable = PrintSettings {
+            adaptive_layers: true,
+            ..PrintSettings::default()
+        };
+        for key in ["adaptive_quality", "adaptive_smoothing"] {
+            let r = find(key).unwrap();
+            assert!(!(r.shown)(&off), "{key}");
+            assert!((r.shown)(&variable), "{key}");
+            assert_eq!(r.level, Level::Advanced);
+        }
     }
 }

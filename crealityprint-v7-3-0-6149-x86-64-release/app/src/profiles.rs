@@ -19,6 +19,8 @@ pub mod limits {
     pub const WALLS: RangeInclusive<u32> = 1..=10;
     pub const SOLID_LAYERS: RangeInclusive<u32> = 0..=20;
     pub const FUZZY_TOP_MM: RangeInclusive<f32> = 0.02..=0.3;
+    pub const ADAPTIVE_QUALITY: RangeInclusive<f32> = 0.0..=100.0;
+    pub const ADAPTIVE_SMOOTHING: RangeInclusive<f32> = 0.0..=10.0;
     pub const INFILL_PERCENT: RangeInclusive<f32> = 0.0..=100.0;
     pub const SUPPORT_ANGLE: RangeInclusive<f32> = 30.0..=80.0;
     // Printing never goes slower than gcode::MIN_PRINT_SPEED (15 mm/s), so the panel
@@ -405,6 +407,14 @@ pub struct PrintSettings {
     pub z_hop: f32,
     /// Slow down so each layer takes at least this long (seconds) to cool.
     pub min_layer_time: f32,
+    /// Variable layer height: thinner layers where the surface slopes gently, thicker
+    /// ones where it is steep, worked out from the whole plate.
+    pub adaptive_layers: bool,
+    /// How thin variable layers get where the surface needs it (%): 0 = always the
+    /// thickest, 100 = as fine as possible.
+    pub adaptive_quality: f32,
+    /// How far (mm) thin variable layers spread, so heights don't jump.
+    pub adaptive_smoothing: f32,
 }
 
 /// Infill reaches 15 % of a line width into the innermost wall, to bond to it.
@@ -635,6 +645,9 @@ impl Quality {
             vase_mode: false,
             z_hop: 0.0,
             min_layer_time: 15.0,
+            adaptive_layers: false,
+            adaptive_quality: 50.0,
+            adaptive_smoothing: 1.0,
         };
         match self {
             Self::Fine => PrintSettings {

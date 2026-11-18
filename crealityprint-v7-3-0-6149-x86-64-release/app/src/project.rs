@@ -766,6 +766,9 @@ mod tests {
             vase_mode: true,
             z_hop: 0.4,
             min_layer_time: 10.0,
+            adaptive_layers: true,
+            adaptive_quality: 80.0,
+            adaptive_smoothing: 2.5,
         }
     }
 
@@ -819,7 +822,10 @@ mod tests {
             "fuzzy_top_mm": 0.2f32,
             "vase_mode": true,
             "z_hop": 0.4f32,
-            "min_layer_time": 10.0f32
+            "min_layer_time": 10.0f32,
+            "adaptive_layers": true,
+            "adaptive_quality": 80.0f32,
+            "adaptive_smoothing": 2.5f32
         });
         // Both sides go through text, as a saved file does (float parsing differs in the
         // last digit otherwise).

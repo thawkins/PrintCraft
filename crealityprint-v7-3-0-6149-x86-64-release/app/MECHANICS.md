@@ -252,6 +252,18 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     the point crosses the volume's surface an odd number of times. Volumes are lifted
     with the model on a full raft. Faces touching the plate are never overhangs.
 
+21. **Variable layer height** (`slicer::adaptive_layer_heights`, gap plan M4.6). From
+    min = half the layer height (at least 0.04 mm) to max = one and a half times it
+    (at most three quarters of a line width). The plate is measured in 0.05 mm steps;
+    every face not flat (|n.z| below 0.999) asks for at most tolerance / |n.z| over the
+    steps it spans, where tolerance runs from max (quality 0 %) to min / 4 (100 %).
+    Smoothing takes the smallest ask within that many millimetres. Layers are laid up
+    from the first layer: each is thinned until the asks over its own span allow it.
+    Below the model's bottom (a raft) they are the normal height. Finally the layers
+    above the bottom are scaled so the last one ends exactly at the top. The heights
+    are worked out once from the whole plate and given to every slice of a plate with
+    per-part settings, so their layers line up.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

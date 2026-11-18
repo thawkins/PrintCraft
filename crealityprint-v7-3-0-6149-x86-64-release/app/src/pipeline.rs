@@ -552,6 +552,74 @@ mod tests {
     }
 
     #[test]
+    fn test_variable_layers_keep_a_two_nozzle_print_valid() {
+        use crate::model::{Mesh, PlacedObject};
+        let printer = dual_printer();
+        let tools = gcode::Tools {
+            tower: Some(crate::geometry::Point2::new(80.0, 50.0)),
+            ..left_and_right(0, 1)
+        };
+        // A cone on the left nozzle and a box on the right: the cone's slope makes the
+        // layers vary.
+        let mut tris = Vec::new();
+        let mut cone = PlacedObject::new("cone", Mesh::cylinder(10.0, 2.0, 12.0, 48));
+        cone.x = -30.0;
+        tris.extend(cone.world_triangles());
+        let mut cube = PlacedObject::new("cube", Mesh::cube(Vec3::new(10.0, 10.0, 6.0)));
+        cube.x = 30.0;
+        tris.extend(cube.world_triangles());
+        let settings = PrintSettings {
+            adaptive_layers: true,
+            adaptive_quality: 80.0,
+            ..PrintSettings::default()
+        };
+        let sliced = slice_plate_with_tools(
+            &tris,
+            &printer,
+            &Filament::presets()[0],
+            &settings,
+            &tools,
+            &|_| {},
+        );
+        let heights: Vec<f32> = sliced.result.layers.iter().map(|l| l.height).collect();
+        assert!(
+            heights.iter().any(|h| (h - 0.2).abs() > 0.03),
+            "the layers vary"
+        );
+        // The tower stands on every layer up to the last tool change, and changes happen.
+        let top = gcode::last_tool_change(&sliced.result, &tools).unwrap();
+        let tower: Vec<usize> = (0..sliced.result.layers.len())
+            .filter(|&i| {
+                sliced.result.layers[i]
+                    .paths
+                    .iter()
+                    .any(|p| p.kind == crate::slicer::PathKind::PrimeTower)
+            })
+            .collect();
+        assert_eq!(tower, (0..=top).collect::<Vec<_>>());
+        let changes = sliced
+            .gcode
+            .text
+            .lines()
+            .filter(|l| *l == "T0" || *l == "T1")
+            .count();
+        assert!(changes > 2, "{changes} tool changes");
+        // Each layer's Z move matches its planned top.
+        let zs: Vec<f32> = sliced
+            .gcode
+            .text
+            .lines()
+            .filter_map(|l| l.strip_prefix(";Z:"))
+            .filter_map(|z| z.parse().ok())
+            .collect();
+        if !zs.is_empty() {
+            for (z, l) in zs.iter().zip(&sliced.result.layers) {
+                assert!((z - l.z).abs() < 0.01, "{z} vs {}", l.z);
+            }
+        }
+    }
+
+    #[test]
     fn the_ooze_shield_surrounds_the_print_up_to_the_last_tool_change() {
         use crate::model::{Mesh, PlacedObject};
         use crate::slicer::PathKind;
