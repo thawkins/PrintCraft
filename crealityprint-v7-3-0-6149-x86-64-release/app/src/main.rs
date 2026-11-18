@@ -81,7 +81,8 @@ Slicing options:
   --no-support-raft               no raft under supports
   --brim                          print a brim instead of a skirt
   --raft                          print the model on a raft
-  --infill-pattern lines|grid|triangles|gyroid|honeycomb|cubic|adaptive-cubic
+  --infill-pattern lines|grid|triangles|gyroid|honeycomb|cubic|adaptive-cubic|
+                                  lightning
   --seam aligned|nearest|rear|random
   --ironing                       smooth top surfaces with an ironing pass
   --vase                          spiral vase mode
@@ -314,7 +315,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
             None => {
                 eprintln!(
                     "printcraft: unknown infill pattern \"{p}\" (use lines, grid, triangles, \
-                     gyroid, honeycomb, cubic or adaptive-cubic)"
+                     gyroid, honeycomb, cubic, adaptive-cubic or lightning)"
                 );
                 return ExitCode::from(2);
             }

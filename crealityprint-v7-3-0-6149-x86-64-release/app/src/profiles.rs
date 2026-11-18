@@ -323,10 +323,13 @@ pub enum InfillPattern {
     /// Cubic, at half the density deep inside the part (more than 4 mm from its
     /// walls, top and bottom), saving plastic where it isn't needed.
     AdaptiveCubic,
+    /// Branching trees only under top surfaces, hollow elsewhere: the least plastic,
+    /// for parts that only need to look right.
+    Lightning,
 }
 
 impl InfillPattern {
-    pub const ALL: [InfillPattern; 7] = [
+    pub const ALL: [InfillPattern; 8] = [
         Self::Lines,
         Self::Grid,
         Self::Triangles,
@@ -334,6 +337,7 @@ impl InfillPattern {
         Self::Honeycomb,
         Self::Cubic,
         Self::AdaptiveCubic,
+        Self::Lightning,
     ];
 
     pub fn label(self) -> &'static str {
@@ -345,6 +349,7 @@ impl InfillPattern {
             Self::Honeycomb => "Honeycomb",
             Self::Cubic => "Cubic",
             Self::AdaptiveCubic => "Adaptive cubic",
+            Self::Lightning => "Lightning",
         }
     }
 }

@@ -6,6 +6,8 @@ use crate::model::Triangle;
 use crate::profiles::{Adhesion, InfillPattern, PrintSettings};
 use std::collections::HashMap;
 
+mod lightning;
+
 pub type Polygon = Vec<Point2>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -365,6 +367,7 @@ pub fn slice_modified(
         }
     }
 
+    let vase = settings.vase_mode;
     // Cells at least ADAPTIVE_CUBIC_NEAR_MM inside each layer's outline, for adaptive
     // cubic (only worked out when it is used).
     let adaptive_used = settings.infill_pattern == InfillPattern::AdaptiveCubic
@@ -384,9 +387,36 @@ pub fn slice_modified(
         Vec::new()
     };
     let near_layers = (ADAPTIVE_CUBIC_NEAR_MM / settings.layer_height.max(0.04)).ceil() as usize;
+    // Lightning: trees for every layer, worked out from the top down (only when used).
+    let lightning_used = settings.infill_pattern == InfillPattern::Lightning
+        || modifiers
+            .iter()
+            .any(|m| m.infill_pattern == Some(InfillPattern::Lightning));
+    let lightning: Vec<Vec<Vec<Point2>>> = if lightning_used && !vase {
+        let overlap = settings.infill_overlap / 100.0;
+        let regions: Vec<Vec<Polygon>> = outlines
+            .iter()
+            .map(|o| infill_region(o, settings.walls, line_width, overlap))
+            .collect();
+        let exposed: Vec<Vec<bool>> = (0..n).map(|i| exposed_cells(&masks, i, settings)).collect();
+        // Cells where a solid skin starts just above sparse infill.
+        let needs: Vec<Vec<bool>> = (0..n)
+            .map(|i| match exposed.get(i + 1) {
+                Some(above) => above
+                    .iter()
+                    .zip(&exposed[i])
+                    .map(|(a, e)| *a && !*e)
+                    .collect(),
+                None => vec![false; grid.cells()],
+            })
+            .collect();
+        let spacing = line_width * 100.0 / settings.infill_percent.clamp(1.0, 100.0);
+        lightning::lightning_lines(&grid, &regions, &needs, &heights, spacing)
+    } else {
+        Vec::new()
+    };
 
     // 3. Toolpaths per layer.
-    let vase = settings.vase_mode;
     let wall_count = if vase { 1 } else { settings.walls };
     let mut layers = Vec::with_capacity(n);
     for i in 0..n {
@@ -486,6 +516,7 @@ pub fn slice_modified(
                 layer: i,
                 z: z - h / 2.0,
                 near_surface: &near_surface,
+                lightning: lightning.get(i).map_or(&[], Vec::as_slice),
             };
             // Which modifier, if any, owns a point of this layer (a later one wins).
             let owner = |p: Point2| {
@@ -1015,6 +1046,9 @@ struct InfillAt<'a> {
     layer: usize,
     z: f32,
     near_surface: &'a dyn Fn(Point2) -> bool,
+    /// This layer's lightning lines (empty when lightning isn't used, or nothing
+    /// above needs holding up here).
+    lightning: &'a [Vec<Point2>],
 }
 
 /// How far (mm) adaptive cubic keeps its full density from the part's surface.
@@ -1048,6 +1082,17 @@ fn sparse_infill_paths(
 ) -> Vec<ToolPath> {
     let mut paths: Vec<ToolPath> = Vec::new();
     let base = line_width * 100.0 / percent.min(100.0);
+    if pattern == InfillPattern::Lightning {
+        let keep = |p: Point2| !skip(p);
+        let set: Vec<ToolPath> = at
+            .lightning
+            .iter()
+            .flat_map(|l| crate::gyroid::clip(l, &keep))
+            .filter(|l| crate::gyroid::length(l) >= line_width)
+            .map(|l| open_path(PathKind::SparseInfill, l))
+            .collect();
+        return order_open_paths(set, from);
+    }
     if matches!(pattern, InfillPattern::Gyroid | InfillPattern::Honeycomb) {
         let Some((lo, hi)) = loops_box(region) else {
             return paths;
@@ -1212,6 +1257,8 @@ pub fn infill_angles(pattern: InfillPattern, layer: usize, base: f32) -> (Vec<f3
         InfillPattern::Gyroid | InfillPattern::Honeycomb => (Vec::new(), base),
         // Triangles' lines, moved with height (`sparse_infill_paths`).
         InfillPattern::Cubic | InfillPattern::AdaptiveCubic => (vec![0.0, 60.0, 120.0], base * 3.0),
+        // Worked out for the whole part (`lightning`); not straight lines.
+        InfillPattern::Lightning => (Vec::new(), base),
     }
 }
 
@@ -2597,12 +2644,17 @@ mod tests {
             Point2::new(-20.0, 20.0),
         ]];
         let near = |_: Point2| true;
-        for pattern in InfillPattern::ALL {
+        // Lightning lays only what tops above need, not a density (tested below).
+        let patterns = InfillPattern::ALL
+            .into_iter()
+            .filter(|p| *p != InfillPattern::Lightning);
+        for pattern in patterns {
             for (layer, z) in [(10, 2.1), (11, 2.3), (40, 8.1)] {
                 let at = InfillAt {
                     layer,
                     z,
                     near_surface: &near,
+                    lightning: &[],
                 };
                 let paths =
                     sparse_infill_paths(&square, &|_| false, &at, 0.42, 20.0, pattern, None);
@@ -2637,6 +2689,7 @@ mod tests {
                 layer: 10,
                 z,
                 near_surface: &near,
+                lightning: &[],
             };
             format!(
                 "{:?}",
@@ -2655,6 +2708,50 @@ mod tests {
             lay(InfillPattern::Honeycomb, 2.0),
             lay(InfillPattern::Honeycomb, 2.6)
         );
+    }
+
+    #[test]
+    fn test_lightning_infill_is_a_tree_under_the_top_only() {
+        // A 20 mm cube: the only thing to hold up is its top.
+        let tris = block_at(20.0, 20.0, 0.0);
+        let with = |pattern| {
+            let s = PrintSettings {
+                infill_pattern: pattern,
+                ..PrintSettings::default()
+            };
+            slice(&tris, &s, 0.42, &|_| {})
+        };
+        let (grid, light) = (with(InfillPattern::Grid), with(InfillPattern::Lightning));
+        let n = light.layers.len();
+        let sparse = |l: &Layer| -> Vec<ToolPath> {
+            l.paths
+                .iter()
+                .filter(|p| p.kind == PathKind::SparseInfill)
+                .cloned()
+                .collect()
+        };
+        // Nothing in the lower half: the trees reach the walls well before.
+        assert!(light.layers[..n / 2].iter().all(|l| sparse(l).is_empty()));
+        // Just under the top skin (4 top layers): a tree.
+        let under = &light.layers[n - 6];
+        let branches = sparse(under);
+        assert!(branches.len() > 3, "{} branches", branches.len());
+        // Every branch ends at the walls (the infill area's edge is about 9.2 mm out).
+        for b in &branches {
+            let out = |p: &Point2| p.x.abs().max(p.y.abs());
+            let far = out(&b.points[0]).max(out(b.points.last().unwrap()));
+            assert!(far > 8.5, "a branch ends at {far} mm");
+        }
+        // Far less plastic than a grid.
+        let total = |r: &SliceResult| {
+            r.layers
+                .iter()
+                .map(|l| infill_length(&l.paths))
+                .sum::<f32>()
+        };
+        let ratio = total(&light) / total(&grid);
+        assert!(ratio < 0.4, "{ratio}");
+        assert!(ratio > 0.0);
     }
 
     #[test]

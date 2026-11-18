@@ -1030,7 +1030,8 @@ mod tests {
                 "Gyroid",
                 "Honeycomb",
                 "Cubic",
-                "Adaptive cubic"
+                "Adaptive cubic",
+                "Lightning"
             ]
         );
         assert_eq!(labels("adhesion"), ["None", "Skirt", "Brim", "Raft"]);

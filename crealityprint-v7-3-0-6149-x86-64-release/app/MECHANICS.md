@@ -284,6 +284,17 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     odd-numbered lines of each set where a cell is more than 4 mm (1 mm cells, and
     that many layers up and down) from outside the part.
 
+24. **Lightning infill** (`src/slicer/lightning.rs`, gap plan M5.3). From the top layer
+    down on the 1 mm grid: cells where a solid skin starts just above sparse infill
+    (exposed above, not here) get points needing support, one per infill spacing.
+    Each layer down, every point moves one layer height towards the nearest wall
+    (along the grid's chamfer distance-to-outside field, a 45 degree slope) and is
+    dropped next to the wall; points closer than half a spacing merge. On each layer
+    every point sends a branch from cell to neighbouring cell down the distance field
+    to outside the infill area, deepest points first, stopping where it meets a cell
+    already laid; branches are cut at the infill area's edge (by bisection) and at
+    solid or modifier cells. Modifiers set to lightning use the plate's trees.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.
