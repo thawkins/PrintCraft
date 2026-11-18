@@ -73,7 +73,7 @@ fn cell_point(grid: &Grid, c: usize) -> Point2 {
 
 /// For every cell, about how far (in cells) it is from the nearest cell outside
 /// `mask` (0 outside): a two-pass chamfer distance, 1 across and 1.41 diagonally.
-fn distance_to_outside(grid: &Grid, mask: &[bool]) -> Vec<f32> {
+pub(super) fn distance_to_outside(grid: &Grid, mask: &[bool]) -> Vec<f32> {
     let (w, h) = (grid.w as i64, grid.h as i64);
     let mut d: Vec<f32> = mask
         .iter()

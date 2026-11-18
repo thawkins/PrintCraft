@@ -315,6 +315,19 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     Each column counts its layers from its top; the first `Interface layers` of them
     are laid as lines along Y, one line width apart, instead of the normal rows.
 
+27. **Tree supports** (`src/slicer/tree.rs`, gap plan M5.6). Tips: per square of the
+    support spacing holding overhang points, one at its lowest point, starting at the
+    top-Z-gap layer below it (skipped over the model with "on build plate only").
+    Going down, each branch grows by (branch - tip) radius x layer height / 10 mm,
+    moves up to layer height x tan 40 degrees towards the nearest other branch within
+    10 mm (at most half way), and must keep its radius plus the XY gap from model
+    cells (distance field on the 1 mm grid, less half a cell); if not, it steps up to
+    twice that away along the field, and ends if still too close. Branches nearer
+    than half their radii's sum join at their area-weighted middle, radius
+    sqrt(r1^2 + r2^2) (at most 1.5 x the larger). A branch over model cells (or within
+    the bottom Z gap above them) stops. Each is printed as closed rings from half a
+    line width inside its edge, a line width apart.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

@@ -514,7 +514,7 @@ mod tests {
     use crate::printer::Api;
     use crate::profiles::{
         AccelFeature, Adhesion, FeatureAccels, FeatureSpeeds, InfillPattern, SeamPosition,
-        SolidPattern, SpeedFeature,
+        SolidPattern, SpeedFeature, SupportStyle,
     };
 
     fn sample() -> Project {
@@ -761,6 +761,9 @@ mod tests {
             support_xy_gap: 2.0,
             support_spacing: 3.0,
             support_interface_layers: 2,
+            support_style: SupportStyle::Tree,
+            tree_tip_diameter: 1.0,
+            tree_branch_diameter: 3.0,
             adhesion: Adhesion::Raft,
             infill_pattern: InfillPattern::Triangles,
             seam: SeamPosition::Rear,
@@ -785,7 +788,8 @@ mod tests {
         p.settings = every_setting_changed();
         let text = to_json(&p);
         let v: Value = serde_json::from_str(&text).unwrap();
-        let expected = json!({
+        // In two parts: one json! of every key is too deep for the macro.
+        let mut expected = json!({
             "layer_height": 0.12f32,
             "first_layer_height": 0.24f32,
             "walls": 3,
@@ -815,7 +819,9 @@ mod tests {
             "avoid_crossing_walls": true,
             "infill_overlap": 20.0f32,
             "elephant_foot": 0.15f32,
-            "hole_compensation": 0.1f32,
+            "hole_compensation": 0.1f32
+        });
+        let rest = json!({
             "supports": true,
             "support_angle": 55.0f32,
             "supports_on_plate_only": true,
@@ -825,6 +831,9 @@ mod tests {
             "support_xy_gap": 2.0f32,
             "support_spacing": 3.0f32,
             "support_interface_layers": 2,
+            "support_style": "Tree",
+            "tree_tip_diameter": 1.0f32,
+            "tree_branch_diameter": 3.0f32,
             "adhesion": "Raft",
             "infill_pattern": "Triangles",
             "seam": "Rear",
@@ -841,6 +850,9 @@ mod tests {
             "top_pattern": "Monotonic",
             "solid_pattern": "Concentric"
         });
+        if let (Some(e), Value::Object(r)) = (expected.as_object_mut(), rest) {
+            e.extend(r);
+        }
         // Both sides go through text, as a saved file does (float parsing differs in the
         // last digit otherwise).
         let expected: Value = serde_json::from_str(&expected.to_string()).unwrap();

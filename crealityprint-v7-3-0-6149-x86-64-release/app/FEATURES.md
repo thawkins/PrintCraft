@@ -80,6 +80,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Spiral vase mode | **Yes (new)**: one wall, solid bottom, continuous rising Z |
 | Supports (grid) with overhang angle | Yes |
 | Supports "on build plate only" | **Yes (new)** |
+| Tree supports | **Yes (new)**: Support > Style: Tree; branches lean together and join, keep clear of the model; tip and branch diameter (Advanced) |
 | Support gaps, spacing and interface | **Yes (new)**: top and bottom Z gap, XY gap and line spacing (1 mm steps), interface layers (Advanced, Support) |
 | Organic (tree) supports, support enforcers/blockers | Not yet |
 | Skirt and brim | Yes |

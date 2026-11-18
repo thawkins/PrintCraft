@@ -27,6 +27,8 @@ pub mod limits {
     pub const SUPPORT_XY_GAP: RangeInclusive<f32> = 1.0..=5.0;
     pub const SUPPORT_SPACING: RangeInclusive<f32> = 1.0..=10.0;
     pub const SUPPORT_INTERFACE: RangeInclusive<u32> = 0..=10;
+    pub const TREE_TIP: RangeInclusive<f32> = 0.4..=3.0;
+    pub const TREE_BRANCH: RangeInclusive<f32> = 1.0..=10.0;
     // Printing never goes slower than gcode::MIN_PRINT_SPEED (15 mm/s), so the panel
     // doesn't offer slower speeds that would have no effect.
     pub const PRINT_SPEED: RangeInclusive<f32> = 15.0..=500.0;
@@ -358,6 +360,27 @@ impl InfillPattern {
     }
 }
 
+/// How supports are built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupportStyle {
+    /// Straight columns of lines under every overhang.
+    Grid,
+    /// Thin branches from each overhang that lean together and join on the way down,
+    /// keeping clear of the model: less plastic, easier to remove.
+    Tree,
+}
+
+impl SupportStyle {
+    pub const ALL: [SupportStyle; 2] = [Self::Grid, Self::Tree];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grid => "Grid",
+            Self::Tree => "Tree",
+        }
+    }
+}
+
 /// How solid layers (tops, bottoms, solid infill) are filled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SolidPattern {
@@ -457,6 +480,11 @@ pub struct PrintSettings {
     pub support_spacing: f32,
     /// Dense layers at the top of each support, for a cleaner underside.
     pub support_interface_layers: u32,
+    pub support_style: SupportStyle,
+    /// Tree supports: the branches' width (mm) where they touch the overhang.
+    pub tree_tip_diameter: f32,
+    /// Tree supports: the width (mm) branches grow to on the way down.
+    pub tree_branch_diameter: f32,
     pub adhesion: Adhesion,
     pub infill_pattern: InfillPattern,
     pub seam: SeamPosition,
@@ -710,6 +738,9 @@ impl Quality {
             support_xy_gap: 1.0,
             support_spacing: 2.0,
             support_interface_layers: 0,
+            support_style: SupportStyle::Grid,
+            tree_tip_diameter: 0.8,
+            tree_branch_diameter: 2.0,
             adhesion: Adhesion::Skirt,
             infill_pattern: InfillPattern::Grid,
             // The original's main window shows "Seam position: Aligned" (reference/picture-2.png).

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tree supports (gap plan task M5.6). Support > Style now offers Tree: from each
+  overhang a thin branch grows down, leaning (at most 40 degrees) towards its
+  neighbours and joining them, keeping the XY gap clear of the model, thickening from
+  the tip diameter (0.8 mm) to the branch diameter (2 mm, both Advanced) and standing
+  on the plate or the model. Each branch is printed as filled circles. They use less
+  plastic than grid supports (2.71 m against 2.87 m on the bridge and overhang test)
+  but take longer to print (1 h 32 min against 1 h 6 min there), for the many small
+  rings. On the command line, `--tree-supports`.
 - Support settings (gap plan task M5.5). With supports on and Advanced on, the
   Support section has Top Z gap (Auto: one layer, as before), Bottom Z gap (0 mm),
   XY gap (1 mm), Line spacing (2 mm) and Interface layers (0). Interface layers are

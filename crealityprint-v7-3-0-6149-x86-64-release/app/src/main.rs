@@ -78,6 +78,7 @@ Slicing options:
                                   11 FlashForge Creator Pro (Sailfish, X3G)
   --supports                      add supports under overhangs (where they reach the
                                   plate they stand on a small raft)
+  --tree-supports                 tree supports instead of grid columns
   --no-support-raft               no raft under supports
   --brim                          print a brim instead of a skirt
   --raft                          print the model on a raft
@@ -110,6 +111,7 @@ struct Args {
     filament: Option<String>,
     printer: Option<usize>,
     supports: bool,
+    tree_supports: bool,
     brim: bool,
     raft: bool,
     no_support_raft: bool,
@@ -164,6 +166,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                 );
             }
             "--supports" => a.supports = true,
+            "--tree-supports" => a.tree_supports = true,
             "--brim" => a.brim = true,
             "--raft" => a.raft = true,
             "--no-support-raft" => a.no_support_raft = true,
@@ -300,7 +303,10 @@ fn slice_without_window(args: &Args) -> ExitCode {
         }
     };
     let mut settings = quality.settings();
-    settings.supports = args.supports;
+    settings.supports = args.supports || args.tree_supports;
+    if args.tree_supports {
+        settings.support_style = profiles::SupportStyle::Tree;
+    }
     if args.brim {
         settings.adhesion = Adhesion::Brim;
     }

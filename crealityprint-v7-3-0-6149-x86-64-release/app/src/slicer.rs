@@ -3,10 +3,11 @@
 
 use crate::geometry::{Bounds, Point2, Vec3};
 use crate::model::Triangle;
-use crate::profiles::{Adhesion, InfillPattern, PrintSettings, SolidPattern};
+use crate::profiles::{Adhesion, InfillPattern, PrintSettings, SolidPattern, SupportStyle};
 use std::collections::HashMap;
 
 mod lightning;
+mod tree;
 
 pub type Polygon = Vec<Point2>;
 
@@ -315,7 +316,12 @@ pub fn slice_modified(
         }
         let blockers = lifted(&support_volumes.blockers);
         points.retain(|p| !blockers.iter().any(|v| inside_mesh(v, at(p))));
-        grid.supports(&points, &masks, &heights, settings, line_width)
+        match settings.support_style {
+            SupportStyle::Grid => grid.supports(&points, &masks, &heights, settings, line_width),
+            SupportStyle::Tree => {
+                tree::tree_supports(&grid, &points, &masks, &heights, settings, line_width)
+            }
+        }
     } else {
         (vec![Vec::new(); n], vec![false; grid.cells()])
     };
@@ -3661,6 +3667,103 @@ mod tests {
             })
             .filter(|(_, len)| *len > 0.0)
             .collect()
+    }
+
+    fn bridge_test_model() -> Vec<Triangle> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/models/bridge-overhang-test.stl");
+        PlacedObject::new("bridge", Mesh::load(&path).unwrap()).world_triangles()
+    }
+
+    fn tree() -> PrintSettings {
+        with_supports(|s| s.support_style = SupportStyle::Tree)
+    }
+
+    #[test]
+    fn test_tree_supports_keep_clear_of_the_model_sides() {
+        let tris = bridge_test_model();
+        let r = slice(&tris, &tree(), 0.42, &|_| {});
+        let mut points = 0;
+        for l in &r.layers {
+            let outline = layer_outline(&tris, l.z - l.height / 2.0);
+            for p in l
+                .paths
+                .iter()
+                .filter(|p| p.kind == PathKind::Support)
+                .flat_map(|p| &p.points)
+            {
+                points += 1;
+                // Outside the model, and the XY gap (1 mm, less a little) clear of it.
+                let inside = outline.iter().filter(|o| contains(o, *p)).count() % 2 == 1;
+                assert!(!inside, "support inside the model at z {}: {p:?}", l.z);
+                let near = outline
+                    .iter()
+                    .map(|o| distance_to_loop(*p, o))
+                    .fold(f32::MAX, f32::min);
+                assert!(near > 0.6, "support {near} mm from the model at z {}", l.z);
+            }
+        }
+        assert!(points > 1000, "{points} support points");
+    }
+
+    #[test]
+    fn test_tree_supports_use_less_than_grid_supports() {
+        let tris = bridge_test_model();
+        let volume = |s: &PrintSettings| -> f32 {
+            slice(&tris, s, 0.42, &|_| {})
+                .layers
+                .iter()
+                .map(|l| {
+                    let len: f32 = l
+                        .paths
+                        .iter()
+                        .filter(|p| p.kind == PathKind::Support)
+                        .map(|p| {
+                            let mut pts = p.points.clone();
+                            if p.closed {
+                                pts.push(pts[0]);
+                            }
+                            pts.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>()
+                        })
+                        .sum();
+                    len * 0.42 * l.height
+                })
+                .sum()
+        };
+        let (grid, tree) = (volume(&with_supports(|_| {})), volume(&tree()));
+        assert!(
+            tree > 0.0 && tree < grid,
+            "tree {tree} mm3, grid {grid} mm3"
+        );
+    }
+
+    #[test]
+    fn test_tree_branches_join_on_the_way_down() {
+        // Under the wide slab, many tips start; far fewer branches reach low down.
+        let r = slice(&slab_on_post(), &tree(), 0.42, &|_| {});
+        let branches = |i: usize| {
+            // Each branch's outermost ring is the first of its rings: count centres.
+            let mut centres: Vec<(i32, i32)> = r.layers[i]
+                .paths
+                .iter()
+                .filter(|p| p.kind == PathKind::Support && p.closed)
+                .map(|p| {
+                    let n = p.points.len() as f32;
+                    let (x, y) = p
+                        .points
+                        .iter()
+                        .fold((0.0, 0.0), |a, q| (a.0 + q.x, a.1 + q.y));
+                    ((x / n * 5.0).round() as i32, (y / n * 5.0).round() as i32)
+                })
+                .collect();
+            centres.sort_unstable();
+            centres.dedup();
+            centres.len()
+        };
+        let top = support_layers(&r).last().unwrap().0;
+        let (high, low) = (branches(top), branches(3));
+        assert!(high > 50, "{high} tips");
+        assert!(low * 3 < high, "{low} branches low down from {high} tips");
     }
 
     #[test]

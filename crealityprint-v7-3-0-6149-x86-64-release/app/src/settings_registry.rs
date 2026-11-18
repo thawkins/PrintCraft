@@ -13,7 +13,7 @@
 
 use crate::profiles::{
     limits, AccelFeature, Adhesion, InfillPattern, PrintSettings, SeamPosition, SolidPattern,
-    SpeedFeature,
+    SpeedFeature, SupportStyle,
 };
 use serde_json::{json, Value as Json};
 use std::ops::RangeInclusive;
@@ -401,6 +401,7 @@ fn build() -> Vec<Setting> {
     let (adhesion_get, adhesion_set, adhesion_labels) = choice_field!(Adhesion, adhesion);
     let (top_get, top_set, top_labels) = choice_field!(SolidPattern, top_pattern);
     let (solid_get, solid_set, solid_labels) = choice_field!(SolidPattern, solid_pattern);
+    let (style_get, style_set, style_labels) = choice_field!(SupportStyle, support_style);
     macro_rules! r {
         ($key:literal, $label:literal, $g:expr, $l:expr, $kind:expr, $variant:ident, $($f:ident).+) => {{
             let (get, set) = field!($variant, $($f).+);
@@ -737,6 +738,52 @@ fn build() -> Vec<Setting> {
         Setting {
             shown: with_supports,
             ..hinted(
+                row(
+                    "support_style",
+                    "Style",
+                    G::Support,
+                    S,
+                    Kind::Choice {
+                        labels: style_labels,
+                    },
+                    style_get,
+                    style_set,
+                ),
+                |_| {
+                    Some(
+                        "Grid: straight columns. Tree: thin branches that join on the way \
+                         down and keep clear of the model; less plastic, easier to remove",
+                    )
+                },
+            )
+        },
+        Setting {
+            shown: |s| s.supports && s.support_style == SupportStyle::Tree,
+            ..r!(
+                "tree_tip_diameter",
+                "Tip diameter",
+                G::Support,
+                A,
+                mm(limits::TREE_TIP, 0.05),
+                Num,
+                tree_tip_diameter
+            )
+        },
+        Setting {
+            shown: |s| s.supports && s.support_style == SupportStyle::Tree,
+            ..r!(
+                "tree_branch_diameter",
+                "Branch diameter",
+                G::Support,
+                A,
+                mm(limits::TREE_BRANCH, 0.1),
+                Num,
+                tree_branch_diameter
+            )
+        },
+        Setting {
+            shown: with_supports,
+            ..hinted(
                 r!(
                     "support_top_gap",
                     "Top Z gap",
@@ -957,7 +1004,7 @@ mod tests {
     }
     use crate::profiles::{
         AccelFeature, Adhesion, FeatureAccels, FeatureSpeeds, InfillPattern, PrintSettings,
-        SeamPosition, SolidPattern, SpeedFeature,
+        SeamPosition, SolidPattern, SpeedFeature, SupportStyle,
     };
 
     /// Every print setting away from its default. A struct literal with no `..`: adding a
@@ -1000,6 +1047,9 @@ mod tests {
             support_xy_gap: 2.0,
             support_spacing: 3.0,
             support_interface_layers: 2,
+            support_style: SupportStyle::Tree,
+            tree_tip_diameter: 1.0,
+            tree_branch_diameter: 3.0,
             adhesion: Adhesion::Raft,
             infill_pattern: InfillPattern::Triangles,
             seam: SeamPosition::Rear,
@@ -1165,6 +1215,7 @@ mod tests {
             ]
         );
         assert_eq!(labels("adhesion"), ["None", "Skirt", "Brim", "Raft"]);
+        assert_eq!(labels("support_style"), ["Grid", "Tree"]);
         for key in ["top_pattern", "solid_pattern"] {
             assert_eq!(labels(key), ["Lines", "Monotonic", "Concentric"]);
         }
