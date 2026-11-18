@@ -108,6 +108,58 @@ impl Overrides {
     }
 }
 
+/// Settings for part of a part's height: from `from` up to `to` (mm above the part's
+/// bottom; from inclusive, to exclusive) it prints with `overrides` on top of its own
+/// settings, for example denser infill near the top.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeightRange {
+    pub from: f32,
+    pub to: f32,
+    pub overrides: Overrides,
+}
+
+impl HeightRange {
+    /// The range as a project file writes it: `{"from", "to", "overrides"}`.
+    pub fn to_json(&self) -> Json {
+        serde_json::json!({
+            "from": self.from,
+            "to": self.to,
+            "overrides": self.overrides.to_json(),
+        })
+    }
+
+    /// A range from a project file; `None` without both heights, or when `to` isn't
+    /// above `from`.
+    pub fn from_json(raw: &Json) -> Option<Self> {
+        let height = |k: &str| raw.get(k).and_then(Json::as_f64).map(|x| x as f32);
+        let (from, to) = (height("from")?.max(0.0), height("to")?);
+        (to > from).then(|| Self {
+            from,
+            to,
+            overrides: raw
+                .get("overrides")
+                .map(Overrides::from_json)
+                .unwrap_or_default(),
+        })
+    }
+}
+
+/// The settings a part prints with, height ranges included, given the plate's.
+pub fn part_settings(
+    plate: &PrintSettings,
+    own: &Overrides,
+    ranges: &[HeightRange],
+) -> crate::slicer::PartSettings {
+    let base = own.apply(plate);
+    crate::slicer::PartSettings {
+        ranges: ranges
+            .iter()
+            .map(|r| (r.from, r.to, r.overrides.apply(&base)))
+            .collect(),
+        base,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +213,37 @@ mod tests {
         let mut want = Overrides::default();
         want.set("bottom_layers", Value::Count(2));
         assert_eq!(Overrides::from_json(&odd), want);
+    }
+
+    #[test]
+    fn test_height_range_round_trips_and_builds_part_settings() {
+        let mut own = Overrides::default();
+        own.set("walls", Value::Count(3));
+        let mut top = Overrides::default();
+        top.set("infill_percent", Value::Num(90.0));
+        let range = HeightRange {
+            from: 8.0,
+            to: 10.0,
+            overrides: top,
+        };
+        assert_eq!(
+            HeightRange::from_json(&range.to_json()),
+            Some(range.clone())
+        );
+        assert_eq!(
+            HeightRange::from_json(&json!({"from": 4.0, "to": 4.0})),
+            None
+        );
+        assert_eq!(HeightRange::from_json(&json!({"to": 4.0})), None);
+        let plate = PrintSettings::default();
+        let ps = part_settings(&plate, &own, &[range]);
+        assert_eq!(ps.base.walls, 3);
+        assert_eq!(ps.at(9.0).infill_percent, 90.0);
+        assert_eq!(
+            ps.at(9.0).walls,
+            3,
+            "a range builds on the part's own settings"
+        );
+        assert_eq!(ps.at(10.0).infill_percent, plate.infill_percent);
     }
 }

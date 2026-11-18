@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Height ranges (gap plan task M4.3). Under "Height ranges" in "Settings for this
+  object", "Add height range" gives a part different settings between two heights
+  (measured from the part's bottom, above a raft if there is one), for example denser
+  infill near the top. A range starts over the top quarter of the part; its heights
+  and settings can be changed, and each setting starts at the part's own value. Where
+  ranges overlap, the lower one in the list wins. Layers whose middle lies in a range
+  use its settings. Projects save the ranges; a split part keeps them, and after a cut
+  the lower part keeps them (the upper part is turned over, so it doesn't). The object
+  list badge counts ranges too.
 - Per-object settings panel (gap plan task M4.2). On the Objects tab, "Settings for
   this object" lists the settings the selected part has of its own, by section, each
   with an x button that puts it back on the plate's value. "Add a setting..." gives the

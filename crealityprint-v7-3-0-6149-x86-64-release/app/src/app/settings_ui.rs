@@ -190,13 +190,22 @@ fn auto_widget(
     changed
 }
 
-/// The object list's badge for a part with `n` settings of its own.
-pub(super) fn override_badge(n: usize) -> Option<String> {
-    match n {
+/// The object list's badge for a part with `settings` settings of its own and
+/// `ranges` height ranges.
+pub(super) fn override_badge(settings: usize, ranges: usize) -> Option<String> {
+    let count = |n: usize, one: &str, many: &str| match n {
         0 => None,
-        1 => Some("1 setting".into()),
-        n => Some(format!("{n} settings")),
-    }
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let parts: Vec<String> = [
+        count(settings, "setting", "settings"),
+        count(ranges, "range", "ranges"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 /// A value as the panel words it, for "the plate's value" hints.
@@ -221,42 +230,138 @@ fn value_text(kind: &Kind, v: Value) -> String {
     }
 }
 
+/// A change made in an overrides editor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum OverrideEdit {
+    /// A new value for a setting already overridden.
+    Set(&'static str, Value),
+    /// Back to the value underneath.
+    Remove(&'static str),
+    /// Override one more setting, starting at the value underneath.
+    Add(&'static str),
+}
+
+/// Applies `edit` to `overrides`; `under` is what they sit on (the plate's settings for
+/// a part, the part's own for a height range), where an added setting starts. A setting
+/// already overridden keeps its value when added again.
+pub(super) fn apply_override_edit(
+    overrides: &mut overrides::Overrides,
+    edit: OverrideEdit,
+    under: &PrintSettings,
+) {
+    match edit {
+        OverrideEdit::Set(key, v) => {
+            overrides.set(key, v);
+        }
+        OverrideEdit::Remove(key) => overrides.remove(key),
+        OverrideEdit::Add(key) => {
+            if overrides.get(key).is_none() {
+                if let Some(r) = overrides::per_object_settings().find(|r| r.key == key) {
+                    overrides.set(key, (r.get)(under));
+                }
+            }
+        }
+    }
+}
+
+/// The rows of `overrides`, by section, each with a button back to the value in
+/// `under`, then a list to add another. `id` keeps two editors' widgets apart.
+fn overrides_editor(
+    ui: &mut Ui,
+    id: &str,
+    overrides: &overrides::Overrides,
+    under: &PrintSettings,
+    under_name: &str,
+) -> Option<OverrideEdit> {
+    let mut edit = None;
+    let effective = overrides.apply(under);
+    let (own, others): (Vec<&Setting>, Vec<&Setting>) =
+        overrides::per_object_settings().partition(|r| overrides.get(r.key).is_some());
+    if !own.is_empty() {
+        egui::Grid::new(("overrides", id))
+            .num_columns(3)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                let mut section = None;
+                for r in own {
+                    // The section's name over its rows, as on the Global tab.
+                    if section != Some(r.group) {
+                        section = Some(r.group);
+                        ui.label(RichText::new(r.group.title()).color(theme::TEXT_DIM));
+                        ui.end_row();
+                    }
+                    ui.label(r.label);
+                    let mut v = (r.get)(&effective);
+                    let widget_id = format!("{id}_{}", r.key);
+                    if ui.add(value_widget(&r.kind, &mut v, &widget_id)).changed() {
+                        edit = Some(OverrideEdit::Set(r.key, v));
+                    }
+                    let back = value_text(&r.kind, (r.get)(under));
+                    if ui
+                        .small_button("x")
+                        .on_hover_text(format!("Use {under_name} value ({back})"))
+                        .clicked()
+                    {
+                        edit = Some(OverrideEdit::Remove(r.key));
+                    }
+                    ui.end_row();
+                }
+            });
+    }
+    if !others.is_empty() {
+        egui::ComboBox::from_id_salt(("add_setting", id))
+            .selected_text("Add a setting...")
+            .show_ui(ui, |ui| {
+                let mut section = None;
+                for r in others {
+                    if section != Some(r.group) {
+                        section = Some(r.group);
+                        ui.label(RichText::new(r.group.title()).color(theme::TEXT_DIM));
+                    }
+                    if ui
+                        .selectable_label(false, format!("  {}", r.label))
+                        .clicked()
+                    {
+                        edit = Some(OverrideEdit::Add(r.key));
+                    }
+                }
+            });
+    }
+    edit
+}
+
+/// A change to a part's height ranges.
+enum RangeEdit {
+    Add,
+    Remove(usize),
+    Heights(usize, f32, f32),
+    Settings(usize, OverrideEdit),
+}
+
 impl PrintCraftApp {
-    /// Gives object `i` setting `key` of its own, starting at the plate's value (so
-    /// nothing prints differently until it is changed). A setting it already has keeps
-    /// its value; one a part can't have is not added.
-    pub(super) fn add_override(&mut self, i: usize, key: &str) {
-        let Some(o) = self.objects.get_mut(i) else {
-            return;
-        };
-        if o.overrides.get(key).is_some() {
-            return;
-        }
-        if let Some(r) = overrides::per_object_settings().find(|r| r.key == key) {
-            o.overrides.set(key, (r.get)(&self.settings));
-        }
-    }
-
-    /// Object `i` goes back to the plate's value of `key`.
-    pub(super) fn remove_override(&mut self, i: usize, key: &str) {
+    /// Adds a height range to object `i` over the top quarter of its height (`height`
+    /// mm tall), with no settings yet.
+    pub(super) fn add_height_range(&mut self, i: usize, height: f32) {
         if let Some(o) = self.objects.get_mut(i) {
-            o.overrides.remove(key);
+            let from = (height * 0.75 * 10.0).round() / 10.0;
+            o.ranges.push(overrides::HeightRange {
+                from,
+                to: height.max(from + 0.1),
+                overrides: Default::default(),
+            });
         }
     }
 
-    /// "Settings for this object": each setting the selected part has of its own, with
-    /// a button back to the plate's value, and a list to add another.
+    /// "Settings for this object": the settings the selected part has of its own, then
+    /// its height ranges, each with settings of their own.
     pub(super) fn object_settings_card(&mut self, ui: &mut Ui, i: usize) {
-        let mut edit: Option<(&'static str, Value)> = None;
-        let mut remove: Option<&'static str> = None;
-        let mut add: Option<&'static str> = None;
+        let height = self.object_bounds(i).size().z;
         let plate = &self.settings;
-        let overrides = &self.objects[i].overrides;
+        let o = &self.objects[i];
+        let mut own_edit = None;
+        let mut range_edit = None;
         card(ui, "Settings for this object", |ui| {
-            let effective = overrides.apply(plate);
-            let (own, others): (Vec<&Setting>, Vec<&Setting>) =
-                overrides::per_object_settings().partition(|r| overrides.get(r.key).is_some());
-            if own.is_empty() {
+            if o.overrides.is_empty() {
                 ui.label(
                     RichText::new(
                         "Prints with the plate's settings. Add a setting to print this part \
@@ -264,65 +369,70 @@ impl PrintCraftApp {
                     )
                     .color(theme::TEXT_DIM),
                 );
-            } else {
-                egui::Grid::new("object_settings")
-                    .num_columns(3)
-                    .spacing([12.0, 6.0])
-                    .show(ui, |ui| {
-                        let mut section = None;
-                        for r in own {
-                            // The section's name over its rows, as on the Global tab.
-                            if section != Some(r.group) {
-                                section = Some(r.group);
-                                ui.label(RichText::new(r.group.title()).color(theme::TEXT_DIM));
-                                ui.end_row();
-                            }
-                            ui.label(r.label);
-                            let mut v = (r.get)(&effective);
-                            let id = format!("object_{}", r.key);
-                            if ui.add(value_widget(&r.kind, &mut v, &id)).changed() {
-                                edit = Some((r.key, v));
-                            }
-                            let plate_value = value_text(&r.kind, (r.get)(plate));
-                            if ui
-                                .small_button("x")
-                                .on_hover_text(format!("Use the plate's value ({plate_value})"))
-                                .clicked()
-                            {
-                                remove = Some(r.key);
-                            }
-                            ui.end_row();
-                        }
-                    });
             }
-            if !others.is_empty() {
-                egui::ComboBox::from_id_salt("add_object_setting")
-                    .selected_text("Add a setting...")
-                    .show_ui(ui, |ui| {
-                        let mut section = None;
-                        for r in others {
-                            if section != Some(r.group) {
-                                section = Some(r.group);
-                                ui.label(RichText::new(r.group.title()).color(theme::TEXT_DIM));
-                            }
-                            if ui
-                                .selectable_label(false, format!("  {}", r.label))
-                                .clicked()
-                            {
-                                add = Some(r.key);
-                            }
-                        }
-                    });
+            own_edit = overrides_editor(ui, "object", &o.overrides, plate, "the plate's");
+            ui.add_space(8.0);
+            ui.label(RichText::new("Height ranges").strong());
+            let part = o.overrides.apply(plate);
+            for (j, r) in o.ranges.iter().enumerate() {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let (mut from, mut to) = (r.from, r.to);
+                    ui.label("From");
+                    let a = ui.add(
+                        egui::DragValue::new(&mut from)
+                            .range(0.0..=(to - 0.1).max(0.0))
+                            .speed(0.1)
+                            .suffix(" mm"),
+                    );
+                    ui.label("to");
+                    let b = ui.add(
+                        egui::DragValue::new(&mut to)
+                            .range((from + 0.1)..=10_000.0)
+                            .speed(0.1)
+                            .suffix(" mm"),
+                    );
+                    if a.changed() || b.changed() {
+                        range_edit = Some(RangeEdit::Heights(j, from, to));
+                    }
+                    if ui
+                        .small_button("Remove")
+                        .on_hover_text("Remove this height range")
+                        .clicked()
+                    {
+                        range_edit = Some(RangeEdit::Remove(j));
+                    }
+                });
+                let id = format!("range{j}");
+                if let Some(e) = overrides_editor(ui, &id, &r.overrides, &part, "the part's") {
+                    range_edit = Some(RangeEdit::Settings(j, e));
+                }
+            }
+            if ui
+                .button("Add height range")
+                .on_hover_text("Different settings for part of this part's height")
+                .clicked()
+            {
+                range_edit = Some(RangeEdit::Add);
             }
         });
-        if let Some((key, v)) = edit {
-            self.objects[i].overrides.set(key, v);
+        let part = self.objects[i].overrides.apply(&self.settings);
+        if let Some(e) = own_edit {
+            apply_override_edit(&mut self.objects[i].overrides, e, &self.settings);
         }
-        if let Some(key) = remove {
-            self.remove_override(i, key);
-        }
-        if let Some(key) = add {
-            self.add_override(i, key);
+        match range_edit {
+            Some(RangeEdit::Add) => self.add_height_range(i, height),
+            Some(RangeEdit::Remove(j)) => {
+                self.objects[i].ranges.remove(j);
+            }
+            Some(RangeEdit::Heights(j, from, to)) => {
+                let r = &mut self.objects[i].ranges[j];
+                (r.from, r.to) = (from, to);
+            }
+            Some(RangeEdit::Settings(j, e)) => {
+                apply_override_edit(&mut self.objects[i].ranges[j].overrides, e, &part);
+            }
+            None => {}
         }
     }
 }

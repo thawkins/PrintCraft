@@ -283,6 +283,8 @@ pub struct PlacedObject {
     pub extruder: u8,
     /// Print settings this part doesn't take from the plate (empty: all the plate's).
     pub overrides: crate::overrides::Overrides,
+    /// Settings for parts of its height, on top of `overrides`.
+    pub ranges: Vec<crate::overrides::HeightRange>,
 }
 
 impl PlacedObject {
@@ -296,6 +298,7 @@ impl PlacedObject {
             scale: Vec3::new(100.0, 100.0, 100.0),
             extruder: crate::profiles::PRIMARY_TOOL,
             overrides: Default::default(),
+            ranges: Vec::new(),
         }
     }
 
@@ -484,6 +487,7 @@ impl PlacedObject {
                 let mut o = PlacedObject::new(format!("{} {}", self.name, n + 1), m);
                 (o.x, o.y, o.extruder) = (c.x, c.y, self.extruder);
                 o.overrides = self.overrides.clone();
+                o.ranges = self.ranges.clone();
                 o
             })
             .collect()
@@ -515,6 +519,10 @@ impl PlacedObject {
                 let mut o = PlacedObject::new(format!("{} ({side})", self.name), m);
                 (o.x, o.y, o.extruder) = (self.x, self.y, self.extruder);
                 o.overrides = self.overrides.clone();
+                // The lower part keeps its heights; the upper one is turned over.
+                if side == "lower" {
+                    o.ranges = self.ranges.clone();
+                }
                 o
             })
             .collect()

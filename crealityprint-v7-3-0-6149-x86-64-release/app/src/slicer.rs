@@ -357,47 +357,102 @@ pub fn slice(
     SliceResult { layers, line_width }
 }
 
+/// The settings a set of parts prints with: `base`, and between two heights (mm above
+/// the model's bottom, from inclusive, to exclusive) the settings of a height range.
+/// Where ranges overlap, the later one wins.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartSettings {
+    pub base: PrintSettings,
+    pub ranges: Vec<(f32, f32, PrintSettings)>,
+}
+
+impl PartSettings {
+    /// Settings with no height ranges.
+    #[cfg(test)]
+    pub fn plain(base: PrintSettings) -> Self {
+        Self {
+            base,
+            ranges: Vec::new(),
+        }
+    }
+
+    /// The settings at height `z` above the model's bottom.
+    pub fn at(&self, z: f32) -> &PrintSettings {
+        self.ranges
+            .iter()
+            .rev()
+            .find(|(from, to, _)| z >= *from && z < *to)
+            .map_or(&self.base, |(_, _, s)| s)
+    }
+}
+
 /// Slices a plate whose parts don't all print with the plate's settings. `groups` are
 /// the parts' triangles with the settings each set prints with (it may be the plate's);
 /// `all` is every triangle on the plate. With no groups, or one on the plate's
 /// settings, this is plain [`slice`].
 ///
-/// Otherwise every group is sliced on its own with its settings, and the layers are put
-/// together: layer heights are the plate's for all of them, so layer `i` is the same
-/// height everywhere. What belongs to the plate as a whole, the skirt, brim, raft and
-/// supports, comes from slicing `all` with the plate's settings (supports are a plate
-/// setting, and stand on whatever is below them, from any part).
+/// Otherwise every group is sliced on its own, once for each set of settings it uses
+/// (its own, and each height range's), and the layers are put together: layer heights
+/// are the plate's for all of them, so layer `i` is the same height everywhere, and a
+/// group's layer `i` comes from the slice with the settings at the middle of that
+/// layer. What belongs to the plate as a whole, the skirt, brim, raft and supports,
+/// comes from slicing `all` with the plate's settings (supports are a plate setting,
+/// and stand on whatever is below them, from any part).
 pub fn slice_groups(
     all: &[Triangle],
-    groups: &[(Vec<Triangle>, PrintSettings)],
+    groups: &[(Vec<Triangle>, PartSettings)],
     plate: &PrintSettings,
     line_width: f32,
     progress: &dyn Fn(f32),
 ) -> SliceResult {
     let plain = match groups {
         [] => true,
-        [(_, only)] => only == plate,
+        [(_, only)] => only.ranges.is_empty() && only.base == *plate,
         _ => false,
     };
     if plain {
         return slice(all, plate, line_width, progress);
     }
-    let n = groups.len() as f32 + 1.0;
-    let base = slice(all, plate, line_width, &|v| progress(v / n));
-    let parts: Vec<SliceResult> = groups
+    // Each group's distinct settings, and which of them each of its layers uses.
+    let variants: Vec<Vec<&PrintSettings>> = groups
         .iter()
-        .enumerate()
-        .map(|(k, (tris, s))| {
-            // Supports come from the plate's slice; leaving them out here saves time.
-            let own = PrintSettings {
-                supports: false,
-                ..s.clone()
-            };
-            slice(tris, &own, line_width, &|v| {
-                progress((k as f32 + 1.0 + v) / n)
-            })
+        .map(|(_, ps)| {
+            let mut v = vec![&ps.base];
+            for (_, _, s) in &ps.ranges {
+                if !v.contains(&s) {
+                    v.push(s);
+                }
+            }
+            v
         })
         .collect();
+    let n = variants.iter().map(Vec::len).sum::<usize>() as f32 + 1.0;
+    let base = slice(all, plate, line_width, &|v| progress(v / n));
+    let mut done = 1.0;
+    let slices: Vec<Vec<SliceResult>> = groups
+        .iter()
+        .zip(&variants)
+        .map(|((tris, _), vs)| {
+            vs.iter()
+                .map(|s| {
+                    // Supports come from the plate's slice; leaving them out saves time.
+                    let own = PrintSettings {
+                        supports: false,
+                        ..(*s).clone()
+                    };
+                    let at = done;
+                    done += 1.0;
+                    slice(tris, &own, line_width, &|v| progress((at + v) / n))
+                })
+                .collect()
+        })
+        .collect();
+    // Heights count from the model's bottom, above a full raft and its air gap.
+    let lift = if plate.adhesion == Adhesion::Raft {
+        raft_height(plate) + RAFT_AIR_GAP_MM
+    } else {
+        0.0
+    };
     let whole_plate = |k: PathKind| {
         matches!(
             k,
@@ -409,13 +464,16 @@ pub fn slice_groups(
         .into_iter()
         .enumerate()
         .map(|(i, layer)| {
+            let middle = layer.z - layer.height / 2.0 - lift;
             let (support, mut paths): (Vec<ToolPath>, Vec<ToolPath>) = layer
                 .paths
                 .into_iter()
                 .filter(|p| whole_plate(p.kind))
                 .partition(|p| p.kind == PathKind::Support);
-            for part in &parts {
-                if let Some(l) = part.layers.get(i) {
+            for (((_, ps), vs), slices) in groups.iter().zip(&variants).zip(&slices) {
+                let want = ps.at(middle);
+                let k = vs.iter().position(|s| *s == want).unwrap_or(0);
+                if let Some(l) = slices.get(k).and_then(|r| r.layers.get(i)) {
                     paths.extend(l.paths.iter().filter(|p| !whole_plate(p.kind)).cloned());
                 }
             }
@@ -1973,8 +2031,68 @@ mod tests {
             ..PrintSettings::default()
         };
         let plain = slice(&all, &plate, 0.42, &|_| {});
-        let grouped = slice_groups(&all, &[(all.clone(), plate.clone())], &plate, 0.42, &|_| {});
+        let grouped = slice_groups(
+            &all,
+            &[(all.clone(), PartSettings::plain(plate.clone()))],
+            &plate,
+            0.42,
+            &|_| {},
+        );
         assert_eq!(format!("{grouped:?}"), format!("{plain:?}"));
+    }
+
+    #[test]
+    fn test_slice_groups_height_range_changes_infill_exactly_at_its_layers() {
+        // A 10 mm box; from 2 mm up to 4 mm it has no infill and four walls.
+        for adhesion in [Adhesion::Skirt, Adhesion::Raft] {
+            let tris = block_at(20.0, 10.0, 0.0);
+            let plate = PrintSettings {
+                adhesion,
+                ..PrintSettings::default()
+            };
+            let range = PrintSettings {
+                infill_percent: 0.0,
+                walls: 4,
+                ..plate.clone()
+            };
+            let ps = PartSettings {
+                base: plate.clone(),
+                ranges: vec![(2.0, 4.0, range)],
+            };
+            let r = slice_groups(&tris, &[(tris.clone(), ps)], &plate, 0.42, &|_| {});
+            let plain = slice(&tris, &plate, 0.42, &|_| {});
+            assert_eq!(r.layers.len(), plain.layers.len());
+            let lift = if adhesion == Adhesion::Raft {
+                raft_height(&plate) + RAFT_AIR_GAP_MM
+            } else {
+                0.0
+            };
+            let count =
+                |l: &Layer, kind: PathKind| l.paths.iter().filter(|p| p.kind == kind).count();
+            let mut in_range = 0;
+            for (l, p) in r.layers.iter().zip(&plain.layers) {
+                let middle = l.z - l.height / 2.0 - lift;
+                if (2.0..4.0).contains(&middle) {
+                    in_range += 1;
+                    assert_eq!(
+                        count(l, PathKind::SparseInfill),
+                        0,
+                        "{adhesion:?} z {}",
+                        l.z
+                    );
+                    assert_eq!(count(l, PathKind::InnerWall), 3, "{adhesion:?} z {}", l.z);
+                } else {
+                    // Outside the range the layer is exactly the box's own.
+                    assert_eq!(
+                        format!("{:?}", l.paths),
+                        format!("{:?}", p.paths),
+                        "z {}",
+                        l.z
+                    );
+                }
+            }
+            assert_eq!(in_range, 10, "{adhesion:?}: 2 mm of 0.2 mm layers");
+        }
     }
 
     #[test]
@@ -1990,7 +2108,10 @@ mod tests {
         };
         let r = slice_groups(
             &all,
-            &[(a, empty), (b, plate.clone())],
+            &[
+                (a, PartSettings::plain(empty)),
+                (b, PartSettings::plain(plate.clone())),
+            ],
             &plate,
             0.42,
             &|_| {},

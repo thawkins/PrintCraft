@@ -83,6 +83,9 @@ pub fn to_json(p: &Project) -> String {
             if !o.overrides.is_empty() {
                 v["overrides"] = o.overrides.to_json();
             }
+            if !o.ranges.is_empty() {
+                v["ranges"] = o.ranges.iter().map(|r| r.to_json()).collect();
+            }
             v
         })
         .collect();
@@ -326,6 +329,13 @@ fn project_from(v: &Value) -> Result<Project, String> {
         if let Some(raw) = o.get("overrides") {
             obj.overrides = crate::overrides::Overrides::from_json(raw);
         }
+        obj.ranges = o
+            .get("ranges")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(crate::overrides::HeightRange::from_json)
+            .collect();
         objects.push(obj);
     }
 
@@ -859,6 +869,25 @@ mod tests {
         let back = from_json(&text).unwrap();
         assert_eq!(back.objects[0].overrides, p.objects[0].overrides);
         assert!(back.objects[1].overrides.is_empty());
+        // Height ranges too; a part without any writes none.
+        let mut top = crate::overrides::Overrides::default();
+        top.set("top_layers", SettingValue::Count(6));
+        p.objects[1].ranges.push(crate::overrides::HeightRange {
+            from: 5.0,
+            to: 8.0,
+            overrides: top,
+        });
+        let text = to_json(&p);
+        let saved: Value = serde_json::from_str(&text).unwrap();
+        assert!(saved["objects"][0].get("ranges").is_none());
+        assert_eq!(
+            saved["objects"][1]["ranges"],
+            json!([{"from": 5.0, "to": 8.0, "overrides": {"top_layers": 6}}])
+        );
+        assert_eq!(
+            from_json(&text).unwrap().objects[1].ranges,
+            p.objects[1].ranges
+        );
     }
 
     #[test]

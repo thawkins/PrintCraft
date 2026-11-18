@@ -535,7 +535,7 @@ impl PrintCraftApp {
         );
         for o in &self.objects {
             s += &format!(
-                "|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}",
+                "|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}:{:?}",
                 o.name,
                 o.x,
                 o.y,
@@ -543,7 +543,8 @@ impl PrintCraftApp {
                 o.scale,
                 o.mesh.triangles.len(),
                 o.extruder,
-                o.overrides
+                o.overrides,
+                o.ranges
             );
         }
         s
@@ -749,11 +750,11 @@ impl PrintCraftApp {
         }
         let tris: Vec<Triangle> = self.plate.concat();
         // Parts with settings of their own slice apart from the rest (none: one slice).
-        let parts: Vec<(&[Triangle], &crate::overrides::Overrides)> = self
+        let parts: Vec<pipeline::Part> = self
             .plate
             .iter()
             .zip(&self.objects)
-            .map(|(t, o)| (t.as_slice(), &o.overrides))
+            .map(|(t, o)| (t.as_slice(), &o.overrides, o.ranges.as_slice()))
             .collect();
         let groups = pipeline::settings_groups(&parts, &self.settings);
         let tools = match self.tools() {
@@ -982,8 +983,10 @@ impl PrintCraftApp {
                     if r.clicked() {
                         self.selected = Some(i);
                     }
-                    let own = &self.objects[i].overrides;
-                    if let Some(badge) = settings_ui::override_badge(own.len()) {
+                    let o = &self.objects[i];
+                    if let Some(badge) =
+                        settings_ui::override_badge(o.overrides.len(), o.ranges.len())
+                    {
                         ui.label(RichText::new(badge).size(12.0).color(theme::ACCENT))
                             .on_hover_text(
                                 "Prints with settings of its own: select it to see them",
@@ -2680,40 +2683,49 @@ mod tests {
     #[test]
     fn test_object_override_added_at_plate_value_and_removed_back_to_it() {
         use crate::settings_registry::Value;
+        use settings_ui::{apply_override_edit, OverrideEdit};
         let mut app = PrintCraftApp::for_tests();
         app.add_object(cube("box"));
         let plate = app.settings.clone();
-        assert_eq!(settings_ui::override_badge(0), None);
+        let edit = |app: &mut PrintCraftApp, e: OverrideEdit| {
+            let under = app.settings.clone();
+            apply_override_edit(&mut app.objects[0].overrides, e, &under);
+        };
+        assert_eq!(settings_ui::override_badge(0, 0), None);
         // Added: it starts at the plate's value, so nothing prints differently yet.
-        app.add_override(0, "infill_percent");
+        edit(&mut app, OverrideEdit::Add("infill_percent"));
         assert_eq!(
             app.objects[0].overrides.get("infill_percent"),
             Some(Value::Num(plate.infill_percent))
         );
-        assert_eq!(settings_ui::override_badge(1).as_deref(), Some("1 setting"));
+        assert_eq!(
+            settings_ui::override_badge(1, 0).as_deref(),
+            Some("1 setting")
+        );
         // Changed: the part prints with its own value, the plate keeps its own.
-        app.objects[0]
-            .overrides
-            .set("infill_percent", Value::Num(80.0));
+        edit(
+            &mut app,
+            OverrideEdit::Set("infill_percent", Value::Num(80.0)),
+        );
         assert_eq!(
             app.objects[0].overrides.apply(&app.settings).infill_percent,
             80.0
         );
         assert_eq!(app.settings.infill_percent, plate.infill_percent);
-        app.add_override(0, "walls");
+        edit(&mut app, OverrideEdit::Add("walls"));
         assert_eq!(
-            settings_ui::override_badge(2).as_deref(),
+            settings_ui::override_badge(2, 0).as_deref(),
             Some("2 settings")
         );
         // Adding one it already has keeps its value.
-        app.add_override(0, "infill_percent");
+        edit(&mut app, OverrideEdit::Add("infill_percent"));
         assert_eq!(
             app.objects[0].overrides.get("infill_percent"),
             Some(Value::Num(80.0))
         );
         // Removed: back to the plate's value, and later plate changes reach the part.
-        app.remove_override(0, "infill_percent");
-        app.remove_override(0, "walls");
+        edit(&mut app, OverrideEdit::Remove("infill_percent"));
+        edit(&mut app, OverrideEdit::Remove("walls"));
         assert!(app.objects[0].overrides.is_empty());
         assert_eq!(app.objects[0].overrides.apply(&app.settings), app.settings);
         app.settings.infill_percent = 40.0;
@@ -2722,8 +2734,47 @@ mod tests {
             40.0
         );
         // A setting a part can't have is not added.
-        app.add_override(0, "layer_height");
+        edit(&mut app, OverrideEdit::Add("layer_height"));
         assert!(app.objects[0].overrides.is_empty());
+    }
+
+    #[test]
+    fn test_height_range_added_over_the_top_quarter_builds_on_the_part() {
+        use crate::settings_registry::Value;
+        use settings_ui::{apply_override_edit, OverrideEdit};
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(PlacedObject::new(
+            "box",
+            Mesh::cube(Vec3::new(10.0, 10.0, 20.0)),
+        ));
+        app.objects[0].overrides.set("walls", Value::Count(3));
+        app.add_height_range(0, 20.0);
+        let r = &app.objects[0].ranges[0];
+        assert_eq!((r.from, r.to), (15.0, 20.0));
+        assert_eq!(
+            settings_ui::override_badge(0, 1).as_deref(),
+            Some("1 range")
+        );
+        assert_eq!(
+            settings_ui::override_badge(2, 3).as_deref(),
+            Some("2 settings, 3 ranges")
+        );
+        assert!(r.overrides.is_empty());
+        // A setting added to the range starts at the part's value, not the plate's.
+        let part = app.objects[0].overrides.apply(&app.settings);
+        apply_override_edit(
+            &mut app.objects[0].ranges[0].overrides,
+            OverrideEdit::Add("walls"),
+            &part,
+        );
+        assert_eq!(
+            app.objects[0].ranges[0].overrides.get("walls"),
+            Some(Value::Count(3))
+        );
+        // The range is part of the slice's fingerprint, so editing it calls for a new slice.
+        let before = app.fingerprint();
+        app.objects[0].ranges[0].from = 12.0;
+        assert_ne!(app.fingerprint(), before);
     }
 
     #[test]

@@ -4,8 +4,9 @@
 use crate::gcode::{self, GcodeOutput};
 use crate::geometry::Bounds;
 use crate::model::Triangle;
-use crate::overrides::Overrides;
+use crate::overrides::{HeightRange, Overrides};
 use crate::profiles::{Filament, PrintSettings, Printer};
+use crate::slicer::PartSettings;
 use crate::slicer::{self, SliceResult};
 use image::RgbaImage;
 
@@ -64,19 +65,23 @@ pub fn slice_plate_with_tools(
     slice_plate_grouped(triangles, &[], printer, filament, settings, tools, progress)
 }
 
-/// The parts on the plate grouped by the settings they print with: `parts` are each
-/// part's placed triangles and overrides. Parts with the same settings slice together.
-/// Empty when no part has overrides (the whole plate prints with `plate`).
+/// A part on the plate for [`settings_groups`]: its placed triangles, its overrides
+/// and its height ranges.
+pub type Part<'a> = (&'a [Triangle], &'a Overrides, &'a [HeightRange]);
+
+/// The parts on the plate grouped by the settings they print with. Parts with the same
+/// settings (height ranges included) slice together. Empty when no part has overrides
+/// or height ranges (the whole plate prints with `plate`).
 pub fn settings_groups(
-    parts: &[(&[Triangle], &Overrides)],
+    parts: &[Part],
     plate: &PrintSettings,
-) -> Vec<(Vec<Triangle>, PrintSettings)> {
-    if parts.iter().all(|(_, o)| o.is_empty()) {
+) -> Vec<(Vec<Triangle>, PartSettings)> {
+    if parts.iter().all(|(_, o, r)| o.is_empty() && r.is_empty()) {
         return Vec::new();
     }
-    let mut groups: Vec<(Vec<Triangle>, PrintSettings)> = Vec::new();
-    for (tris, overrides) in parts {
-        let settings = overrides.apply(plate);
+    let mut groups: Vec<(Vec<Triangle>, PartSettings)> = Vec::new();
+    for (tris, overrides, ranges) in parts {
+        let settings = crate::overrides::part_settings(plate, overrides, ranges);
         match groups.iter_mut().find(|(_, s)| *s == settings) {
             Some((all, _)) => all.extend_from_slice(tris),
             None => groups.push((tris.to_vec(), settings)),
@@ -89,7 +94,7 @@ pub fn settings_groups(
 /// `groups` from [`settings_groups`] (empty: everything prints with `settings`).
 pub fn slice_plate_grouped(
     triangles: &[Triangle],
-    groups: &[(Vec<Triangle>, PrintSettings)],
+    groups: &[(Vec<Triangle>, PartSettings)],
     printer: &Printer,
     filament: &Filament,
     settings: &PrintSettings,
@@ -790,14 +795,14 @@ mod tests {
             place(40.0, None),
         ];
         let placed: Vec<Vec<Triangle>> = objects.iter().map(|o| o.world_triangles()).collect();
-        let parts: Vec<(&[Triangle], &Overrides)> = placed
+        let parts: Vec<Part> = placed
             .iter()
             .zip(&objects)
-            .map(|(t, o)| (t.as_slice(), &o.overrides))
+            .map(|(t, o)| (t.as_slice(), &o.overrides, o.ranges.as_slice()))
             .collect();
         let groups = settings_groups(&parts, &plate);
         assert_eq!(groups.len(), 2, "the two plain boxes slice together");
-        assert_eq!(groups[0].1.infill_percent, 0.0);
+        assert_eq!(groups[0].1.base.infill_percent, 0.0);
         assert_eq!(groups[1].0.len(), 24);
         let all: Vec<Triangle> = placed.concat();
         let printer = Printer::presets().remove(0);
@@ -813,9 +818,9 @@ mod tests {
             .any(|p| p.points.iter().any(|q| q.x < 0.0));
         assert!(!sparse_left, "the left box has no infill");
         // No overrides: no groups, and the plate slices exactly as before.
-        let plain: Vec<(&[Triangle], &Overrides)> = parts
+        let plain: Vec<Part> = parts
             .iter()
-            .map(|(t, _)| (*t, &objects[1].overrides))
+            .map(|(t, _, r)| (*t, &objects[1].overrides, *r))
             .collect();
         assert!(settings_groups(&plain, &plate).is_empty());
     }

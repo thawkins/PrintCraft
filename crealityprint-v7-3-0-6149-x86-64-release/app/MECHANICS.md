@@ -227,6 +227,12 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     the plate's skirt, brim and raft lines, then each group's part lines, then the
     supports. Layer heights depend only on the plate's settings and the height, so
     layer i is at the same height in every slice.
+    **Height ranges** (M4.3): a group is sliced once for each set of settings it uses
+    (its own and each range's, which build on its own), and its layer i comes from the
+    slice whose settings apply at the middle of that layer, measured from the model's
+    bottom (above a full raft and its air gap). The last range listed wins an overlap.
+    Top and bottom surfaces are found from the whole part in each slice, so a range
+    with more top layers thickens only the surfaces inside it.
 
 ## Print file and estimates (src/gcode.rs)
 
