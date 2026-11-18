@@ -117,7 +117,7 @@ Goal: PrusaSlicer's most used pattern and support choices are available.
 | M6.3 | **Done.** **Binary G-code (.bgcode).** Write Prusa's binary format (metadata, thumbnails, G-code blocks with heatshrink/MeatPack) from the published specification. Offer it for PrusaLink printers. | Test: the file round-trips through a decoder written from the spec. Upload to the fake PrusaLink. | 3 |
 | M6.4 | **Done.** **OctoPrint.** API-key connection, upload, start, status, temperatures, pause/stop, camera (MJPEG). Discovery by address scan. | Tests against a fake OctoPrint server. | 3 |
 | M6.5 | **Done.** **Duet / RepRapFirmware.** HTTP (rr_ and `/machine` APIs): upload, start, status, pause/stop. | Tests against a fake Duet. | 2.5 |
-| M6.6 | **Filament library and user presets.** Save named filament and process presets, import/export them as JSON, and show the built-in generic filaments (PLA, PETG, ABS, TPU, ASA). | Tests: save, reload, import, export round-trip. | 2 |
+| M6.6 | **Done.** **Filament library and user presets.** Save named filament and process presets, import/export them as JSON, and show the built-in generic filaments (PLA, PETG, ABS, TPU, ASA). | Tests: save, reload, import, export round-trip. | 2 |
 | M6.7 | **Windows and macOS builds.** CI build for both. Fix path, serial and file-dialog differences found. | CI green on all three systems. App starts and slices the cube on each. | 2 |
 
 ## M7: Plates and sequential printing (0.7.0)

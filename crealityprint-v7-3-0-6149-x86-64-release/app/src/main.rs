@@ -32,6 +32,7 @@ mod modifier;
 mod motion;
 mod overrides;
 mod pipeline;
+mod presets;
 mod printer;
 mod profiles;
 mod project;

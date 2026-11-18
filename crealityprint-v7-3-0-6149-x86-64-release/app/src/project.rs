@@ -186,22 +186,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
     };
     let flag = |o: &Value, k: &str, d: bool| o.get(k).and_then(|x| x.as_bool()).unwrap_or(d);
     let text_of = |o: &Value, k: &str| o.get(k).and_then(|x| x.as_str()).map(str::to_string);
-    // A filament (the main one, or the second nozzle's); anything missing is the first
-    // preset's.
-    let filament_from = |fi: &Value| {
-        let fbase = Filament::presets().into_iter().next().expect("presets");
-        Filament {
-            name: text_of(fi, "name").unwrap_or(fbase.name.clone()),
-            nozzle_temp: int_in(fi, "nozzle_temp", fbase.nozzle_temp, limits::NOZZLE_TEMP),
-            bed_temp: int_in(fi, "bed_temp", fbase.bed_temp, limits::BED_TEMP),
-            // Not in the panel; kept physical so filament maths stays finite.
-            diameter: num(fi, "diameter", fbase.diameter).clamp(1.0, 3.0),
-            density: num(fi, "density", fbase.density).max(0.1),
-            fan_percent: int_in(fi, "fan_percent", fbase.fan_percent, limits::FAN_PERCENT),
-            flow_percent: num_in(fi, "flow_percent", fbase.flow_percent, limits::FLOW_PERCENT),
-            price_per_kg: num(fi, "price_per_kg", fbase.price_per_kg).max(0.0),
-        }
-    };
+    let filament_from = filament_from_json;
     let empty = Value::Null;
 
     let pr = v.get("printer").unwrap_or(&empty);
@@ -386,7 +371,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
 
 /// The project file's settings block, written from the settings registry: each setting
 /// at its key (`a.b` inside object `a`).
-fn settings_json(s: &PrintSettings) -> Value {
+pub(crate) fn settings_json(s: &PrintSettings) -> Value {
     let mut out = serde_json::Map::new();
     for setting in settings_registry::all() {
         let value = setting.to_json(s);
@@ -418,7 +403,7 @@ fn settings_json(s: &PrintSettings) -> Value {
 /// Print settings read from a project file's settings block through the settings
 /// registry. A missing value, or one of the wrong type, keeps its default; values are
 /// held to their ranges.
-fn settings_from_json(block: &Value) -> PrintSettings {
+pub(crate) fn settings_from_json(block: &Value) -> PrintSettings {
     let mut s = PrintSettings::default();
     for setting in settings_registry::all() {
         let raw = setting
@@ -432,7 +417,35 @@ fn settings_from_json(block: &Value) -> PrintSettings {
     s
 }
 
-fn filament_json(f: &Filament) -> Value {
+/// A filament (the main one, or the second nozzle's, or a saved preset) from JSON;
+/// anything missing is the first preset's, and values are held to the panel's limits.
+pub(crate) fn filament_from_json(fi: &Value) -> Filament {
+    let num = |k: &str, d: f32| fi.get(k).and_then(|x| x.as_f64()).map_or(d, |x| x as f32);
+    let int_in = |k: &str, d: u32, r: RangeInclusive<u32>| {
+        fi.get(k)
+            .and_then(|x| x.as_u64())
+            .map_or(d, |x| x.min(u32::MAX as u64) as u32)
+            .clamp(*r.start(), *r.end())
+    };
+    let fbase = Filament::presets().into_iter().next().expect("presets"); // no-panic-ok: the preset list is never empty
+    Filament {
+        name: fi
+            .get("name")
+            .and_then(|x| x.as_str())
+            .map_or(fbase.name.clone(), str::to_string),
+        nozzle_temp: int_in("nozzle_temp", fbase.nozzle_temp, limits::NOZZLE_TEMP),
+        bed_temp: int_in("bed_temp", fbase.bed_temp, limits::BED_TEMP),
+        // Not in the panel; kept physical so filament maths stays finite.
+        diameter: num("diameter", fbase.diameter).clamp(1.0, 3.0),
+        density: num("density", fbase.density).max(0.1),
+        fan_percent: int_in("fan_percent", fbase.fan_percent, limits::FAN_PERCENT),
+        flow_percent: num("flow_percent", fbase.flow_percent)
+            .clamp(*limits::FLOW_PERCENT.start(), *limits::FLOW_PERCENT.end()),
+        price_per_kg: num("price_per_kg", fbase.price_per_kg).max(0.0),
+    }
+}
+
+pub(crate) fn filament_json(f: &Filament) -> Value {
     json!({
         "name": f.name,
         "nozzle_temp": f.nozzle_temp,

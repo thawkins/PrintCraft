@@ -23,6 +23,10 @@ pub(super) enum Picked {
         path: PathBuf,
         then: Option<ProjectAction>,
     },
+    /// A presets file to import.
+    ImportPresets(PathBuf),
+    /// Where to export the presets, with the text to write.
+    ExportPresets { path: PathBuf, text: String },
     /// Where to save the print file, with its contents and notes for the status line.
     Export {
         path: PathBuf,
@@ -67,6 +71,8 @@ impl PrintCraftApp {
                 }
             }
             Some(Picked::Export { path, bytes, notes }) => self.write_export(&path, &bytes, &notes),
+            Some(Picked::ImportPresets(path)) => self.import_presets(&path),
+            Some(Picked::ExportPresets { path, text }) => self.write_presets(&path, &text),
             None => {}
         }
     }

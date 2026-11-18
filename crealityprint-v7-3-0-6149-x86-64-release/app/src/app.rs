@@ -4,6 +4,7 @@
 
 mod dialogs;
 mod prepare_ui;
+mod presets_ui;
 mod project_ui;
 mod settings_ui;
 
@@ -178,6 +179,10 @@ pub struct PrintCraftApp {
     egui_ctx: egui::Context,
     /// The file dialog that is open, if any: its answer arrives here (`dialogs`).
     file_dialog: Option<Receiver<Option<dialogs::Picked>>>,
+    /// The person's own filament and process presets (`presets_ui`).
+    presets: crate::presets::UserPresets,
+    /// A preset being named before it is saved: which kind, and the name so far.
+    naming: Option<(presets_ui::PresetKind, String)>,
     /// The selection tool: move arrows, scale corners or rotate rings.
     tool: gizmo::Tool,
     gizmo_hover: Option<gizmo::Handle>,
@@ -210,6 +215,12 @@ impl PrintCraftApp {
             }
         };
         let mut app = Self::build(&cc.egui_ctx, &start, device, recent);
+        // Check pictures never read or change the person's presets.
+        if !capturing {
+            app.presets =
+                crate::presets::UserPresets::load(crate::presets::UserPresets::default_path());
+            app.refresh_filaments();
+        }
         app.load_paths(&start.models);
         // The models opened at start are where the undo history begins.
         app.reset_history();
@@ -303,6 +314,8 @@ impl PrintCraftApp {
             pending_project: None,
             egui_ctx: ctx.clone(),
             file_dialog: None,
+            presets: Default::default(),
+            naming: None,
             tool: gizmo::Tool::Move,
             gizmo_hover: None,
             face_hover: None,

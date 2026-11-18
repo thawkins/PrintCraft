@@ -37,6 +37,21 @@ All are 1.75 mm filament.
 | ABS | 250 | 100 | 1.04 | 0 | 22 | estimated |
 | TPU | 225 | 50 | 1.21 | 60 | 30 | estimated |
 
+## Your own presets (src/presets.rs, src/app/presets_ui.rs)
+
+* Kept in `presets.json` in the settings folder (Linux `~/.config/printcraft/`), the same
+  JSON as an export: `{"printcraft_presets": 1, "filaments": [...], "processes":
+  [{"name": ..., "settings": {...}}]}`. Filaments use the project file's filament block,
+  processes its settings block, so values are held to the panel's limits on reading.
+* Names are trimmed, 1-60 characters, and unique within each list: saving or importing
+  one with an existing name replaces it. A built-in filament's name (any case) is
+  refused, and skipped on import. A file from a newer format version is refused; a
+  damaged presets file loads as no presets.
+* The process list shows a preset of your own when the settings are exactly its
+  settings, and "Custom" otherwise. Check pictures never read or write the presets.
+* ASA (built in): nozzle 250 °C, plate 100 °C, 1.07 g/cm³, fan 20 %, 25 per kg.
+  Decided 2026-11-19.
+
 ## Quality presets (src/profiles.rs `Quality::settings`)
 
 | | Fine | Standard (default) | Draft |

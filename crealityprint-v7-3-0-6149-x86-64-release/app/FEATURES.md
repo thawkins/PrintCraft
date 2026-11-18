@@ -106,6 +106,7 @@ a project file fall back to defaults, so older and newer files still open.
 | Preview colours by speed, line width, layer height, fan and temperature, and print time per line type | **Yes (new)**: "Colour by" in the Show box, blue-to-red scale; times add up to the estimate |
 | 3D layer preview with a slider, colour by feature type | Yes (ironing is now its own colour) |
 | Time, filament, weight and cost estimates | Yes |
+| Filament library and your own presets | **Yes (new)**. Built-in generic filaments: PLA, PETG, ABS, TPU and ASA. "Save as preset…" under the filament or process list keeps the current filament or settings under a name of your own; they appear in the same lists (process ones under "Your presets"), and "Delete preset" removes the selected one. "Import…" and "Export…" move them as a JSON file. Kept in `presets.json` in the settings folder. |
 | Plain G-code export | Yes |
 | Arc moves (G2/G3) | **Yes (new)**, off by default: "Arc fitting" under Special mode (Advanced). Round walls become arcs within 0.01 mm of the sliced points; the ORBIT file shrinks from 23.2 MB to 13.0 MB with the same time and filament. Klipper needs `[gcode_arcs]`. Not used for X3G. |
 | Object labels in the G-code | **Yes (new)**, off by default: "Label objects" under Special mode (Advanced). Klipper gets `EXCLUDE_OBJECT_DEFINE` with each object's outline and `EXCLUDE_OBJECT_START`/`END` around it on every layer; Marlin and Prusa firmware get M486. Not written into X3G files. |

@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The project builds with the stable Rust toolchain (`rust-toolchain.toml`); seven
+  remainder checks use `is_multiple_of`, as stable clippy asks. G-code is unchanged.
+
 ### Added
+
+- Filament library and your own presets (gap plan task M6.6). ASA joins the built-in
+  filaments (PLA, PETG, ABS, TPU). "Save as preset…" under the filament or process list
+  keeps the current filament or process settings under a name; they show in the same
+  lists, "Delete preset" removes one, and "Import…" / "Export…" move them as a JSON
+  file. They are kept in `presets.json` in the settings folder.
 
 - Duet / RepRapFirmware (gap plan task M6.5). The printer page connects to a Duet board,
   standalone (its `rr_` requests) or run by a Raspberry Pi (the `/machine` API), with the

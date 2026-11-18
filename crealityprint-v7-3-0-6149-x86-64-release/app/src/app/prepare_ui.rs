@@ -513,6 +513,7 @@ impl PrintCraftApp {
                 );
             });
         });
+        self.preset_buttons(ui, super::presets_ui::PresetKind::Filament);
         if self.printer.extruders >= 2 && !self.dual.ditto {
             self.second_filament_row(ui);
         }
@@ -650,12 +651,16 @@ impl PrintCraftApp {
         }
     }
 
-    /// The profile: one of the quality presets, or "Custom" once edited.
+    /// The profile: one of the quality presets, one of the person's own presets, or
+    /// "Custom" once edited; with the preset buttons under it.
     fn process_profile_picker(&mut self, ui: &mut Ui) {
-        let shown = match self.quality {
-            Some(q) => q.label().to_string(),
-            None => "Custom".to_string(),
+        let own = self.current_process_preset().map(|p| p.name.clone());
+        let shown = match (self.quality, &own) {
+            (Some(q), _) => q.label().to_string(),
+            (None, Some(name)) => name.clone(),
+            (None, None) => "Custom".to_string(),
         };
+        let mut chosen_own = None;
         egui::ComboBox::from_id_salt("process_profile")
             .width(ui.available_width())
             .selected_text(shown)
@@ -669,7 +674,21 @@ impl PrintCraftApp {
                         self.quality = Some(q);
                     }
                 }
+                if !self.presets.processes.is_empty() {
+                    ui.separator();
+                    ui.label(RichText::new("Your presets").color(theme::TEXT_DIM).small());
+                    for p in &self.presets.processes {
+                        let on = self.quality.is_none() && own.as_deref() == Some(&p.name);
+                        if ui.selectable_label(on, &p.name).clicked() {
+                            chosen_own = Some(p.name.clone());
+                        }
+                    }
+                }
             });
+        if let Some(name) = chosen_own {
+            self.apply_process_preset(&name);
+        }
+        self.preset_buttons(ui, super::presets_ui::PresetKind::Process);
     }
 }
 
