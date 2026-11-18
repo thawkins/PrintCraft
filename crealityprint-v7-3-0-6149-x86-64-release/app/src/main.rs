@@ -22,6 +22,7 @@ mod gizmo;
 mod gyroid;
 mod heat;
 mod history;
+mod honeycomb;
 mod layer_events;
 mod model;
 mod modifier;
@@ -80,7 +81,7 @@ Slicing options:
   --no-support-raft               no raft under supports
   --brim                          print a brim instead of a skirt
   --raft                          print the model on a raft
-  --infill-pattern lines|grid|triangles|gyroid
+  --infill-pattern lines|grid|triangles|gyroid|honeycomb|cubic|adaptive-cubic
   --seam aligned|nearest|rear|random
   --ironing                       smooth top surfaces with an ironing pass
   --vase                          spiral vase mode
@@ -307,13 +308,13 @@ fn slice_without_window(args: &Args) -> ExitCode {
     if let Some(p) = &args.infill_pattern {
         match profiles::InfillPattern::ALL
             .iter()
-            .find(|x| x.label().eq_ignore_ascii_case(p))
+            .find(|x| x.label().replace(' ', "-").eq_ignore_ascii_case(p))
         {
             Some(x) => settings.infill_pattern = *x,
             None => {
                 eprintln!(
-                    "printcraft: unknown infill pattern \"{p}\" (use lines, grid, triangles or \
-                     gyroid)"
+                    "printcraft: unknown infill pattern \"{p}\" (use lines, grid, triangles, \
+                     gyroid, honeycomb, cubic or adaptive-cubic)"
                 );
                 return ExitCode::from(2);
             }

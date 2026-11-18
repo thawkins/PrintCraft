@@ -93,7 +93,7 @@ pub fn gyroid_lines(
     let curves = join(&segments);
     curves
         .iter()
-        .flat_map(|c| cut(c, inside))
+        .flat_map(|c| clip(c, inside))
         .filter(|piece| length(piece) >= min_len)
         .collect()
 }
@@ -134,8 +134,9 @@ fn join(segments: &[[(usize, Point2); 2]]) -> Vec<Vec<Point2>> {
     out
 }
 
-/// The parts of `curve` where `inside` holds, each crossing found by bisection.
-fn cut(curve: &[Point2], inside: &dyn Fn(Point2) -> bool) -> Vec<Vec<Point2>> {
+/// The parts of `curve` where `inside` holds, each crossing found by bisection. (Also
+/// used for honeycomb infill.)
+pub fn clip(curve: &[Point2], inside: &dyn Fn(Point2) -> bool) -> Vec<Vec<Point2>> {
     let edge = |a: Point2, b: Point2| {
         // `a` is inside, `b` isn't: the last inside point between them.
         let (mut lo, mut hi) = (0.0f32, 1.0f32);
@@ -178,7 +179,7 @@ fn lerp(a: Point2, b: Point2, t: f32) -> Point2 {
     Point2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
 }
 
-fn length(curve: &[Point2]) -> f32 {
+pub fn length(curve: &[Point2]) -> f32 {
     curve.windows(2).map(|w| w[0].distance(w[1])).sum()
 }
 

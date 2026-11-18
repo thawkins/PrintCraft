@@ -273,6 +273,17 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     or modifier part, each cut placed by 10 halvings. Pieces shorter than a line width
     are dropped. The inside test files the area's edges in 1 mm bands of height.
 
+23. **Honeycomb, cubic and adaptive cubic** (`src/honeycomb.rs`, gap plan M5.2).
+    Honeycomb lines climb a band h = 4/3 x spacing tall: flats a = 2h/sqrt(3) long
+    at the bottom and top, joined by diagonals as long, so 4a of line per 3a across
+    (the density of straight lines `spacing` apart). Even lines start low, odd lines
+    high, so each line's top flats are the next line's bottom flats (laid twice). The
+    grid is fixed on the plate, so cells stack. Cubic is Triangles' three line sets
+    (0, 60, 120 degrees, 3 x spacing apart), each moved across by z / sqrt(2): the
+    lines of a lattice of cubes standing on a corner. Adaptive cubic drops the
+    odd-numbered lines of each set where a cell is more than 4 mm (1 mm cells, and
+    that many layers up and down) from outside the part.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

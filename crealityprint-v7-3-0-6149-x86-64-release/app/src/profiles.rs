@@ -315,10 +315,26 @@ pub enum InfillPattern {
     /// Waving lines that follow a gyroid surface, changing from layer to layer: about
     /// equally strong in every direction, with no crossings within a layer.
     Gyroid,
+    /// Zigzag lines that make hexagons, stacked into upright hexagonal tubes.
+    Honeycomb,
+    /// Three sets of lines 60° apart that slide with height, building a lattice of
+    /// cubes standing on a corner: strong in every direction, no stacked crossings.
+    Cubic,
+    /// Cubic, at half the density deep inside the part (more than 4 mm from its
+    /// walls, top and bottom), saving plastic where it isn't needed.
+    AdaptiveCubic,
 }
 
 impl InfillPattern {
-    pub const ALL: [InfillPattern; 4] = [Self::Lines, Self::Grid, Self::Triangles, Self::Gyroid];
+    pub const ALL: [InfillPattern; 7] = [
+        Self::Lines,
+        Self::Grid,
+        Self::Triangles,
+        Self::Gyroid,
+        Self::Honeycomb,
+        Self::Cubic,
+        Self::AdaptiveCubic,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -326,6 +342,9 @@ impl InfillPattern {
             Self::Grid => "Grid",
             Self::Triangles => "Triangles",
             Self::Gyroid => "Gyroid",
+            Self::Honeycomb => "Honeycomb",
+            Self::Cubic => "Cubic",
+            Self::AdaptiveCubic => "Adaptive cubic",
         }
     }
 }

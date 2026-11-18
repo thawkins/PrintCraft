@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Honeycomb, cubic and adaptive cubic infill (gap plan task M5.2). Honeycomb lays
+  zigzag lines that form hexagons, lined up from layer to layer into upright tubes.
+  Cubic lays three sets of lines 60 degrees apart that slide with height, building a
+  lattice of cubes standing on a corner. Adaptive cubic is cubic at half the density
+  deep inside a part (more than 4 mm from its walls, top and bottom). On the command
+  line: `--infill-pattern honeycomb`, `cubic` or `adaptive-cubic`.
 - Gyroid infill (gap plan task M5.1). Infill pattern now offers Gyroid: waving lines
   that follow a gyroid surface, turning from layer to layer, about equally strong in
   every direction with no crossings within a layer. Its lines are as long, for the

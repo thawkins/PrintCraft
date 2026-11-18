@@ -365,6 +365,26 @@ pub fn slice_modified(
         }
     }
 
+    // Cells at least ADAPTIVE_CUBIC_NEAR_MM inside each layer's outline, for adaptive
+    // cubic (only worked out when it is used).
+    let adaptive_used = settings.infill_pattern == InfillPattern::AdaptiveCubic
+        || modifiers
+            .iter()
+            .any(|m| m.infill_pattern == Some(InfillPattern::AdaptiveCubic));
+    let deep: Vec<Vec<bool>> = if adaptive_used {
+        let r = (ADAPTIVE_CUBIC_NEAR_MM / CELL_MM).ceil() as usize;
+        masks
+            .iter()
+            .map(|m| {
+                let outside: Vec<bool> = m.iter().map(|c| !c).collect();
+                grid.dilate(&outside, r).iter().map(|c| !c).collect()
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let near_layers = (ADAPTIVE_CUBIC_NEAR_MM / settings.layer_height.max(0.04)).ceil() as usize;
+
     // 3. Toolpaths per layer.
     let vase = settings.vase_mode;
     let wall_count = if vase { 1 } else { settings.walls };
@@ -446,6 +466,27 @@ pub fn slice_modified(
                 .zip(&not_bridged)
                 .map(|(e, n)| *e || !*n)
                 .collect();
+            // Adaptive cubic is dense where the part is less than ADAPTIVE_CUBIC_NEAR_MM
+            // from empty space in any direction (`deep` holds the cells farther in).
+            let deep_here: Vec<bool> = if deep.is_empty() {
+                Vec::new()
+            } else {
+                let lo = i.checked_sub(near_layers);
+                let hi = i + near_layers;
+                match lo.filter(|_| hi < n) {
+                    Some(lo) => (0..grid.cells())
+                        .map(|c| deep[lo..=hi].iter().all(|d| d[c]))
+                        .collect(),
+                    None => vec![false; grid.cells()],
+                }
+            };
+            let near_surface =
+                |p: Point2| !deep_here.get(grid.index_of(p)).copied().unwrap_or(false);
+            let infill_at = InfillAt {
+                layer: i,
+                z: z - h / 2.0,
+                near_surface: &near_surface,
+            };
             // Which modifier, if any, owns a point of this layer (a later one wins).
             let owner = |p: Point2| {
                 modifier_outlines
@@ -458,7 +499,7 @@ pub fn slice_modified(
                 paths.extend(sparse_infill_paths(
                     &region,
                     &skip,
-                    (i, z - h / 2.0),
+                    &infill_at,
                     line_width,
                     settings.infill_percent,
                     settings.infill_pattern,
@@ -481,13 +522,7 @@ pub fn slice_modified(
                     paths.extend(order_open_paths(lines, from));
                 } else if percent > 0.5 {
                     paths.extend(sparse_infill_paths(
-                        &region,
-                        &skip,
-                        (i, z - h / 2.0),
-                        line_width,
-                        percent,
-                        pattern,
-                        from,
+                        &region, &skip, &infill_at, line_width, percent, pattern, from,
                     ));
                 }
             }
@@ -974,11 +1009,38 @@ fn solid_infill_paths(
     paths
 }
 
-/// Sparse infill lines in the chosen pattern, kept off the exposed cells.
+/// Where sparse infill is laid: the layer, its middle height (mm), and whether a point
+/// of it is near the part's surface (walls, top or bottom; used by adaptive cubic).
+struct InfillAt<'a> {
+    layer: usize,
+    z: f32,
+    near_surface: &'a dyn Fn(Point2) -> bool,
+}
+
+/// How far (mm) adaptive cubic keeps its full density from the part's surface.
+const ADAPTIVE_CUBIC_NEAR_MM: f32 = 4.0;
+/// How far cubic infill's lines move across per mm of height: the lattice is cubes
+/// standing on a corner, whose faces lean 54.7 degrees from upright.
+const CUBIC_SHIFT: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+/// The box round a set of loops, or `None` when there are none.
+fn loops_box(region: &[Polygon]) -> Option<(Point2, Point2)> {
+    let (mut lo, mut hi) = (
+        Point2::new(f32::MAX, f32::MAX),
+        Point2::new(f32::MIN, f32::MIN),
+    );
+    for p in region.iter().flatten() {
+        (lo.x, lo.y) = (lo.x.min(p.x), lo.y.min(p.y));
+        (hi.x, hi.y) = (hi.x.max(p.x), hi.y.max(p.y));
+    }
+    (lo.x <= hi.x).then_some((lo, hi))
+}
+
+/// Sparse infill lines in the chosen pattern, kept off points `skip` is true for.
 fn sparse_infill_paths(
     region: &[Polygon],
     skip: &dyn Fn(Point2) -> bool,
-    (layer, z): (usize, f32),
+    at: &InfillAt,
     line_width: f32,
     percent: f32,
     pattern: InfillPattern,
@@ -986,33 +1048,36 @@ fn sparse_infill_paths(
 ) -> Vec<ToolPath> {
     let mut paths: Vec<ToolPath> = Vec::new();
     let base = line_width * 100.0 / percent.min(100.0);
-    if pattern == InfillPattern::Gyroid {
+    if matches!(pattern, InfillPattern::Gyroid | InfillPattern::Honeycomb) {
+        let Some((lo, hi)) = loops_box(region) else {
+            return paths;
+        };
         let area = crate::gyroid::AreaTest::new(region);
         let inside = |p: Point2| area.contains(p) && !skip(p);
-        let (mut lo, mut hi) = (
-            Point2::new(f32::MAX, f32::MAX),
-            Point2::new(f32::MIN, f32::MIN),
-        );
-        for p in region.iter().flatten() {
-            (lo.x, lo.y) = (lo.x.min(p.x), lo.y.min(p.y));
-            (hi.x, hi.y) = (hi.x.max(p.x), hi.y.max(p.y));
-        }
-        if lo.x > hi.x {
-            return paths;
-        }
-        let set: Vec<ToolPath> = crate::gyroid::gyroid_lines(lo, hi, base, z, line_width, &inside)
+        let lines = if pattern == InfillPattern::Gyroid {
+            crate::gyroid::gyroid_lines(lo, hi, base, at.z, line_width, &inside)
+        } else {
+            crate::honeycomb::honeycomb_lines(lo, hi, base, line_width, &inside)
+        };
+        let set: Vec<ToolPath> = lines
             .into_iter()
             .map(|l| open_path(PathKind::SparseInfill, l))
             .collect();
         return order_open_paths(set, from);
     }
-    let (angles, spacing) = infill_angles(pattern, layer, base);
+    let (angles, spacing) = infill_angles(pattern, at.layer, base);
+    let cubic = matches!(pattern, InfillPattern::Cubic | InfillPattern::AdaptiveCubic);
+    let adaptive = pattern == InfillPattern::AdaptiveCubic;
     // Each direction is ordered on its own, so one set of lines is laid before the next
     // crosses it, starting where the previous set ended.
     for angle in angles {
+        let offset = if cubic { at.z * CUBIC_SHIFT } else { 0.0 };
         let mut set = Vec::new();
-        for seg in scan_fill(region, spacing, angle.to_radians()) {
-            for piece in split_by(&seg, skip) {
+        for (row, seg) in scan_fill_rows(region, spacing, angle.to_radians(), offset) {
+            // Adaptive cubic: every other line only near the surface.
+            let thin = adaptive && row.rem_euclid(2) == 1;
+            let off = |p: Point2| skip(p) || (thin && !(at.near_surface)(p));
+            for piece in split_by(&seg, off) {
                 if !piece.1 {
                     set.push(open_path(PathKind::SparseInfill, piece.0));
                 }
@@ -1143,8 +1208,10 @@ pub fn infill_angles(pattern: InfillPattern, layer: usize, base: f32) -> (Vec<f3
         InfillPattern::Lines => (vec![if layer % 2 == 0 { 45.0 } else { 135.0 }], base),
         InfillPattern::Grid => (vec![45.0, 135.0], base * 2.0),
         InfillPattern::Triangles => (vec![0.0, 60.0, 120.0], base * 3.0),
-        // Not straight lines: traced by `gyroid`, at the base spacing.
-        InfillPattern::Gyroid => (Vec::new(), base),
+        // Not straight lines: traced by `gyroid` and `honeycomb`, at the base spacing.
+        InfillPattern::Gyroid | InfillPattern::Honeycomb => (Vec::new(), base),
+        // Triangles' lines, moved with height (`sparse_infill_paths`).
+        InfillPattern::Cubic | InfillPattern::AdaptiveCubic => (vec![0.0, 60.0, 120.0], base * 3.0),
     }
 }
 
@@ -1588,6 +1655,21 @@ fn corners_only(poly: &[Point2]) -> Polygon {
 /// Parallel lines `spacing` apart at `angle`, clipped to the region (even-odd rule).
 /// Lines sit on a fixed grid so sparse infill lines up from layer to layer.
 pub fn scan_fill(region: &[Polygon], spacing: f32, angle: f32) -> Vec<[Point2; 2]> {
+    scan_fill_rows(region, spacing, angle, 0.0)
+        .into_iter()
+        .map(|(_, seg)| seg)
+        .collect()
+}
+
+/// Like [`scan_fill`], with the lines moved `offset` mm across their direction, each
+/// with the number of its row (rows are `spacing` apart; row 0 passes through the
+/// origin, moved by `offset`).
+fn scan_fill_rows(
+    region: &[Polygon],
+    spacing: f32,
+    angle: f32,
+    offset: f32,
+) -> Vec<(i64, [Point2; 2])> {
     let (s, c) = angle.sin_cos();
     let to_local = |p: Point2| Point2::new(p.x * c + p.y * s, -p.x * s + p.y * c);
     let to_world = |p: Point2| Point2::new(p.x * c - p.y * s, p.x * s + p.y * c);
@@ -1604,10 +1686,10 @@ pub fn scan_fill(region: &[Polygon], spacing: f32, angle: f32) -> Vec<[Point2; 2
         return Vec::new();
     }
     let mut out = Vec::new();
-    let mut row = (ymin / spacing).ceil() as i64;
+    let mut row = ((ymin - offset) / spacing).ceil() as i64;
     let mut flip = false;
     loop {
-        let y = row as f32 * spacing;
+        let y = row as f32 * spacing + offset;
         if y > ymax {
             break;
         }
@@ -1638,7 +1720,7 @@ pub fn scan_fill(region: &[Polygon], spacing: f32, angle: f32) -> Vec<[Point2; 2
             pairs.iter_mut().for_each(|p| p.swap(0, 1));
         }
         flip = !flip;
-        out.extend(pairs);
+        out.extend(pairs.into_iter().map(|p| (row, p)));
         row += 1;
     }
     out
@@ -2489,6 +2571,127 @@ mod tests {
             .paths
             .iter()
             .any(|p| p.kind == PathKind::InnerWall));
+    }
+
+    /// Length of all sparse infill in `paths`.
+    fn infill_length(paths: &[ToolPath]) -> f32 {
+        paths
+            .iter()
+            .filter(|p| p.kind == PathKind::SparseInfill)
+            .map(|p| {
+                p.points
+                    .windows(2)
+                    .map(|w| w[0].distance(w[1]))
+                    .sum::<f32>()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn test_infill_patterns_stay_inside_and_match_their_density() {
+        // A 40 mm square at 20 %: line length x line width should be 20 % of 1600 mm2.
+        let square = vec![vec![
+            Point2::new(-20.0, -20.0),
+            Point2::new(20.0, -20.0),
+            Point2::new(20.0, 20.0),
+            Point2::new(-20.0, 20.0),
+        ]];
+        let near = |_: Point2| true;
+        for pattern in InfillPattern::ALL {
+            for (layer, z) in [(10, 2.1), (11, 2.3), (40, 8.1)] {
+                let at = InfillAt {
+                    layer,
+                    z,
+                    near_surface: &near,
+                };
+                let paths =
+                    sparse_infill_paths(&square, &|_| false, &at, 0.42, 20.0, pattern, None);
+                assert!(
+                    paths
+                        .iter()
+                        .flat_map(|p| &p.points)
+                        .all(|q| q.x.abs() <= 20.01 && q.y.abs() <= 20.01),
+                    "{pattern:?} outside the square"
+                );
+                let density = infill_length(&paths) * 0.42 / 1600.0;
+                assert!(
+                    (density / 0.2 - 1.0).abs() < 0.1,
+                    "{pattern:?} layer {layer}: {:.1} %",
+                    density * 100.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_cubic_lines_move_with_height_and_honeycomb_stays_put() {
+        let square = vec![vec![
+            Point2::new(-20.0, -20.0),
+            Point2::new(20.0, -20.0),
+            Point2::new(20.0, 20.0),
+            Point2::new(-20.0, 20.0),
+        ]];
+        let near = |_: Point2| true;
+        let lay = |pattern, z| {
+            let at = InfillAt {
+                layer: 10,
+                z,
+                near_surface: &near,
+            };
+            format!(
+                "{:?}",
+                sparse_infill_paths(&square, &|_| false, &at, 0.42, 20.0, pattern, None)
+            )
+        };
+        assert_ne!(
+            lay(InfillPattern::Cubic, 2.0),
+            lay(InfillPattern::Cubic, 2.6)
+        );
+        assert_eq!(
+            lay(InfillPattern::Triangles, 2.0),
+            lay(InfillPattern::Triangles, 2.6)
+        );
+        assert_eq!(
+            lay(InfillPattern::Honeycomb, 2.0),
+            lay(InfillPattern::Honeycomb, 2.6)
+        );
+    }
+
+    #[test]
+    fn test_adaptive_cubic_is_thinner_deep_inside() {
+        // A 40 mm cube: adaptive cubic uses less infill than cubic, at least half of it,
+        // and is as dense as cubic next to the top.
+        let tris = block_at(40.0, 40.0, 0.0);
+        let with = |pattern| {
+            let s = PrintSettings {
+                infill_pattern: pattern,
+                ..PrintSettings::default()
+            };
+            slice(&tris, &s, 0.42, &|_| {})
+        };
+        let (cubic, adaptive) = (
+            with(InfillPattern::Cubic),
+            with(InfillPattern::AdaptiveCubic),
+        );
+        let total = |r: &SliceResult| {
+            r.layers
+                .iter()
+                .map(|l| infill_length(&l.paths))
+                .sum::<f32>()
+        };
+        let ratio = total(&adaptive) / total(&cubic);
+        assert!((0.5..0.85).contains(&ratio), "{ratio}");
+        // The middle layer: deep inside it is half as dense.
+        let mid = cubic.layers.len() / 2;
+        let middle =
+            infill_length(&adaptive.layers[mid].paths) / infill_length(&cubic.layers[mid].paths);
+        assert!(middle < 0.8, "{middle}");
+        // Just under the top surface (within 4 mm): the same as cubic.
+        let near_top = cubic.layers.len() - 8;
+        assert_eq!(
+            infill_length(&adaptive.layers[near_top].paths),
+            infill_length(&cubic.layers[near_top].paths)
+        );
     }
 
     #[test]

@@ -1023,7 +1023,15 @@ mod tests {
         assert_eq!(labels("seam"), ["Aligned", "Nearest", "Rear", "Random"]);
         assert_eq!(
             labels("infill_pattern"),
-            ["Lines", "Grid", "Triangles", "Gyroid"]
+            [
+                "Lines",
+                "Grid",
+                "Triangles",
+                "Gyroid",
+                "Honeycomb",
+                "Cubic",
+                "Adaptive cubic"
+            ]
         );
         assert_eq!(labels("adhesion"), ["None", "Skirt", "Brim", "Raft"]);
     }
