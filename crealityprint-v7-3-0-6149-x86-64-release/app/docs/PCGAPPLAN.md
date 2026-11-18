@@ -61,7 +61,7 @@ afterwards.
 
 | ID | Task | Done when | Est. |
 |---|---|---|---|
-| M2.1 | **Settings registry.** One table describing every print setting: key, label, group, unit, range, default, simple or advanced. The settings panel and the project save/load are generated from it, not hand-written per field. This is a prerequisite for M4. | Every existing setting round-trips through a project from the registry. The panel looks the same (screenshot). | 3 |
+| M2.1 | **Done.** **Settings registry.** One table describing every print setting: key, label, group, unit, range, default, simple or advanced. The settings panel and the project save/load are generated from it, not hand-written per field. This is a prerequisite for M4. | Every existing setting round-trips through a project from the registry. The panel looks the same (screenshot). | 3 |
 | M2.2 | **Custom start/end G-code.** Add start, end, before-layer-change and tool-change templates in the printer editor. The default templates reproduce today's output exactly. | Baseline unchanged with default templates. A user template shows up in the output. | 1.5 |
 | M2.3 | **Placeholders.** `{bed_temp}`, `{nozzle_temp}`, `{layer_num}`, `{layer_z}`, `{first_layer_temp}`, `{print_min_x}` etc., plus `{if}`/`{else}` on numeric comparisons. Unknown names give a slice error naming the placeholder. | Tests: each placeholder substitutes. A bad name gives the error, not silent text. | 2 |
 | M2.4 | **Colour change and pause at layer.** In the preview layer slider, add "Add colour change" (M600) and "Add pause" (M601/`PAUSE`) markers. They are stored in the project and shown on the slider. | Test: the command is emitted before the chosen layer. Screenshot of the markers. | 1.5 |
