@@ -1,0 +1,105 @@
+# Builds and checks PrintCraft on Linux, Windows and macOS (gap plan task M6.7).
+name: CI
+
+on:
+  push:
+    branches: [main, ci-windows-macos]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+    working-directory: crealityprint-v7-3-0-6149-x86-64-release/app
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      # Keep the checked-in line endings: some tests compare text files byte for byte.
+      - name: Keep line endings
+        working-directory: .
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins stable with rustfmt and clippy; rustup installs it here.
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # Wayland and keyboard libraries for the window, and a virtual display (xvfb) with
+      # software OpenGL for the screenshot.
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            xvfb libgl1-mesa-dri
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crealityprint-v7-3-0-6149-x86-64-release/app
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo nextest run --profile ci --no-fail-fast
+
+      - name: Release build
+        run: cargo build --release
+
+      # The command line slices the calibration cube; the G-code must have its layers,
+      # its heating and its end.
+      - name: Slice the cube
+        run: |
+          out="$RUNNER_TEMP/cube.gcode"
+          ./target/release/printcraft --slice assets/models/XYZ.stl --output "$out"
+          grep -q '^;LAYER_COUNT:' "$out"
+          grep -q '^;LAYER:0$' "$out"
+          grep -q '^M109 ' "$out"
+          grep -q '^;END$' "$out"
+          echo "$(grep -c '^;LAYER:' "$out") layers, $(wc -c < "$out") bytes"
+
+      # The window opens and draws (a picture of the cube on the plate). Runners may have
+      # no usable OpenGL, so a failure here is reported but doesn't fail the job.
+      - name: App starts (screenshot)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          shot="$RUNNER_TEMP/printcraft-${{ runner.os }}.png"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a -s "-screen 0 1920x1080x24" \
+              ./target/release/printcraft --screenshot "$shot" assets/models/XYZ.stl
+          else
+            ./target/release/printcraft --screenshot "$shot" assets/models/XYZ.stl
+          fi
+          test -s "$shot"
+
+      - name: Keep the screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-${{ runner.os }}
+          path: ${{ runner.temp }}/printcraft-*.png
+          if-no-files-found: ignore
