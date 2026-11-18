@@ -23,18 +23,17 @@ pub(super) fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.add_space(6.0);
 }
 
-/// The section for `g`: its rows that show at this level and with these settings. A
-/// section with no such rows (Cooling and travel in the simple panel) is left out.
+/// The section for `g`: its rows up to `level` (Advanced shows Simple rows too) that
+/// show with these settings. A section with no such rows (Cooling and travel in the
+/// simple panel) is left out.
 pub(super) fn settings_group(
     ui: &mut Ui,
     s: &mut PrintSettings,
     g: Group,
-    advanced: bool,
+    level: Level,
     ctx: &AutoContext,
 ) {
-    let visible = |r: &Setting, s: &PrintSettings| {
-        r.group == g && (advanced || r.level == Level::Simple) && (r.shown)(s)
-    };
+    let visible = |r: &Setting, s: &PrintSettings| r.group == g && r.level <= level && (r.shown)(s);
     if !settings_registry::all().iter().any(|r| visible(r, s)) {
         return;
     }
@@ -48,7 +47,8 @@ pub(super) fn settings_group(
     });
 }
 
-/// One label / widget row. A change is held to the setting's range before it is stored.
+/// One label / widget row. The label's hint also shows on the widget (so a disabled
+/// widget can say why). A change is stored through `Setting::write`, so it is in range.
 fn setting_row(ui: &mut Ui, s: &mut PrintSettings, r: &Setting, ctx: &AutoContext) {
     let hint = (r.hint)(s);
     let label = ui.label(r.label);
@@ -57,7 +57,10 @@ fn setting_row(ui: &mut Ui, s: &mut PrintSettings, r: &Setting, ctx: &AutoContex
     }
     let enabled = (r.enabled)(s);
     let changed = match (&r.kind, (r.get)(s)) {
-        (Kind::Auto { .. }, Value::Auto(set)) => auto_widget(ui, s, r, set, ctx),
+        (Kind::Auto { .. }, Value::Auto(set)) => {
+            ui.add_enabled_ui(enabled, |ui| auto_widget(ui, s, r, set, ctx))
+                .inner
+        }
         (kind, value) => {
             let mut value = value;
             let response = ui.add_enabled(enabled, value_widget(kind, &mut value, r.key));
@@ -69,7 +72,7 @@ fn setting_row(ui: &mut Ui, s: &mut PrintSettings, r: &Setting, ctx: &AutoContex
         }
     };
     if let Some(v) = changed {
-        (r.set)(s, r.clamp(v));
+        r.write(s, v);
     }
     ui.end_row();
 }

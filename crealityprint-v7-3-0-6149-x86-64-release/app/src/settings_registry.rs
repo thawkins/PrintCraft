@@ -13,6 +13,7 @@
 use crate::profiles::{
     limits, AccelFeature, Adhesion, InfillPattern, PrintSettings, SeamPosition, SpeedFeature,
 };
+use serde_json::{json, Value as Json};
 use std::ops::RangeInclusive;
 use std::sync::OnceLock;
 
@@ -60,8 +61,9 @@ impl Group {
     }
 }
 
-/// Whether a setting shows in the simple panel or only with Advanced on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether a setting shows in the simple panel or only with Advanced on. Ordered:
+/// a panel at `Advanced` shows `Simple` rows too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Simple,
     Advanced,
@@ -76,7 +78,9 @@ pub enum Value {
     Count(u32),
     /// On or off.
     Flag(bool),
-    /// One of a fixed list, by its label (also its name in a project file).
+    /// One of a fixed list, by its label. The label is also its name in project files,
+    /// so renaming one (in `profiles`) changes the file format: old files would load
+    /// the default. The golden test in `project` pins the current names.
     Choice(&'static str),
     /// A number, or `None` for "Auto".
     Auto(Option<f32>),
@@ -92,7 +96,8 @@ pub struct AutoContext {
 /// How a setting is edited, with its allowed range.
 #[derive(Clone, Debug)]
 pub enum Kind {
-    /// A number field. `decimals: None` shows as many as egui chooses.
+    /// A number field. `step` is egui's drag speed (an `f64` there); `decimals: None`
+    /// shows as many as egui chooses.
     Number {
         range: RangeInclusive<f32>,
         step: f64,
@@ -127,7 +132,9 @@ pub struct Setting {
     pub key: &'static str,
     /// The row label in the panel.
     pub label: &'static str,
+    /// The panel section it is drawn in.
     pub group: Group,
+    /// Shown in the simple panel, or only with Advanced on.
     pub level: Level,
     pub kind: Kind,
     /// The label's hover text, which may depend on other settings.
@@ -143,9 +150,9 @@ pub struct Setting {
 }
 
 impl Setting {
-    /// `v` held to this setting's range: numbers clamped, an unknown choice or a value of
-    /// the wrong kind replaced by the default.
-    pub fn clamp(&self, v: Value) -> Value {
+    /// `v` made valid for this setting: numbers clamped to the range, and an unknown
+    /// choice or a value of the wrong kind replaced by the default.
+    pub fn sanitize(&self, v: Value) -> Value {
         let fit = |x: f32, r: &RangeInclusive<f32>| x.clamp(*r.start(), *r.end());
         match (&self.kind, v) {
             (Kind::Number { range, .. }, Value::Num(x)) => Value::Num(fit(x, range)),
@@ -170,6 +177,41 @@ impl Setting {
                 | Value::Auto(_),
             ) => self.default_value(),
         }
+    }
+
+    /// Stores `v` in the settings after `sanitize`: the way to change a setting, so it
+    /// is always in range.
+    pub fn write(&self, s: &mut PrintSettings, v: Value) {
+        (self.set)(s, self.sanitize(v));
+    }
+
+    /// This setting's value in `s` as it is written in a project file: a number, a whole
+    /// number, a bool, the choice's label, or a number / `null` (Auto).
+    pub fn to_json(&self, s: &PrintSettings) -> Json {
+        match (self.get)(s) {
+            Value::Num(x) => json!(x),
+            Value::Count(n) => json!(n),
+            Value::Flag(b) => json!(b),
+            Value::Choice(c) => json!(c),
+            Value::Auto(a) => json!(a),
+        }
+    }
+
+    /// The value written as `raw` in a project file, sanitized; `None` when `raw` isn't
+    /// this setting's kind (a string for a number, a negative or fractional count, an
+    /// unknown choice), so the caller keeps the default. Decided by `kind`.
+    pub fn parse_json(&self, raw: &Json) -> Option<Value> {
+        let value = match &self.kind {
+            Kind::Number { .. } => raw.as_f64().map(|x| Value::Num(x as f32)),
+            Kind::Count { .. } => raw
+                .as_u64()
+                .map(|n| Value::Count(n.min(u32::MAX as u64) as u32)),
+            Kind::Flag => raw.as_bool().map(Value::Flag),
+            Kind::Choice { .. } => raw.as_str().and_then(|text| self.choice(text)),
+            // Anything but a number is "Auto".
+            Kind::Auto { .. } => Some(Value::Auto(raw.as_f64().map(|x| x as f32))),
+        }?;
+        Some(self.sanitize(value))
     }
 
     /// The choice named `text`, when this is a drop-down setting that has it.
@@ -728,6 +770,8 @@ mod tests {
 
     /// Every print setting away from its default. A struct literal with no `..`: adding a
     /// field to `PrintSettings` fails to compile here until the registry is updated too.
+    /// Give a new field a value that differs from its default, or the registry test
+    /// can't see a missing entry. (project.rs has a twin for its golden test.)
     fn every_setting_changed() -> PrintSettings {
         let mut speeds = FeatureSpeeds::default();
         let mut accels = FeatureAccels::default();
@@ -805,22 +849,93 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_clamps_and_rejects_unknown_choices() {
+    fn test_registry_sanitizes_and_rejects_unknown_choices() {
         let walls = find("walls").unwrap();
-        assert_eq!(walls.clamp(Value::Count(0)), Value::Count(1));
-        assert_eq!(walls.clamp(Value::Count(99)), Value::Count(10));
+        assert_eq!(walls.sanitize(Value::Count(0)), Value::Count(1));
+        assert_eq!(walls.sanitize(Value::Count(99)), Value::Count(10));
         let outer = find("feature_speeds.outer_wall").unwrap();
         assert_eq!(
-            outer.clamp(Value::Auto(Some(9999.0))),
+            outer.sanitize(Value::Auto(Some(9999.0))),
             Value::Auto(Some(500.0))
         );
-        assert_eq!(outer.clamp(Value::Auto(None)), Value::Auto(None));
+        assert_eq!(outer.sanitize(Value::Auto(None)), Value::Auto(None));
         let seam = find("seam").unwrap();
-        assert_eq!(seam.clamp(Value::Choice("Nowhere")), seam.default_value());
-        assert_eq!(seam.clamp(Value::Choice("Rear")), Value::Choice("Rear"));
+        assert_eq!(
+            seam.sanitize(Value::Choice("Nowhere")),
+            seam.default_value()
+        );
+        assert_eq!(seam.sanitize(Value::Choice("Rear")), Value::Choice("Rear"));
         // A value of the wrong kind falls back to the default.
-        assert_eq!(walls.clamp(Value::Flag(true)), walls.default_value());
+        assert_eq!(walls.sanitize(Value::Flag(true)), walls.default_value());
         assert!(find("no_such_setting").is_none());
+    }
+
+    #[test]
+    fn test_registry_kind_matches_value() {
+        // Each kind goes with one value type; a mismatch would load as the default every
+        // time and draw nothing in the panel. Checked on defaults and on changed values.
+        for s in all() {
+            for value in [s.default_value(), (s.get)(&every_setting_changed())] {
+                let paired = matches!(
+                    (&s.kind, value),
+                    (Kind::Number { .. }, Value::Num(_))
+                        | (Kind::Count { .. }, Value::Count(_))
+                        | (Kind::Flag, Value::Flag(_))
+                        | (Kind::Choice { .. }, Value::Choice(_))
+                        | (Kind::Auto { .. }, Value::Auto(_))
+                );
+                assert!(paired, "{}: {:?} with {value:?}", s.key, s.kind);
+                // In range already, so sanitizing changes nothing.
+                assert_eq!(s.sanitize(value), value, "{}", s.key);
+            }
+        }
+    }
+
+    #[test]
+    fn test_registry_write_sanitizes() {
+        let mut p = PrintSettings::default();
+        find("walls").unwrap().write(&mut p, Value::Count(99));
+        assert_eq!(p.walls, 10);
+        find("seam")
+            .unwrap()
+            .write(&mut p, Value::Choice("Nowhere"));
+        assert_eq!(p.seam, PrintSettings::default().seam);
+        find("layer_height")
+            .unwrap()
+            .write(&mut p, Value::Flag(true));
+        assert_eq!(p.layer_height, PrintSettings::default().layer_height);
+    }
+
+    #[test]
+    fn test_registry_json_per_setting() {
+        let full = every_setting_changed();
+        for s in all() {
+            let json = s.to_json(&full);
+            let back = s.parse_json(&json).expect(s.key);
+            assert_eq!(back, (s.get)(&full), "{}", s.key);
+        }
+        let walls = find("walls").unwrap();
+        assert_eq!(
+            walls.parse_json(&serde_json::json!(99)),
+            Some(Value::Count(10))
+        );
+        assert_eq!(walls.parse_json(&serde_json::json!(-3)), None);
+        assert_eq!(walls.parse_json(&serde_json::json!("3")), None);
+        let outer = find("feature_speeds.outer_wall").unwrap();
+        assert_eq!(
+            outer.parse_json(&serde_json::Value::Null),
+            Some(Value::Auto(None))
+        );
+        assert_eq!(
+            outer.to_json(&PrintSettings::default()),
+            serde_json::Value::Null
+        );
+        let seam = find("seam").unwrap();
+        assert_eq!(seam.parse_json(&serde_json::json!("Nowhere")), None);
+        assert_eq!(
+            seam.parse_json(&serde_json::json!("Rear")),
+            Some(Value::Choice("Rear"))
+        );
     }
 
     #[test]

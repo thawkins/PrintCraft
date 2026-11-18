@@ -14,7 +14,7 @@ use crate::geometry::Vec3;
 use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::FoundPrinter;
 use crate::profiles::{limits, DualNozzle, Filament, PrintSettings, Printer, Quality};
-use crate::settings_registry::{self, Value as RegValue};
+use crate::settings_registry;
 use serde_json::{json, Value};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -312,17 +312,12 @@ fn project_from(v: &Value) -> Result<Project, String> {
 }
 
 /// The project file's settings block, written from the settings registry: each setting
-/// at its key (`a.b` inside object `a`); Auto values that are unset are `null`.
+/// The project file's settings block, written from the settings registry: each setting
+/// at its key (`a.b` inside object `a`).
 fn settings_json(s: &PrintSettings) -> Value {
     let mut out = serde_json::Map::new();
     for setting in settings_registry::all() {
-        let value = match (setting.get)(s) {
-            RegValue::Num(x) => json!(x),
-            RegValue::Count(n) => json!(n),
-            RegValue::Flag(b) => json!(b),
-            RegValue::Choice(c) => json!(c),
-            RegValue::Auto(a) => json!(a),
-        };
+        let value = setting.to_json(s);
         let mut obj = &mut out;
         let mut parts = setting.key.split('.').peekable();
         while let Some(part) = parts.next() {
@@ -349,29 +344,17 @@ fn settings_json(s: &PrintSettings) -> Value {
 }
 
 /// Print settings read from a project file's settings block through the settings
-/// registry. A missing value, or one of the wrong JSON type, keeps its default; numbers
-/// are held to their ranges and unknown choices fall back to the default.
+/// registry. A missing value, or one of the wrong type, keeps its default; values are
+/// held to their ranges.
 fn settings_from_json(block: &Value) -> PrintSettings {
     let mut s = PrintSettings::default();
     for setting in settings_registry::all() {
-        let Some(raw) = setting
+        let raw = setting
             .key
             .split('.')
-            .try_fold(block, |v, part| v.get(part))
-        else {
-            continue;
-        };
-        let value = match (setting.default_value(), raw) {
-            (RegValue::Num(_), v) => v.as_f64().map(|x| RegValue::Num(x as f32)),
-            (RegValue::Count(_), v) => v
-                .as_u64()
-                .map(|n| RegValue::Count(n.min(u32::MAX as u64) as u32)),
-            (RegValue::Flag(_), v) => v.as_bool().map(RegValue::Flag),
-            (RegValue::Choice(_), v) => v.as_str().and_then(|text| setting.choice(text)),
-            (RegValue::Auto(_), v) => Some(RegValue::Auto(v.as_f64().map(|x| x as f32))),
-        };
-        if let Some(value) = value {
-            (setting.set)(&mut s, setting.clamp(value));
+            .try_fold(block, |v, part| v.get(part));
+        if let Some(value) = raw.and_then(|raw| setting.parse_json(raw)) {
+            setting.write(&mut s, value);
         }
     }
     s
@@ -651,7 +634,8 @@ mod tests {
     }
 
     /// Every print setting away from its default (a struct literal with no `..`, so a new
-    /// field must be added here too).
+    /// field must be added here too, with a value that differs from its default). Twin of
+    /// the one in settings_registry.rs's tests.
     fn every_setting_changed() -> PrintSettings {
         let mut speeds = crate::profiles::FeatureSpeeds::default();
         speeds.set(SpeedFeature::OuterWall, Some(33.0));

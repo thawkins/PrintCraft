@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   M2.1): key, label, hint, group, simple or Advanced, range and step, and when a row
   shows. The settings panel (`src/app/settings_ui.rs`) and the project file's settings
   are generated from it. The panel, project files and G-code are unchanged, except
-  that the Fuzzy top and Avoid crossing walls checkboxes now line up with the others.
+  that the Fuzzy top and Avoid crossing walls checkboxes now line up with the others,
+  and a row's hint now also shows when hovering its field, not only its label.
 
 ## [0.0.6] - 2026-11-18
 

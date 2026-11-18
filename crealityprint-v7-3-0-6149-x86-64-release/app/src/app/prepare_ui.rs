@@ -10,7 +10,7 @@
 
 use super::settings_ui::{group, settings_group};
 use super::*;
-use crate::settings_registry::{AutoContext, Group};
+use crate::settings_registry::{AutoContext, Group, Level};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum ProcessTab {
@@ -611,6 +611,11 @@ impl PrintCraftApp {
         ui.add_space(6.0);
         let before = self.settings.clone();
         let advanced = self.advanced;
+        let level = if advanced {
+            Level::Advanced
+        } else {
+            Level::Simple
+        };
         let ctx = AutoContext {
             machine_accel: self.printer.acceleration,
         };
@@ -620,7 +625,7 @@ impl PrintCraftApp {
                 let primary = self.printer.primary_tool();
                 two_nozzle_group(ui, &mut self.dual, self.settings.supports, primary);
             }
-            settings_group(ui, &mut self.settings, g, advanced, &ctx);
+            settings_group(ui, &mut self.settings, g, level, &ctx);
         }
         if !advanced {
             ui.label(
