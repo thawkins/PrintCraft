@@ -188,7 +188,7 @@ fn fill_loops(mut loops: Vec<Vec<Point2>>) -> Vec<[Point2; 3]> {
         }
     }
     let mut out = Vec::new();
-    for i in (0..loops.len()).filter(|&i| depth[i] % 2 == 0) {
+    for i in (0..loops.len()).filter(|&i| depth[i].is_multiple_of(2)) {
         let mut poly = loops[i].clone();
         let mut hs: Vec<&Vec<Point2>> = holes[i].iter().map(|&h| &loops[h]).collect();
         // Rightmost holes first, so a later bridge never crosses an earlier one.

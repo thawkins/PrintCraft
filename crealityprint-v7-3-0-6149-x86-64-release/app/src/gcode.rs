@@ -602,7 +602,7 @@ pub fn prime_tower_paths(centre: Point2, width: f32, li: usize) -> Vec<ToolPath>
     let mut k = 0;
     let mut t = -inner;
     while t <= inner + 1e-4 {
-        let (a, b) = if li % 2 == 0 {
+        let (a, b) = if li.is_multiple_of(2) {
             (corner(-inner, t), corner(inner, t))
         } else {
             (corner(t, -inner), corner(t, inner))

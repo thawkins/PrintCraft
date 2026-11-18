@@ -492,7 +492,7 @@ fn mesh_bytes(tris: &[Triangle]) -> Vec<u8> {
 }
 
 fn mesh_from_bytes(b: &[u8]) -> Option<Vec<Triangle>> {
-    if b.len() % 36 != 0 {
+    if !b.len().is_multiple_of(36) {
         return None;
     }
     // Each triangle: three corners of three little-endian f32s (36 bytes).

@@ -946,7 +946,12 @@ fn infill_region(
 
 /// Vase mode's solid bottom: plain solid lines, alternating 45° and 135°.
 fn vase_bottom_paths(region: &[Polygon], layer: usize, line_width: f32) -> Vec<ToolPath> {
-    let angle = if layer % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
+    let angle = if layer.is_multiple_of(2) {
+        45f32
+    } else {
+        135f32
+    }
+    .to_radians();
     scan_fill(region, line_width, angle)
         .into_iter()
         .map(|seg| open_path(PathKind::SolidInfill, seg.to_vec()))
@@ -1462,7 +1467,10 @@ pub fn order_open_paths(mut paths: Vec<ToolPath>, from: Option<Point2>) -> Vec<T
 /// space each set further apart so the density stays the same.
 pub fn infill_angles(pattern: InfillPattern, layer: usize, base: f32) -> (Vec<f32>, f32) {
     match pattern {
-        InfillPattern::Lines => (vec![if layer % 2 == 0 { 45.0 } else { 135.0 }], base),
+        InfillPattern::Lines => (
+            vec![if layer.is_multiple_of(2) { 45.0 } else { 135.0 }],
+            base,
+        ),
         InfillPattern::Grid => (vec![45.0, 135.0], base * 2.0),
         InfillPattern::Triangles => (vec![0.0, 60.0, 120.0], base * 3.0),
         // Not straight lines: traced by `gyroid` and `honeycomb`, at the base spacing.
@@ -3036,7 +3044,7 @@ mod tests {
         let lines = of_kind(&r.layers[i], PathKind::TopSurface);
         assert!(lines.len() > 20);
         // Across the lines: the solid lines run at 45 or 135 degrees by layer.
-        let angle = if i % 2 == 0 { 45f32 } else { 135f32 }.to_radians();
+        let angle = if i.is_multiple_of(2) { 45f32 } else { 135f32 }.to_radians();
         let across = |p: Point2| -p.x * angle.sin() + p.y * angle.cos();
         let rows: Vec<f32> = lines.iter().map(|l| across(l.points[0])).collect();
         assert!(rows.windows(2).all(|w| w[1] >= w[0] - 0.01), "{rows:?}");
