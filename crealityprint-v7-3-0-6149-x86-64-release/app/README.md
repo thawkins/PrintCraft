@@ -21,18 +21,26 @@ printer or slicer maker.
 **Slicing**
 - Fine / Standard / Draft quality presets, plus layer height, walls, top and bottom
   layers, infill density and speeds.
-- Infill patterns: lines, grid, triangles. Seam position: aligned, nearest, rear, random.
+- Infill patterns: lines, grid, triangles, gyroid, honeycomb, cubic, adaptive cubic and
+  lightning. Seam position: aligned, nearest, rear, random.
+- Built-in generic filaments (PLA, PETG, ABS, TPU, ASA), and filament and process
+  presets of your own, which can be exported and imported as JSON.
 - Supports (optionally only on the plate), skirt, brim or raft, z-hop, and retraction
   with a settable travel threshold, an optional retraction on layer changes, and wipe.
 - Ironing, fuzzy skin, a textured top surface and spiral vase mode.
 - Cooling slowdown for short layers and fan control.
 - Time, filament, weight and cost estimates, and a thumbnail picture in the G-code.
+- Optional: object labels, so one object can be cancelled mid-print (Klipper
+  `EXCLUDE_OBJECT`, M486 elsewhere); arc fitting (G2/G3); and Prusa's binary G-code
+  (`.bgcode`) for export and PrusaLink.
 
 **Printers**
 - Printer presets: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool), Creality
   Ender-3 V3 KE, FlashForge Creator Pro (Sailfish, two nozzles), and four generic plate
   sizes.
-- Network printing to Creality's network service, Klipper (Moonraker) and PrusaLink.
+- Network printing to Creality's network service, Klipper (Moonraker), PrusaLink,
+  OctoPrint (API key) and Duet / RepRapFirmware (standalone or with a Raspberry Pi).
+  Cancel one object on Klipper and Duet.
 - USB printing to Marlin, Prusa and Repetier firmware, with line numbers, checksums and
   resend. The printer page shows which protocol is in use ("Repetier-Firmware v1" or
   "v2", or "Marlin-style protocol"), and every line sent and received is recorded in
@@ -61,8 +69,8 @@ supported and what is not yet.
 
 ## Building and running
 
-This folder holds the Rust project. You need a recent Rust toolchain; run these from
-here.
+This folder holds the Rust project. It builds with the stable Rust toolchain, pinned in
+`rust-toolchain.toml` (rustup installs it on first use); run these from here.
 
 ```bash
 cargo run --release
