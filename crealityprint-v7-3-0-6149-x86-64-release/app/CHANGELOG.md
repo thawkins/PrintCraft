@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-11-19
+
 ### Fixed
 
 - The app builds on macOS again: the macOS-only setting that keeps a check picture from
