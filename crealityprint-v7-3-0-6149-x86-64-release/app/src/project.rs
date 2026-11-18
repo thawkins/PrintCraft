@@ -22,7 +22,10 @@ use std::path::{Path, PathBuf};
 
 pub const EXTENSION: &str = "printcraft";
 const FORMAT: &str = "printcraft-project";
-pub const VERSION: u64 = 1;
+pub const VERSION: u64 = 2;
+/// The version written for a project with one plate: such a file is the same as before
+/// plates, so older versions open it without a warning.
+const ONE_PLATE_VERSION: u64 = 1;
 
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -30,7 +33,11 @@ pub struct Project {
     pub filament: Filament,
     pub settings: PrintSettings,
     pub quality: Option<Quality>,
+    /// The first plate's objects.
     pub objects: Vec<PlacedObject>,
+    /// The objects of the other plates (plate 2 onwards), each sliced and printed on its
+    /// own. Empty for a project with one plate.
+    pub more_plates: Vec<Vec<PlacedObject>>,
     /// The printer device in use when the project was saved.
     pub device: Option<FoundPrinter>,
     /// Two-nozzle choices (second filament, support nozzle, Ditto).
@@ -62,9 +69,9 @@ fn quality_name(q: Quality) -> &'static str {
     }
 }
 
-pub fn to_json(p: &Project) -> String {
-    let objects: Vec<Value> = p
-        .objects
+/// The JSON of one plate's objects.
+fn objects_json(objects: &[PlacedObject]) -> Vec<Value> {
+    objects
         .iter()
         .map(|o| {
             let mut v = json!({
@@ -91,10 +98,19 @@ pub fn to_json(p: &Project) -> String {
             }
             v
         })
-        .collect();
-    let v = json!({
+        .collect()
+}
+
+pub fn to_json(p: &Project) -> String {
+    let objects = objects_json(&p.objects);
+    let version = if p.more_plates.is_empty() {
+        ONE_PLATE_VERSION
+    } else {
+        VERSION
+    };
+    let mut v = json!({
         "format": FORMAT,
-        "version": VERSION,
+        "version": version,
         "printer": {
             "name": p.printer.name,
             "bed_x": p.printer.bed_x,
@@ -143,6 +159,14 @@ pub fn to_json(p: &Project) -> String {
             .collect::<Vec<Value>>(),
         "device": p.device.as_ref().map(FoundPrinter::to_json),
     });
+    // Only projects with more than one plate say so, so other files stay as they were.
+    if !p.more_plates.is_empty() {
+        v["more_plates"] = p
+            .more_plates
+            .iter()
+            .map(|plate| json!({ "objects": objects_json(plate) }))
+            .collect();
+    }
     serde_json::to_string_pretty(&v).unwrap_or_default()
 }
 
@@ -290,65 +314,83 @@ fn project_from(v: &Value) -> Result<Project, String> {
         .and_then(|q| q.as_str())
         .and_then(Quality::parse);
 
-    let mut objects = Vec::new();
-    for (i, o) in v
-        .get("objects")
-        .and_then(|o| o.as_array())
+    // The objects of one plate (`plate` counts from 1, for messages).
+    let read_objects = |list: Option<&Value>, plate: usize| -> Result<Vec<PlacedObject>, String> {
+        let mut objects = Vec::new();
+        for (i, o) in list
+            .and_then(|o| o.as_array())
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let data = o.get("mesh").and_then(|m| m.as_str()).unwrap_or("");
+            let mesh = base64_decode(data)
+                .and_then(|b| mesh_from_bytes(&b))
+                .map(|triangles| Mesh { triangles })
+                .filter(Mesh::is_finite)
+                .ok_or_else(|| match plate {
+                    1 => format!("Object {} in the project is damaged.", i + 1),
+                    _ => format!(
+                        "Object {} on plate {plate} in the project is damaged.",
+                        i + 1
+                    ),
+                })?;
+            if mesh.triangles.is_empty() {
+                continue;
+            }
+            let mut obj = PlacedObject::new(
+                text_of(o, "name").unwrap_or_else(|| format!("Object {}", i + 1)),
+                mesh,
+            );
+            obj.x = num(o, "x", 0.0);
+            obj.y = num(o, "y", 0.0);
+            if let Some(r) = o.get("rotation").and_then(|r| r.as_array()) {
+                let c = |k: usize| r.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                obj.rotation = Vec3::new(c(0), c(1), c(2));
+            }
+            // Per-axis scale; a file from before it has one figure for all three.
+            let uniform = num(o, "scale_percent", 100.0);
+            let axis = |k: usize| {
+                o.get("scale")
+                    .and_then(|s| s.as_array())
+                    .and_then(|s| s.get(k))
+                    .and_then(|x| x.as_f64())
+                    .map(|x| x as f32)
+                    .unwrap_or(uniform)
+                    .clamp(1.0, 10_000.0)
+            };
+            obj.scale = Vec3::new(axis(0), axis(1), axis(2));
+            obj.extruder = num(o, "extruder", printer.primary_nozzle as f32).clamp(0.0, 1.0) as u8;
+            if let Some(raw) = o.get("overrides") {
+                obj.overrides = crate::overrides::Overrides::from_json(raw);
+            }
+            obj.ranges = o
+                .get("ranges")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(crate::overrides::HeightRange::from_json)
+                .collect();
+            obj.modifiers = o
+                .get("modifiers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(crate::modifier::Modifier::from_json)
+                .collect();
+            objects.push(obj);
+        }
+        Ok(objects)
+    };
+    let objects = read_objects(v.get("objects"), 1)?;
+    let more_plates = v
+        .get("more_plates")
+        .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .enumerate()
-    {
-        let data = o.get("mesh").and_then(|m| m.as_str()).unwrap_or("");
-        let mesh = base64_decode(data)
-            .and_then(|b| mesh_from_bytes(&b))
-            .map(|triangles| Mesh { triangles })
-            .filter(Mesh::is_finite)
-            .ok_or_else(|| format!("Object {} in the project is damaged.", i + 1))?;
-        if mesh.triangles.is_empty() {
-            continue;
-        }
-        let mut obj = PlacedObject::new(
-            text_of(o, "name").unwrap_or_else(|| format!("Object {}", i + 1)),
-            mesh,
-        );
-        obj.x = num(o, "x", 0.0);
-        obj.y = num(o, "y", 0.0);
-        if let Some(r) = o.get("rotation").and_then(|r| r.as_array()) {
-            let c = |k: usize| r.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
-            obj.rotation = Vec3::new(c(0), c(1), c(2));
-        }
-        // Per-axis scale; a file from before it has one figure for all three.
-        let uniform = num(o, "scale_percent", 100.0);
-        let axis = |k: usize| {
-            o.get("scale")
-                .and_then(|s| s.as_array())
-                .and_then(|s| s.get(k))
-                .and_then(|x| x.as_f64())
-                .map(|x| x as f32)
-                .unwrap_or(uniform)
-                .clamp(1.0, 10_000.0)
-        };
-        obj.scale = Vec3::new(axis(0), axis(1), axis(2));
-        obj.extruder = num(o, "extruder", printer.primary_nozzle as f32).clamp(0.0, 1.0) as u8;
-        if let Some(raw) = o.get("overrides") {
-            obj.overrides = crate::overrides::Overrides::from_json(raw);
-        }
-        obj.ranges = o
-            .get("ranges")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(crate::overrides::HeightRange::from_json)
-            .collect();
-        obj.modifiers = o
-            .get("modifiers")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(crate::modifier::Modifier::from_json)
-            .collect();
-        objects.push(obj);
-    }
+        .map(|(k, plate)| read_objects(plate.get("objects"), k + 2))
+        .collect::<Result<Vec<_>, String>>()?;
 
     let device = v.get("device").and_then(|d| {
         let mut p = FoundPrinter::from_json(d)?;
@@ -377,6 +419,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
         settings,
         quality,
         objects,
+        more_plates,
         device,
         dual,
         layer_events,
@@ -584,6 +627,7 @@ mod tests {
             settings,
             quality: None,
             objects: vec![cube, tube],
+            more_plates: Vec::new(),
             device: Some(FoundPrinter {
                 host: "192.168.1.116".into(),
                 name: "Ender3V3KE-A654".into(),
@@ -1081,5 +1125,52 @@ mod tests {
         );
         let err = from_json(&text).unwrap_err();
         assert!(err.contains("damaged"), "{err}");
+    }
+
+    #[test]
+    fn test_project_three_plates_round_trip() {
+        use crate::model::Mesh;
+        let mut p = sample();
+        let shape = |name: &str, size: f32, x: f32| {
+            let mut o = PlacedObject::new(name, Mesh::cube(Vec3::new(size, size, size)));
+            o.x = x;
+            o
+        };
+        p.more_plates = vec![
+            vec![shape("plate 2 cube", 12.0, -20.0)],
+            vec![
+                shape("plate 3 left", 8.0, -30.0),
+                shape("plate 3 right", 9.0, 30.0),
+            ],
+        ];
+        let text = to_json(&p);
+        let v: Value = serde_json::from_str(&text).unwrap();
+        // Plate 1 stays where older versions read it; the others follow, and the file
+        // says it needs a version that knows plates.
+        assert_eq!(v["objects"].as_array().unwrap().len(), p.objects.len());
+        assert_eq!(v["more_plates"].as_array().unwrap().len(), 2);
+        assert_eq!(v["version"], json!(2));
+        let back = from_json(&text).unwrap();
+        assert_eq!(back.objects.len(), p.objects.len());
+        assert_eq!(back.more_plates.len(), 2);
+        for (got, want) in back.more_plates.iter().zip(&p.more_plates) {
+            let names = |l: &[PlacedObject]| l.iter().map(|o| o.name.clone()).collect::<Vec<_>>();
+            assert_eq!(names(got), names(want));
+            for (a, b) in got.iter().zip(want) {
+                assert_eq!((a.x, a.y, a.scale), (b.x, b.y, b.scale));
+                assert_eq!(a.mesh.triangles.len(), b.mesh.triangles.len());
+            }
+        }
+        // One plate: the file is as before (no plates list, version 1), and an old file
+        // opens as one plate.
+        p.more_plates.clear();
+        let one: Value = serde_json::from_str(&to_json(&p)).unwrap();
+        assert!(one.get("more_plates").is_none());
+        assert_eq!(one["version"], json!(1));
+        assert!(from_json(&to_json(&p)).unwrap().more_plates.is_empty());
+        // A damaged plate is reported, not silently dropped.
+        let mut bad = v.clone();
+        bad["more_plates"][1]["objects"][0]["mesh"] = json!("====");
+        assert!(from_json(&bad.to_string()).is_err());
     }
 }

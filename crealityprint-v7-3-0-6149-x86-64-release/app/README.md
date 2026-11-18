@@ -15,7 +15,8 @@ printer or slicer maker.
 - Import STL (binary and text), OBJ and 3MF. 3MF files from other slicers that keep each
   object in its own part are supported.
 - Move, scale and rotate with on-screen handles; arrange, duplicate, lay flat, turn 90°.
-- Projects (`.printcraft`) save the plate, every setting and the printer in use. Passwords
+- Several plates in one project, each sliced and printed on its own.
+- Projects (`.printcraft`) save the plates, every setting and the printer in use. Passwords
   are never saved. The File menu lists the 5 most recent projects.
 
 **Slicing**

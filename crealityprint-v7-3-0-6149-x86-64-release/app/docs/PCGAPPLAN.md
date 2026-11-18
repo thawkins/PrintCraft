@@ -125,7 +125,7 @@ Goal: PrusaSlicer's most used pattern and support choices are available.
 | ID | Task | Done when | Est. |
 |---|---|---|---|
 | M7.1 | **Done.** **Sequential printing.** Print one object at a time, with an extruder clearance radius and height in the printer profile. Collision check blocks slicing with a clear message. | Tests: two objects print in sequence, and too-close objects are rejected. | 3 |
-| M7.2 | **Multiple plates.** A project holds several plates, each sliced and exported or sent separately. Tabs above the 3D view. | Tests: project round-trip with 3 plates. Screenshot. | 4 |
+| M7.2 | **Done.** **Multiple plates.** A project holds several plates, each sliced and exported or sent separately. Tabs above the 3D view. | Tests: project round-trip with 3 plates. Screenshot. | 4 |
 
 ## Not planned (from PCGAP.md items 22-23)
 

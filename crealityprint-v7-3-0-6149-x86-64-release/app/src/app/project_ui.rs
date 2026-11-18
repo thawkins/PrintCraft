@@ -140,7 +140,7 @@ impl PrintCraftApp {
 
     /// Runs `action`, first asking about unsaved changes if there are any.
     pub(super) fn request(&mut self, action: ProjectAction) {
-        if self.has_unsaved_changes() && !self.objects.is_empty() {
+        if self.has_unsaved_changes() && self.any_plate_has_objects() {
             self.pending_project = Some(action);
         } else {
             self.run(action);
@@ -167,6 +167,7 @@ impl PrintCraftApp {
 
     fn new_project(&mut self) {
         self.clear_plate();
+        self.set_more_plates(Vec::new());
         self.layer_events.clear();
         self.sliced = None;
         self.reset_history();
@@ -179,12 +180,14 @@ impl PrintCraftApp {
 
     /// What would be saved right now.
     pub(super) fn current_project(&self) -> Project {
+        let mut plates = self.all_plates().into_iter();
         Project {
             printer: self.printer.clone(),
             filament: self.filament.clone(),
             settings: self.settings.clone(),
             quality: self.quality,
-            objects: self.objects.clone(),
+            objects: plates.next().unwrap_or_default(),
+            more_plates: plates.collect(),
             device: self.device.current_device(),
             dual: self.dual.clone(),
             layer_events: self.layer_events.clone(),
@@ -247,7 +250,9 @@ impl PrintCraftApp {
         self.quality = p
             .quality
             .or_else(|| Quality::ALL.into_iter().find(|q| q.matches(&self.settings)));
+        self.cancel_slice();
         self.objects = p.objects;
+        self.set_more_plates(p.more_plates);
         self.refresh_plate();
         self.selected = None;
         self.drag = Drag::None;

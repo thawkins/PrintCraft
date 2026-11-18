@@ -3,6 +3,7 @@
 //! The Prepare screen's parts live in prepare_ui.rs.
 
 mod dialogs;
+mod plates_ui;
 mod prepare_ui;
 mod presets_ui;
 mod project_ui;
@@ -139,8 +140,13 @@ pub struct PrintCraftApp {
     dual: crate::profiles::DualNozzle,
     quality: Option<Quality>,
     settings: PrintSettings,
+    /// The objects of the plate being worked on.
     objects: Vec<PlacedObject>,
     plate: Vec<Vec<Triangle>>,
+    /// Every plate of the project (`plates_ui`); the one being worked on is
+    /// `active_plate`, whose entry here is empty (its objects are in `objects`).
+    plates: Vec<plates_ui::StoredPlate>,
+    active_plate: usize,
     selected: Option<usize>,
     camera: Camera,
     mode: Mode,
@@ -285,6 +291,8 @@ impl PrintCraftApp {
             quality: Some(Quality::Standard),
             settings: Quality::Standard.settings(),
             objects: Vec::new(),
+            plates: vec![Default::default()],
+            active_plate: 0,
             plate: Vec::new(),
             selected: None,
             mode: Mode::Prepare,
@@ -547,19 +555,7 @@ impl PrintCraftApp {
             self.settings, self.printer, self.filament, self.dual
         );
         for o in &self.objects {
-            s += &format!(
-                "|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}",
-                o.name,
-                o.x,
-                o.y,
-                o.rotation,
-                o.scale,
-                o.mesh.triangles.len(),
-                o.extruder,
-                o.overrides,
-                o.ranges,
-                o.modifiers
-            );
+            s += &object_fingerprint(o);
         }
         s
     }
@@ -718,7 +714,12 @@ impl PrintCraftApp {
     /// What a saved project holds: the plate and settings (`fingerprint`) plus the
     /// colour changes and pauses, which change the print file but need no new slice.
     pub(super) fn project_fingerprint(&self) -> String {
-        format!("{}|{:?}", self.fingerprint(), self.layer_events)
+        format!(
+            "{}|{:?}|{}",
+            self.fingerprint(),
+            self.layer_events,
+            self.other_plates_fingerprint()
+        )
     }
 
     /// Rebuilds the print file that is sent or exported: the sliced G-code with the
@@ -1808,6 +1809,13 @@ impl PrintCraftApp {
         ui.scope_builder(egui::UiBuilder::new().max_rect(tools), |ui| {
             self.model_toolbar(ui)
         });
+        let tabs = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 372.0, rect.top() + 58.0),
+            egui::pos2(rect.right() - 90.0, rect.top() + 86.0),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(tabs), |ui| {
+            self.plate_tabs(ui)
+        });
     }
 
     /// View buttons, top right: like the original's TOP / FRONT cube and home button.
@@ -2522,6 +2530,24 @@ fn job_extent(result: &SliceResult) -> Option<[f32; 4]> {
 
 /// How many undo steps are kept.
 const UNDO_STEPS: usize = 100;
+
+/// What about a part counts as a change to the plate (for undo steps, "slice again" and
+/// unsaved changes).
+fn object_fingerprint(o: &PlacedObject) -> String {
+    format!(
+        "|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}",
+        o.name,
+        o.x,
+        o.y,
+        o.rotation,
+        o.scale,
+        o.mesh.triangles.len(),
+        o.extruder,
+        o.overrides,
+        o.ranges,
+        o.modifiers
+    )
+}
 
 /// What undo and redo bring back: the plate and every setting a project saves. Meshes
 /// are shared, so a copy is small.

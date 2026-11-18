@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Multiple plates (gap plan task M7.2). Tabs under the model toolbar switch between
+  plates; "+" adds one and "×" removes an empty one. Each plate has its own objects and
+  is sliced, exported and sent on its own, keeping its slice while another is shown.
+  Projects save every plate: plate 1 where older versions read it, the others in a new
+  `more_plates` list (such files say format version 2, so an older PrintCraft warns
+  before dropping them); a one-plate project file is unchanged. Undo and redo cover the
+  plate being worked on; switching plates starts the history again.
+
 - Sequential printing (gap plan task M7.1). With Advanced on, "Sequential printing"
   under Special mode (off by default) prints one object at a time, each from bottom to
   top, shortest first. Between objects the nozzle lifts 2 mm above everything printed,
