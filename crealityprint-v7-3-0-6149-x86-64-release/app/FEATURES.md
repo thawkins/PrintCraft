@@ -60,6 +60,7 @@ a project file fall back to defaults, so older and newer files still open.
 |---|---|
 | Layer height, walls, top/bottom layers, infill density, speeds | Yes |
 | Speeds per feature (outer/inner wall, sparse/solid infill, top surface, support) | **Yes (new)**, in Advanced; each "Auto" until set |
+| Accelerations (outer wall, infill, travel, first layer) | **Yes (new)**, in Advanced; M204 or Klipper SET_VELOCITY_LIMIT, only when set. The time estimate models acceleration and corners |
 | Quality presets | Yes (Fine / Standard / Draft). They now change only quality values, so your other choices stay |
 | Infill patterns | **Simpler (new)**: Lines, Grid, Triangles. Not offered: gyroid, honeycomb, cubic, lightning, adaptive cubic, support cubic |
 | Arachne variable-width walls | Not yet (fixed-width walls) |

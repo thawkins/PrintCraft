@@ -1,14 +1,13 @@
 //! Writes sliced layers as G-code and estimates print time, filament and cost.
 
 use crate::geometry::Point2;
-use crate::profiles::{Filament, PrintSettings, Printer, SeamPosition, SpeedFeature};
+use crate::motion;
+use crate::profiles::{AccelFeature, Filament, PrintSettings, Printer, SeamPosition, SpeedFeature};
 use crate::slicer::{Layer, PathKind, SliceResult, ToolPath};
 use std::fmt::Write;
 
 /// Extra time per layer for slowing down, turning and layer changes.
 const LAYER_CHANGE_SECONDS: f32 = 1.0;
-/// Real printers accelerate; plain length / speed under-counts by roughly this much.
-const ACCELERATION_ALLOWANCE: f32 = 1.15;
 /// Heating up the bed and nozzle before printing.
 const WARMUP_SECONDS: f32 = 120.0;
 /// Fuzzy top: a new random height every this many millimetres along the top lines.
@@ -561,6 +560,9 @@ struct Writer<'a> {
     last_path: Vec<Point2>,
     /// Filament pushed by each nozzle (mm), purge lines included.
     by_tool: [f64; 2],
+    /// The acceleration last written for printing moves [0] and travels [1]; Klipper has
+    /// one acceleration for both and uses [0] only. `None` until first written.
+    accel_now: [Option<f32>; 2],
 }
 
 /// Time for a tool change: retract, switch, prime.
@@ -710,6 +712,7 @@ impl<'a> Writer<'a> {
             parked,
             last_path: Vec::new(),
             by_tool,
+            accel_now: [None; 2],
         }
     }
 
@@ -1011,6 +1014,56 @@ impl<'a> Writer<'a> {
         spiral
     }
 
+    /// The acceleration (mm/s^2) for printing a line of `kind` on layer `li`: the print
+    /// setting for it, or the printer's own when it is on Auto or has none.
+    fn print_accel(&self, kind: PathKind, li: usize) -> f32 {
+        let (a, machine) = (&self.s.accels, self.printer.acceleration);
+        if li == 0 {
+            return a.accel(AccelFeature::FirstLayer, machine);
+        }
+        match kind {
+            PathKind::OuterWall => a.accel(AccelFeature::OuterWall, machine),
+            PathKind::SparseInfill | PathKind::SolidInfill => {
+                a.accel(AccelFeature::Infill, machine)
+            }
+            PathKind::Skirt
+            | PathKind::Brim
+            | PathKind::InnerWall
+            | PathKind::Support
+            | PathKind::Ironing
+            | PathKind::TopSurface
+            | PathKind::Raft
+            | PathKind::PrimeTower
+            | PathKind::OozeShield => machine,
+        }
+    }
+
+    /// Writes an acceleration change for printing moves (or travels with `travel`), only
+    /// when it differs from the last one written. Nothing is written while every
+    /// acceleration setting is on Auto, or for X3G printers (Sailfish has no such command).
+    /// Marlin and Prusa firmware: `M204 P` (printing) and `M204 T` (travel). Klipper has
+    /// one acceleration for all moves: `SET_VELOCITY_LIMIT ACCEL=`.
+    fn set_accel(&mut self, accel: f32, travel: bool) {
+        if !self.s.accels.any_set() || self.printer.x3g {
+            return;
+        }
+        let slot = if self.printer.klipper {
+            0
+        } else {
+            travel as usize
+        };
+        if self.accel_now[slot] == Some(accel) {
+            return;
+        }
+        self.accel_now[slot] = Some(accel);
+        if self.printer.klipper {
+            let _ = writeln!(self.g, "SET_VELOCITY_LIMIT ACCEL={accel:.0}");
+        } else {
+            let which = if travel { "T" } else { "P" };
+            let _ = writeln!(self.g, "M204 {which}{accel:.0}");
+        }
+    }
+
     /// Moves to `to` (retracting and z-hopping first on long travels), then undoes any
     /// retraction so the nozzle is ready to print at layer height `z`.
     fn travel_to(&mut self, to: Point2, z: f32) {
@@ -1028,7 +1081,8 @@ impl<'a> Writer<'a> {
                 }
             }
             // A wipe may have moved the nozzle: travel from where it is now.
-            let travel = self.pos.distance(to);
+            let accel = self.s.accels.accel(AccelFeature::Travel, p.acceleration);
+            self.set_accel(accel, true);
             let _ = writeln!(
                 self.g,
                 "G0 X{:.3} Y{:.3} F{:.0}",
@@ -1036,7 +1090,7 @@ impl<'a> Writer<'a> {
                 to.y + self.oy,
                 self.travel_f
             );
-            self.seconds += travel / self.s.travel_speed;
+            self.seconds += motion::line_time(&[self.pos, to], self.s.travel_speed, accel);
         }
         if hopped {
             let _ = writeln!(self.g, "G1 Z{:.3} F600", z);
@@ -1056,6 +1110,9 @@ impl<'a> Writer<'a> {
                 (speed_for(kind, style.li, s) * style.slowdown).max(MIN_PRINT_SPEED),
             ),
         };
+        let accel = self.print_accel(style.kind, style.li);
+        self.set_accel(accel, false);
+        self.seconds += motion::line_time(&pts, speed, accel);
         let climb = style.spiral && style.kind == PathKind::OuterWall;
         // Fuzzy top: short steps, each lifted by a random 0..amount above the layer.
         let fuzzy = s.fuzzy_top && s.fuzzy_top_mm > 0.0 && style.kind == PathKind::TopSurface;
@@ -1079,7 +1136,6 @@ impl<'a> Writer<'a> {
             ) * flow;
             let e = self.ext.extrude(de);
             self.by_tool[self.tool as usize] += de as f64;
-            self.seconds += len / speed;
             let z = if climb {
                 format!(
                     " Z{:.3}",
@@ -1139,7 +1195,7 @@ impl<'a> Writer<'a> {
         let _ = writeln!(g, "M84 ; motors off");
 
         let total_e = (self.prime_e as f64 + self.ext.extruded) as f32;
-        let seconds = self.seconds * ACCELERATION_ALLOWANCE;
+        let seconds = self.seconds;
         let volume_cm3 =
             total_e * std::f32::consts::PI * (filament.diameter / 2.0).powi(2) / 1000.0;
         let grams = volume_cm3 * filament.density;
@@ -1783,6 +1839,153 @@ mod tests {
         for t in ["WALL-INNER", "FILL", "SKIN"] {
             assert!(feeds[t].iter().all(|x| *x == p), "{t}: {:?}", feeds[t]);
         }
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3 * b.abs().max(1.0)
+    }
+
+    #[test]
+    fn test_motion_straight_line_is_a_trapezoid() {
+        let line = [Point2::new(0.0, 0.0), Point2::new(100.0, 0.0)];
+        // 1.25 mm to reach 50 mm/s at 1000 mm/s^2, the same to stop: 0.05 + 0.05 + 97.5 / 50.
+        assert!(close(motion::line_time(&line, 50.0, 1000.0), 2.05));
+        // Too short to reach cruise: up to sqrt(a * len) and back down.
+        let short = [Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)];
+        let peak = 1000.0f32.sqrt();
+        assert!(close(
+            motion::line_time(&short, 100.0, 1000.0),
+            2.0 * peak / 1000.0
+        ));
+        // No acceleration: length / speed.
+        assert!(close(motion::line_time(&line, 50.0, 0.0), 2.0));
+    }
+
+    #[test]
+    fn test_motion_corners_cost_time_and_straight_joins_do_not() {
+        let p = Point2::new;
+        let straight = motion::line_time(&[p(0.0, 0.0), p(40.0, 0.0)], 60.0, 2000.0);
+        let split = motion::line_time(&[p(0.0, 0.0), p(20.0, 0.0), p(40.0, 0.0)], 60.0, 2000.0);
+        assert!(close(split, straight), "{split} vs {straight}");
+        let corner = motion::line_time(&[p(0.0, 0.0), p(20.0, 0.0), p(20.0, 20.0)], 60.0, 2000.0);
+        assert!(corner > straight * 1.02, "{corner} vs {straight}");
+        // A gentle bend costs less than a square corner.
+        let bend = motion::line_time(&[p(0.0, 0.0), p(20.0, 0.0), p(39.0, 6.0)], 60.0, 2000.0);
+        assert!(bend < corner);
+    }
+
+    /// The acceleration commands in a G-code text, in order.
+    fn accel_lines(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|l| l.starts_with("M204") || l.starts_with("SET_VELOCITY_LIMIT"))
+            .collect()
+    }
+
+    fn accel_settings() -> PrintSettings {
+        let mut s = PrintSettings::default();
+        s.accels.set(AccelFeature::OuterWall, Some(500.0));
+        s.accels.set(AccelFeature::Infill, Some(3000.0));
+        s.accels.set(AccelFeature::Travel, Some(2500.0));
+        s
+    }
+
+    fn sliced_cube_on(s: &PrintSettings, printer: &Printer) -> GcodeOutput {
+        let tris = PlacedObject::new("c", Mesh::cube(Vec3::new(20.0, 20.0, 4.0))).world_triangles();
+        let r = crate::slicer::slice(&tris, s, 0.42, &|_| {});
+        generate(&r, printer, &Filament::presets()[0], s)
+    }
+
+    #[test]
+    fn test_accels_on_auto_write_nothing() {
+        for printer in Printer::presets() {
+            let out = sliced_cube_on(&PrintSettings::default(), &printer);
+            assert!(accel_lines(&out.text).is_empty(), "{}", printer.name);
+        }
+    }
+
+    #[test]
+    fn test_accels_marlin_writes_m204_only_on_change() {
+        let s = accel_settings();
+        let printer = &Printer::presets()[0];
+        assert!(!printer.klipper && !printer.x3g);
+        let out = sliced_cube_on(&s, printer);
+        let lines = accel_lines(&out.text);
+        for want in ["M204 P500", "M204 P3000", "M204 T2500", "M204 P1000"] {
+            assert!(lines.contains(&want), "{want} missing from {lines:?}");
+        }
+        assert!(lines.iter().all(|l| !l.starts_with("SET_VELOCITY_LIMIT")));
+        // The travel acceleration never changes, so it is written once.
+        assert_eq!(lines.iter().filter(|l| l.starts_with("M204 T")).count(), 1);
+        // Printing changes alternate: never the same value twice in a row.
+        let print: Vec<_> = lines.iter().filter(|l| l.starts_with("M204 P")).collect();
+        assert!(print.windows(2).all(|w| w[0] != w[1]), "{print:?}");
+        // Every printing move after the first layer runs at its feature's acceleration.
+        let (mut layer, mut kind, mut accel) = (0usize, "", "");
+        let mut checked = 0;
+        for l in out.text.lines() {
+            if let Some(n) = l.strip_prefix(";LAYER:") {
+                layer = n.trim().parse().unwrap_or(0);
+            } else if let Some(k) = l.strip_prefix(";TYPE:") {
+                kind = k;
+            } else if let Some(a) = l.strip_prefix("M204 P") {
+                accel = a;
+            } else if layer > 0 && l.starts_with("G1 X") && l.contains(" E") {
+                let want = match kind {
+                    "WALL-OUTER" => "500",
+                    "FILL" | "SKIN" => "3000",
+                    _ => "1000",
+                };
+                assert_eq!(accel, want, "layer {layer} {kind}: {l}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 100);
+    }
+
+    #[test]
+    fn test_accels_first_layer_uses_its_own_setting() {
+        let mut s = accel_settings();
+        s.accels.set(AccelFeature::FirstLayer, Some(700.0));
+        let out = sliced_cube_on(&s, &Printer::presets()[0]);
+        let first = &out.text[..out.text.find(";LAYER:1\n").unwrap()];
+        let firsts = accel_lines(first);
+        assert!(firsts.contains(&"M204 P700"), "{firsts:?}");
+        assert!(!firsts.contains(&"M204 P500") && !firsts.contains(&"M204 P3000"));
+    }
+
+    #[test]
+    fn test_accels_klipper_uses_set_velocity_limit_and_x3g_none() {
+        let s = accel_settings();
+        let presets = Printer::presets();
+        let ke = presets.iter().find(|p| p.klipper).unwrap();
+        let ke_out = sliced_cube_on(&s, ke);
+        let lines = accel_lines(&ke_out.text);
+        assert!(!lines.is_empty());
+        assert!(lines
+            .iter()
+            .all(|l| l.starts_with("SET_VELOCITY_LIMIT ACCEL=")));
+        assert!(lines.contains(&"SET_VELOCITY_LIMIT ACCEL=2500"));
+        assert!(lines.windows(2).all(|w| w[0] != w[1]), "{lines:?}");
+        let sailfish = presets.iter().find(|p| p.x3g).unwrap();
+        assert!(accel_lines(&sliced_cube_on(&s, sailfish).text).is_empty());
+    }
+
+    #[test]
+    fn test_accels_change_the_time_estimate() {
+        let s = PrintSettings {
+            min_layer_time: 0.0,
+            ..PrintSettings::default()
+        };
+        let mut printer = Printer::presets()[0].clone();
+        printer.acceleration = 500.0;
+        let slow = sliced_cube_on(&s, &printer).estimate.seconds;
+        printer.acceleration = 20000.0;
+        let fast = sliced_cube_on(&s, &printer).estimate.seconds;
+        assert!(slow > fast * 1.1, "{slow} vs {fast}");
+        // Setting a low infill acceleration makes the same printer slower.
+        let mut low = s.clone();
+        low.accels.set(AccelFeature::Infill, Some(200.0));
+        assert!(sliced_cube_on(&low, &printer).estimate.seconds > fast);
     }
 
     #[test]

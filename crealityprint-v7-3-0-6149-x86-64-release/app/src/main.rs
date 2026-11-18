@@ -19,6 +19,7 @@ mod geometry;
 mod gizmo;
 mod heat;
 mod model;
+mod motion;
 mod pipeline;
 mod printer;
 mod profiles;

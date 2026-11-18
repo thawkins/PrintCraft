@@ -14,6 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each is "Auto" until set: Auto follows the print speed (outer walls at half of it), as
   before, so existing settings print exactly as they did. A speed you set is saved in
   the project and kept when you pick a quality preset.
+- Accelerations (gap plan task M1.2). The printer editor has the printer's own
+  acceleration (presets filled in, estimated). With Advanced on, the Speed section has
+  outer wall, infill, travel and first layer accelerations, each "Auto" until set. Set
+  ones are written as `M204 P`/`M204 T` (Marlin, Prusa) or `SET_VELOCITY_LIMIT ACCEL=`
+  (Klipper), only when the value changes; nothing is written while all are on Auto, and
+  never for X3G printers.
+
+### Changed
+
+- The time estimate now times every line with the printer's acceleration and corner
+  speeds (new `motion.rs`) instead of adding a flat 15 %. With default settings the
+  G-code is unchanged except the "; estimated time" comment (for example a 20 mm cube:
+  19.9 min before, 19.7 min now; a 12 mm cylinder: 17.3 min before, 16.3 min now).
 
 ## [0.0.5] - 2026-11-18
 

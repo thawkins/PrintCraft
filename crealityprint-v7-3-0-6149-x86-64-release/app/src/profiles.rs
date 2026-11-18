@@ -34,6 +34,7 @@ pub mod limits {
     pub const NOZZLE_SPACING: RangeInclusive<f32> = 5.0..=200.0;
     pub const SHIELD_DISTANCE: RangeInclusive<f32> = 1.0..=20.0;
     pub const Z_HOP: RangeInclusive<f32> = 0.0..=2.0;
+    pub const ACCELERATION: RangeInclusive<f32> = 100.0..=30000.0;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,6 +76,9 @@ pub struct Printer {
     /// Two nozzles: the distance between them along X (mm), the extruder offset. A Ditto
     /// copy prints this far to the side, so a Ditto job must be narrower than it.
     pub nozzle_spacing: f32,
+    /// The printer's own acceleration (mm/s^2), as its firmware is set up. Used for the
+    /// time estimate, and written back where a print setting's acceleration is "Auto".
+    pub acceleration: f32,
 }
 
 impl Printer {
@@ -150,6 +154,24 @@ impl Default for DualNozzle {
 /// printer push (two lines with roughly 15 mm each). Estimated.
 pub const DEFAULT_PURGE_MM: f32 = 30.0;
 
+/// A printer preset's acceleration (mm/s^2): estimated from the makers' firmware
+/// defaults as commonly reported, not measured.
+pub fn preset_acceleration(name: &str) -> f32 {
+    if name.contains("Ender-3 V3 KE") {
+        8000.0
+    } else if name.contains("MK4S") || name.contains("Core One") || name.contains("XL") {
+        4000.0
+    } else if name.contains("MK3S") || name.contains("MINI") {
+        1250.0
+    } else {
+        // Generic printers and the Sailfish Creator Pro.
+        DEFAULT_ACCELERATION
+    }
+}
+
+/// The acceleration (mm/s^2) of a printer that doesn't say: a cautious bedslinger value.
+pub const DEFAULT_ACCELERATION: f32 = 1000.0;
+
 impl Printer {
     pub fn presets() -> Vec<Printer> {
         let p = |name: &str, x: f32, y: f32, z: f32, retract: f32| Printer {
@@ -172,6 +194,7 @@ impl Printer {
             standby_drop: DEFAULT_STANDBY_DROP_C,
             primary_nozzle: PRIMARY_TOOL,
             nozzle_spacing: DEFAULT_NOZZLE_SPACING_MM,
+            acceleration: preset_acceleration(name),
         };
         // Build volumes of named printers are their makers' published specifications;
         // retraction values are common starting points (estimated).
@@ -316,6 +339,8 @@ pub struct PrintSettings {
     pub travel_speed: f32,
     /// Speeds for single kinds of line (Advanced); each is "Auto" until set.
     pub speeds: FeatureSpeeds,
+    /// Accelerations for some kinds of move (Advanced); each is "Auto" until set.
+    pub accels: FeatureAccels,
     pub supports: bool,
     /// Overhangs steeper than this (degrees from vertical) get supports.
     pub support_angle: f32,
@@ -427,6 +452,73 @@ impl FeatureSpeeds {
     }
 }
 
+/// The kinds of move that can be given their own acceleration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccelFeature {
+    OuterWall,
+    /// Sparse and solid infill.
+    Infill,
+    Travel,
+    /// Every printing move on the first layer.
+    FirstLayer,
+}
+
+impl AccelFeature {
+    pub const ALL: [Self; 4] = [
+        Self::OuterWall,
+        Self::Infill,
+        Self::Travel,
+        Self::FirstLayer,
+    ];
+
+    /// The name of this acceleration in a project file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::OuterWall => "outer_wall",
+            Self::Infill => "infill",
+            Self::Travel => "travel",
+            Self::FirstLayer => "first_layer",
+        }
+    }
+
+    /// The name of this acceleration in the settings panel.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OuterWall => "Outer wall accel.",
+            Self::Infill => "Infill accel.",
+            Self::Travel => "Travel accel.",
+            Self::FirstLayer => "First layer accel.",
+        }
+    }
+}
+
+/// An acceleration (mm/s^2) per `AccelFeature`. `None` is "Auto": the printer's own
+/// acceleration, and nothing is written to the G-code while every one is on Auto.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FeatureAccels([Option<f32>; AccelFeature::ALL.len()]);
+
+impl FeatureAccels {
+    /// The acceleration set for `f`, or `None` when it is on "Auto".
+    pub fn get(&self, f: AccelFeature) -> Option<f32> {
+        self.0[f as usize]
+    }
+
+    /// Sets `f` to an acceleration (mm/s^2), or back to "Auto" with `None`.
+    pub fn set(&mut self, f: AccelFeature, accel: Option<f32>) {
+        self.0[f as usize] = accel;
+    }
+
+    /// True when at least one acceleration is set (not "Auto").
+    pub fn any_set(&self) -> bool {
+        self.0.iter().any(Option::is_some)
+    }
+
+    /// The acceleration `f` uses on a printer whose own acceleration is `machine`.
+    pub fn accel(&self, f: AccelFeature, machine: f32) -> f32 {
+        self.get(f).unwrap_or(machine)
+    }
+}
+
 /// The quick quality choices shown at the top of the print settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quality {
@@ -487,6 +579,7 @@ impl Quality {
             first_layer_speed: 25.0,
             travel_speed: 150.0,
             speeds: FeatureSpeeds::default(),
+            accels: FeatureAccels::default(),
             supports: false,
             support_angle: 50.0,
             supports_on_plate_only: false,

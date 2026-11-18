@@ -187,8 +187,21 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
 * **End.** Retract 2 mm, lift 10 mm, park at the back-left, heaters off, motors off.
 * **Coordinates.** The app centres everything on the plate. The print file adds half the
   plate size, so (0, 0) is the printer's front-left corner.
-* **Time estimate.** Sum of (move length ÷ speed) + travel time + retraction time + 1 s per
-  layer + 120 s warm-up, then × 1.15 to allow for acceleration. Estimated.
+* **Time estimate.** Each printed line and each travel is timed with the printer's
+  acceleration (`motion.rs`): it starts and ends at rest, speeds up and slows down at the
+  acceleration in use, and takes corners at a speed set by the corner's angle (Klipper's
+  square-corner rule, 5 mm/s through a 90° corner; straight joins are not slowed). Then
+  + retraction time + 1 s per layer + 120 s warm-up. Jerk and firmware buffer limits are
+  not modelled. Estimated. (Before M1.2: length ÷ speed × 1.15.)
+* **Accelerations.** The printer editor has the printer's own **acceleration** (mm/s²,
+  100-30000): Ender-3 V3 KE 8000; Prusa MK4S, Core One and XL 4000; MK3S+ and MINI+
+  1250; generic printers and the Creator Pro 1000 (estimated from the makers' firmware
+  defaults). Advanced print settings add outer wall, infill (sparse and solid), travel
+  and first layer accelerations, each "Auto" (the printer's own) until set. While all
+  are on Auto nothing is written. Once one is set, a change is written before the moves
+  that need it, and only when the value changes: `M204 P` (printing) and `M204 T`
+  (travel) for Marlin and Prusa firmware, `SET_VELOCITY_LIMIT ACCEL=` for Klipper (one
+  acceleration for every move). X3G printers get none (Sailfish has no such command).
 * **Weight.** Filament volume × density. **Cost** = weight × price per kg.
 * **Seam** (`seam_start_aligned`). Each loop starts at a point chosen by the seam setting:
   * **Aligned (default, as shown in reference/picture-2.png):** the point closest to

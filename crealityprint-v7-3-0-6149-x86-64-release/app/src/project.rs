@@ -14,8 +14,8 @@ use crate::geometry::Vec3;
 use crate::model::{Mesh, PlacedObject, Triangle};
 use crate::printer::FoundPrinter;
 use crate::profiles::{
-    limits, Adhesion, DualNozzle, FeatureSpeeds, Filament, InfillPattern, PrintSettings, Printer,
-    Quality, SeamPosition, SpeedFeature,
+    limits, AccelFeature, Adhesion, DualNozzle, FeatureAccels, FeatureSpeeds, Filament,
+    InfillPattern, PrintSettings, Printer, Quality, SeamPosition, SpeedFeature,
 };
 use serde_json::{json, Value};
 use std::ops::RangeInclusive;
@@ -101,6 +101,7 @@ pub fn to_json(p: &Project) -> String {
             "standby_drop": p.printer.standby_drop,
             "primary_nozzle": p.printer.primary_nozzle,
             "nozzle_spacing": p.printer.nozzle_spacing,
+            "acceleration": p.printer.acceleration,
         },
         "filament": filament_json(&p.filament),
         "dual": {
@@ -123,6 +124,10 @@ pub fn to_json(p: &Project) -> String {
             "print_speed": s.print_speed,
             "first_layer_speed": s.first_layer_speed,
             "travel_speed": s.travel_speed,
+            "feature_accels": AccelFeature::ALL
+                .into_iter()
+                .map(|f| (f.key().to_string(), json!(s.accels.get(f))))
+                .collect::<serde_json::Map<String, Value>>(),
             "feature_speeds": SpeedFeature::ALL
                 .into_iter()
                 .map(|f| (f.key().to_string(), json!(s.speeds.get(f))))
@@ -250,6 +255,13 @@ fn project_from(v: &Value) -> Result<Project, String> {
             base.nozzle_spacing,
             limits::NOZZLE_SPACING,
         ),
+        // Projects from before this setting: the preset of the same name's value.
+        acceleration: num_in(
+            pr,
+            "acceleration",
+            crate::profiles::preset_acceleration(&text_of(pr, "name").unwrap_or_default()),
+            limits::ACCELERATION,
+        ),
     };
 
     let filament = filament_from(v.get("filament").unwrap_or(&empty));
@@ -279,6 +291,15 @@ fn project_from(v: &Value) -> Result<Project, String> {
     let d = PrintSettings::default();
     let pick = |k: &str| text_of(st, k).unwrap_or_default();
     // Each feature speed: a number, or missing / null for "Auto".
+    // Each acceleration: a number, or missing / null for "Auto".
+    let mut feature_accels = FeatureAccels::default();
+    if let Some(fa) = st.get("feature_accels") {
+        for f in AccelFeature::ALL {
+            let r = limits::ACCELERATION;
+            let v = fa.get(f.key()).and_then(Value::as_f64);
+            feature_accels.set(f, v.map(|v| (v as f32).clamp(*r.start(), *r.end())));
+        }
+    }
     let mut feature_speeds = FeatureSpeeds::default();
     if let Some(fs) = st.get("feature_speeds") {
         for f in SpeedFeature::ALL {
@@ -313,6 +334,7 @@ fn project_from(v: &Value) -> Result<Project, String> {
         ),
         travel_speed: num_in(st, "travel_speed", d.travel_speed, limits::TRAVEL_SPEED),
         speeds: feature_speeds,
+        accels: feature_accels,
         supports: flag(st, "supports", d.supports),
         support_angle: num_in(st, "support_angle", d.support_angle, limits::SUPPORT_ANGLE),
         supports_on_plate_only: flag(st, "supports_on_plate_only", d.supports_on_plate_only),
@@ -624,6 +646,26 @@ mod tests {
         let old =
             from_json(r#"{"format":"printcraft-project","version":1,"settings":{}}"#).unwrap();
         assert_eq!(old.settings.speeds, FeatureSpeeds::default());
+    }
+
+    #[test]
+    fn test_project_accelerations_round_trip_and_default_by_printer() {
+        let mut p = sample();
+        p.printer.acceleration = 3456.0;
+        p.settings.accels.set(AccelFeature::Infill, Some(4200.0));
+        let back = from_json(&to_json(&p)).unwrap();
+        assert_eq!(back.printer.acceleration, 3456.0);
+        assert_eq!(back.settings.accels, p.settings.accels);
+        // A project from before accelerations: the preset of the same name's value.
+        let old = from_json(
+            r#"{"format":"printcraft-project","version":1,"printer":{"name":"Creality Ender-3 V3 KE"},
+                "settings":{"feature_accels":{"travel":99999}}}"#,
+        )
+        .unwrap();
+        assert_eq!(old.printer.acceleration, 8000.0);
+        let max = *limits::ACCELERATION.end();
+        assert_eq!(old.settings.accels.get(AccelFeature::Travel), Some(max));
+        assert_eq!(old.settings.accels.get(AccelFeature::OuterWall), None);
     }
 
     #[test]

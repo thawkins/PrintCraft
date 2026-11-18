@@ -9,7 +9,7 @@
 //! The look is PrintCraft's own (no logos or brand artwork).
 
 use super::*;
-use crate::profiles::SpeedFeature;
+use crate::profiles::{AccelFeature, SpeedFeature};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum ProcessTab {
@@ -198,6 +198,16 @@ impl PrintCraftApp {
                                 "2 for printers with two nozzles on one carriage (Creator Pro, Replicator Dual): each part can have its own nozzle and filament",
                             );
                             ui.add(egui::DragValue::new(&mut self.printer.extruders).range(1..=2));
+                            ui.end_row();
+                            ui.label("Acceleration").on_hover_text(
+                                "The printer's own acceleration, as its firmware is set up: used for the time estimate and for accelerations left on Auto",
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut self.printer.acceleration)
+                                    .range(limits::ACCELERATION)
+                                    .speed(50.0)
+                                    .suffix(" mm/s²"),
+                            );
                             ui.end_row();
                             ui.label("Retract on travels over").on_hover_text(
                                 "Travels longer than this pull the filament back first, so it doesn't ooze or string on the way",
@@ -600,9 +610,10 @@ impl PrintCraftApp {
             let primary = self.printer.primary_tool();
             two_nozzle_group(ui, &mut self.dual, self.settings.supports, primary);
         }
+        let machine_accel = self.printer.acceleration;
         let s = &mut self.settings;
         adhesion_group(ui, s);
-        speed_group(ui, s, advanced);
+        speed_group(ui, s, advanced, machine_accel);
         if advanced {
             cooling_and_travel_group(ui, s);
             special_mode_group(ui, s);
@@ -802,7 +813,7 @@ fn adhesion_group(ui: &mut Ui, s: &mut PrintSettings) {
 }
 
 /// Print speed, plus first layer and travel speeds in Advanced.
-fn speed_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
+fn speed_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool, machine_accel: f32) {
     group(ui, "Speed", |ui| {
         row(
             ui,
@@ -830,45 +841,77 @@ fn speed_group(ui: &mut Ui, s: &mut PrintSettings, advanced: bool) {
                     .suffix(" mm/s"),
             );
             for f in SpeedFeature::ALL {
-                feature_speed_row(ui, s, f);
+                let auto = f.auto_speed(s.print_speed);
+                let set = s.speeds.get(f);
+                let hint = "Follow the print speed";
+                if let Some(v) = auto_row(ui, f.label(), set, auto, AutoUnit::Speed, hint) {
+                    s.speeds.set(f, v);
+                }
+            }
+            for f in AccelFeature::ALL {
+                let set = s.accels.get(f);
+                let hint = "Use the printer's own acceleration (set in the printer editor)";
+                if let Some(v) = auto_row(ui, f.label(), set, machine_accel, AutoUnit::Accel, hint)
+                {
+                    s.accels.set(f, v);
+                }
             }
         }
     });
 }
 
-/// One feature's speed: "Auto" follows the print speed; unticking it sets a speed of the
-/// feature's own, starting from the speed it had.
-fn feature_speed_row(ui: &mut Ui, s: &mut PrintSettings, f: SpeedFeature) {
-    ui.label(f.label());
+/// The unit and range of an `auto_row`.
+#[derive(Clone, Copy)]
+enum AutoUnit {
+    /// mm/s, within the print speed limits.
+    Speed,
+    /// mm/s^2, within the acceleration limits.
+    Accel,
+}
+
+/// A setting that is "Auto" (`set` is None) until given a value of its own. The row shows
+/// the Auto value greyed, or a field for the value set; unticking Auto starts from the
+/// Auto value. Returns the new setting when it changed.
+fn auto_row(
+    ui: &mut Ui,
+    label: &str,
+    set: Option<f32>,
+    auto: f32,
+    unit: AutoUnit,
+    hint: &str,
+) -> Option<Option<f32>> {
+    let (range, step, suffix) = match unit {
+        AutoUnit::Speed => (limits::PRINT_SPEED, 1.0, " mm/s"),
+        AutoUnit::Accel => (limits::ACCELERATION, 50.0, " mm/s²"),
+    };
+    let mut changed = None;
+    ui.label(label);
     ui.horizontal(|ui| {
-        let mut auto = s.speeds.get(f).is_none();
+        let mut is_auto = set.is_none();
         if ui
-            .checkbox(&mut auto, "Auto")
-            .on_hover_text("Follow the print speed")
+            .checkbox(&mut is_auto, "Auto")
+            .on_hover_text(hint)
             .changed()
         {
-            let speed = (!auto).then(|| f.auto_speed(s.print_speed));
-            s.speeds.set(f, speed);
+            changed = Some((!is_auto).then_some(auto));
         }
-        match s.speeds.get(f) {
-            Some(mut v) => {
+        match set {
+            Some(mut v) if !is_auto => {
                 let drag = egui::DragValue::new(&mut v)
-                    .range(limits::PRINT_SPEED)
-                    .speed(1.0)
-                    .suffix(" mm/s");
+                    .range(range)
+                    .speed(step)
+                    .suffix(suffix);
                 if ui.add(drag).changed() {
-                    s.speeds.set(f, Some(v));
+                    changed = Some(Some(v));
                 }
             }
-            None => {
-                ui.label(
-                    RichText::new(format!("{:.0} mm/s", f.auto_speed(s.print_speed)))
-                        .color(theme::TEXT_DIM),
-                );
+            Some(_) | None => {
+                ui.label(RichText::new(format!("{auto:.0}{suffix}")).color(theme::TEXT_DIM));
             }
         }
     });
     ui.end_row();
+    changed
 }
 
 /// Minimum layer time and z-hop (Advanced only).
