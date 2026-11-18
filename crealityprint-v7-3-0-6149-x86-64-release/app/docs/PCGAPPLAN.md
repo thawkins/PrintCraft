@@ -88,7 +88,7 @@ Goal: different parts of a print can use different settings. This needs M2.1.
 | ID | Task | Done when | Est. |
 |---|---|---|---|
 | M4.1 | **Done.** **Settings overlay model.** An object holds a sparse set of overrides over the plate settings, from the M2.1 registry. The slicer takes the effective settings per object. | Tests: two objects with different infill slice differently. Projects save the overrides. | 3 |
-| M4.2 | **Per-object settings UI.** The object list shows an "override" badge. A panel adds or removes overrides for the selected object. | Screenshot. Removing an override restores the plate value. | 2 |
+| M4.2 | **Done.** **Per-object settings UI.** The object list shows an "override" badge. A panel adds or removes overrides for the selected object. | Screenshot. Removing an override restores the plate value. | 2 |
 | M4.3 | **Height-range overrides.** Overrides from Z1 to Z2 for an object, for example denser infill near the top. | Test: the infill changes exactly at the range's layers. | 2.5 |
 | M4.4 | **Modifier volumes.** Add a box, cylinder or sphere (or an imported mesh) as a modifier. Regions of the object inside it use the modifier's overrides. The slicer splits each layer's region by the modifier outline. | Test: a box modifier with 100 % infill in a cube gives solid infill only inside the box. | 4 |
 | M4.5 | **Support blockers and enforcers.** Special modifier volumes that remove or force supports. | Tests: a blocker removes supports in its footprint, and an enforcer adds them under a shallow overhang. | 2 |

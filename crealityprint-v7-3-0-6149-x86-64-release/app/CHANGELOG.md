@@ -9,13 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-object settings panel (gap plan task M4.2). On the Objects tab, "Settings for
+  this object" lists the settings the selected part has of its own, by section, each
+  with an x button that puts it back on the plate's value. "Add a setting..." gives the
+  part one more, starting at the plate's value. Parts with settings of their own show
+  a "2 settings" style badge in the object list.
 - Per-object settings, the model underneath (gap plan task M4.1). A part can override
   some of the plate's print settings: walls, top and bottom layers, infill density,
   pattern and overlap, ironing, fuzzy skin, and elephant-foot and hole compensation.
   Parts with overrides are sliced with their own settings; the skirt, brim, raft and
   supports still come from the whole plate. Projects save a part's overrides (parts
-  without any are written as before). A cut or split part keeps its overrides. The
-  panel to edit them comes next (M4.2); until then they come from project files.
+  without any are written as before). A cut or split part keeps its overrides.
 
 ### Fixed
 

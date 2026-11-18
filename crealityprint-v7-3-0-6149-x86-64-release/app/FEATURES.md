@@ -27,7 +27,7 @@ Status:
 | Mesh repair | **Yes (new)**: on import, merges points less than 0.0001 mm apart, removes collapsed faces, turns faces the right way out and closes simple holes; the status bar says what was fixed |
 | Cut tool | **Yes (new)**: horizontal cut at a chosen height ("Cut at" on the Objects tab), keeping both parts, the lower or the upper; cut faces are closed and the upper part is turned onto its cut face |
 | Split to objects | **Yes (new)**: Split in the Selected object card makes each separate piece its own object, where it stood |
-| Per-object settings | **Partly (new)**: a part can override walls, top and bottom layers, infill, ironing, fuzzy skin and size compensation, saved in the project; the panel to edit them is still to come |
+| Per-object settings | **Yes (new)**: "Settings for this object" on the Objects tab; a part can override walls, top and bottom layers, infill, ironing, fuzzy skin and size compensation; saved in the project; the object list marks parts that have any |
 | Modifiers, height range modifiers | Not yet |
 | Variable layer height | Not yet |
 | Multiple plates, sequential (one-at-a-time) printing | Not yet |

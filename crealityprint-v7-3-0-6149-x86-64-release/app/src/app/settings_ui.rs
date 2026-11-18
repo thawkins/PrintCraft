@@ -3,6 +3,7 @@
 //! `Kind` asks for. Adding a print setting to the registry adds its row here.
 
 use super::*;
+use crate::overrides;
 use crate::settings_registry::{self, AutoContext, Group, Kind, Level, Setting, Value};
 
 /// One section of the settings panel: a heading with an accent bar and a two-column
@@ -187,4 +188,141 @@ fn auto_widget(
         }
     });
     changed
+}
+
+/// The object list's badge for a part with `n` settings of its own.
+pub(super) fn override_badge(n: usize) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some("1 setting".into()),
+        n => Some(format!("{n} settings")),
+    }
+}
+
+/// A value as the panel words it, for "the plate's value" hints.
+fn value_text(kind: &Kind, v: Value) -> String {
+    let suffix = match kind {
+        Kind::Number { suffix, .. } | Kind::Count { suffix, .. } | Kind::Auto { suffix, .. } => {
+            *suffix
+        }
+        Kind::Flag | Kind::Choice { .. } => "",
+    };
+    match v {
+        Value::Num(x) | Value::Auto(Some(x)) => {
+            format!(
+                "{}{suffix}",
+                crate::gcode_template::format_number(f64::from(x))
+            )
+        }
+        Value::Count(n) => format!("{n}{suffix}"),
+        Value::Flag(b) => if b { "on" } else { "off" }.into(),
+        Value::Choice(c) => c.into(),
+        Value::Auto(None) => "Auto".into(),
+    }
+}
+
+impl PrintCraftApp {
+    /// Gives object `i` setting `key` of its own, starting at the plate's value (so
+    /// nothing prints differently until it is changed). A setting it already has keeps
+    /// its value; one a part can't have is not added.
+    pub(super) fn add_override(&mut self, i: usize, key: &str) {
+        let Some(o) = self.objects.get_mut(i) else {
+            return;
+        };
+        if o.overrides.get(key).is_some() {
+            return;
+        }
+        if let Some(r) = overrides::per_object_settings().find(|r| r.key == key) {
+            o.overrides.set(key, (r.get)(&self.settings));
+        }
+    }
+
+    /// Object `i` goes back to the plate's value of `key`.
+    pub(super) fn remove_override(&mut self, i: usize, key: &str) {
+        if let Some(o) = self.objects.get_mut(i) {
+            o.overrides.remove(key);
+        }
+    }
+
+    /// "Settings for this object": each setting the selected part has of its own, with
+    /// a button back to the plate's value, and a list to add another.
+    pub(super) fn object_settings_card(&mut self, ui: &mut Ui, i: usize) {
+        let mut edit: Option<(&'static str, Value)> = None;
+        let mut remove: Option<&'static str> = None;
+        let mut add: Option<&'static str> = None;
+        let plate = &self.settings;
+        let overrides = &self.objects[i].overrides;
+        card(ui, "Settings for this object", |ui| {
+            let effective = overrides.apply(plate);
+            let (own, others): (Vec<&Setting>, Vec<&Setting>) =
+                overrides::per_object_settings().partition(|r| overrides.get(r.key).is_some());
+            if own.is_empty() {
+                ui.label(
+                    RichText::new(
+                        "Prints with the plate's settings. Add a setting to print this part \
+                         differently.",
+                    )
+                    .color(theme::TEXT_DIM),
+                );
+            } else {
+                egui::Grid::new("object_settings")
+                    .num_columns(3)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        let mut section = None;
+                        for r in own {
+                            // The section's name over its rows, as on the Global tab.
+                            if section != Some(r.group) {
+                                section = Some(r.group);
+                                ui.label(RichText::new(r.group.title()).color(theme::TEXT_DIM));
+                                ui.end_row();
+                            }
+                            ui.label(r.label);
+                            let mut v = (r.get)(&effective);
+                            let id = format!("object_{}", r.key);
+                            if ui.add(value_widget(&r.kind, &mut v, &id)).changed() {
+                                edit = Some((r.key, v));
+                            }
+                            let plate_value = value_text(&r.kind, (r.get)(plate));
+                            if ui
+                                .small_button("x")
+                                .on_hover_text(format!("Use the plate's value ({plate_value})"))
+                                .clicked()
+                            {
+                                remove = Some(r.key);
+                            }
+                            ui.end_row();
+                        }
+                    });
+            }
+            if !others.is_empty() {
+                egui::ComboBox::from_id_salt("add_object_setting")
+                    .selected_text("Add a setting...")
+                    .show_ui(ui, |ui| {
+                        let mut section = None;
+                        for r in others {
+                            if section != Some(r.group) {
+                                section = Some(r.group);
+                                ui.label(RichText::new(r.group.title()).color(theme::TEXT_DIM));
+                            }
+                            if ui
+                                .selectable_label(false, format!("  {}", r.label))
+                                .clicked()
+                            {
+                                add = Some(r.key);
+                            }
+                        }
+                    });
+            }
+        });
+        if let Some((key, v)) = edit {
+            self.objects[i].overrides.set(key, v);
+        }
+        if let Some(key) = remove {
+            self.remove_override(i, key);
+        }
+        if let Some(key) = add {
+            self.add_override(i, key);
+        }
+    }
 }

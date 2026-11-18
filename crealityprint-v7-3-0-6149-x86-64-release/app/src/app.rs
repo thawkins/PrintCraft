@@ -953,6 +953,7 @@ impl PrintCraftApp {
             return;
         };
         self.selected_object_card(ui, i);
+        self.object_settings_card(ui, i);
     }
 
     /// "Objects on the plate": one selectable row per object, in the warning colour when
@@ -971,15 +972,24 @@ impl PrintCraftApp {
                 if !fits {
                     text = text.color(theme::OBJECT_OUTSIDE);
                 }
-                let r = ui.selectable_label(self.selected == Some(i), text);
-                let r = if fits {
-                    r
-                } else {
-                    r.on_hover_text("Doesn't fit on the plate")
-                };
-                if r.clicked() {
-                    self.selected = Some(i);
-                }
+                ui.horizontal(|ui| {
+                    let r = ui.selectable_label(self.selected == Some(i), text);
+                    let r = if fits {
+                        r
+                    } else {
+                        r.on_hover_text("Doesn't fit on the plate")
+                    };
+                    if r.clicked() {
+                        self.selected = Some(i);
+                    }
+                    let own = &self.objects[i].overrides;
+                    if let Some(badge) = settings_ui::override_badge(own.len()) {
+                        ui.label(RichText::new(badge).size(12.0).color(theme::ACCENT))
+                            .on_hover_text(
+                                "Prints with settings of its own: select it to see them",
+                            );
+                    }
+                });
             }
         });
     }
@@ -2665,6 +2675,55 @@ mod tests {
         assert!(saved.exists(), "saved first");
         assert!(app.objects.is_empty(), "then the new project");
         std::fs::remove_file(saved).unwrap();
+    }
+
+    #[test]
+    fn test_object_override_added_at_plate_value_and_removed_back_to_it() {
+        use crate::settings_registry::Value;
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(cube("box"));
+        let plate = app.settings.clone();
+        assert_eq!(settings_ui::override_badge(0), None);
+        // Added: it starts at the plate's value, so nothing prints differently yet.
+        app.add_override(0, "infill_percent");
+        assert_eq!(
+            app.objects[0].overrides.get("infill_percent"),
+            Some(Value::Num(plate.infill_percent))
+        );
+        assert_eq!(settings_ui::override_badge(1).as_deref(), Some("1 setting"));
+        // Changed: the part prints with its own value, the plate keeps its own.
+        app.objects[0]
+            .overrides
+            .set("infill_percent", Value::Num(80.0));
+        assert_eq!(
+            app.objects[0].overrides.apply(&app.settings).infill_percent,
+            80.0
+        );
+        assert_eq!(app.settings.infill_percent, plate.infill_percent);
+        app.add_override(0, "walls");
+        assert_eq!(
+            settings_ui::override_badge(2).as_deref(),
+            Some("2 settings")
+        );
+        // Adding one it already has keeps its value.
+        app.add_override(0, "infill_percent");
+        assert_eq!(
+            app.objects[0].overrides.get("infill_percent"),
+            Some(Value::Num(80.0))
+        );
+        // Removed: back to the plate's value, and later plate changes reach the part.
+        app.remove_override(0, "infill_percent");
+        app.remove_override(0, "walls");
+        assert!(app.objects[0].overrides.is_empty());
+        assert_eq!(app.objects[0].overrides.apply(&app.settings), app.settings);
+        app.settings.infill_percent = 40.0;
+        assert_eq!(
+            app.objects[0].overrides.apply(&app.settings).infill_percent,
+            40.0
+        );
+        // A setting a part can't have is not added.
+        app.add_override(0, "layer_height");
+        assert!(app.objects[0].overrides.is_empty());
     }
 
     #[test]

@@ -43,9 +43,6 @@ pub struct Overrides(BTreeMap<&'static str, Value>);
 impl Overrides {
     /// Overrides setting `key` with `v` (made valid for it). Returns false, changing
     /// nothing, when `key` isn't a setting a part can override.
-    // Until the per-object settings panel (gap plan M4.2) edits overrides, only
-    // project files and tests set them.
-    #[allow(dead_code)]
     pub fn set(&mut self, key: &str, v: Value) -> bool {
         match setting(key) {
             Some(s) => {
@@ -57,19 +54,18 @@ impl Overrides {
     }
 
     /// Goes back to the plate's value for `key`.
-    // Until the per-object settings panel (gap plan M4.2) edits overrides, only
-    // project files and tests set them.
-    #[allow(dead_code)]
     pub fn remove(&mut self, key: &str) {
         self.0.remove(key);
     }
 
     /// The overriding value for `key`, if there is one.
-    // Until the per-object settings panel (gap plan M4.2) edits overrides, only
-    // project files and tests set them.
-    #[allow(dead_code)]
     pub fn get(&self, key: &str) -> Option<Value> {
         self.0.get(key).copied()
+    }
+
+    /// How many settings are overridden.
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
