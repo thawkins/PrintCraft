@@ -81,10 +81,13 @@ jobs:
           grep -q '^;END$' "$out"
           echo "$(grep -c '^;LAYER:' "$out") layers, $(wc -c < "$out") bytes"
 
-      # The window opens and draws (a picture of the cube on the plate). Runners may have
-      # no usable OpenGL, so a failure here is reported but doesn't fail the job.
+      # The window opens and draws (a picture of the cube on the plate). GitHub's Windows
+      # machines have no OpenGL 2, so Mesa's software OpenGL (llvmpipe) is installed there.
+      - name: Windows software OpenGL
+        if: runner.os == 'Windows'
+        uses: ssciwr/setup-mesa-dist-win@v3
+
       - name: App starts (screenshot)
-        continue-on-error: true
         timeout-minutes: 3
         run: |
           shot="$RUNNER_TEMP/printcraft-${{ runner.os }}.png"
