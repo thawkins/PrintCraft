@@ -234,6 +234,12 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   print at 25 mm/s. The person reported the old single 9 mm line didn't clear the nozzle;
   the new purge pushes about 3× as much.
 * **End.** Retract 2 mm, lift 10 mm, park at the back-left, heaters off, motors off.
+* **Progress** (gap plan M2.6). On Marlin and Prusa firmware printers, each layer gets
+  `M73 P<percent> R<minutes left>` (after its `;LAYER:` marker and any custom
+  before-each-layer block), and the end gets `M73 P100 R0`. Percent is by time (the
+  estimate so far over the total), rounded down so only the end says 100; minutes are
+  rounded up, so only the end says 0. Klipper printers work out their own progress and
+  get none; X3G files carry their own, and the translator skips `M73`.
 * **Preview colours and times** (gap plan M2.5). The G-code writer records, for every
   path, what it is printed at: speed after cooling slow-down, line width, part fan,
   nozzle temperature and the seconds it takes (`GcodeOutput::path_stats`), and splits

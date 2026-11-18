@@ -91,6 +91,7 @@ a project file fall back to defaults, so older and newer files still open.
 
 | Feature | PrintCraft |
 |---|---|
+| Progress on the printer's screen (M73) | **Yes (new)**: percent and minutes left at every layer, Marlin and Prusa firmware |
 | Preview colours by speed, line width, layer height, fan and temperature, and print time per line type | **Yes (new)**: "Colour by" in the Show box, blue-to-red scale; times add up to the estimate |
 | 3D layer preview with a slider, colour by feature type | Yes (ironing is now its own colour) |
 | Time, filament, weight and cost estimates | Yes |

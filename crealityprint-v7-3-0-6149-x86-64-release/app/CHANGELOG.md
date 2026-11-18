@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Progress for the printer's screen (gap plan task M2.6): on Marlin and Prusa firmware
+  printers every layer gets `M73 P<percent> R<minutes left>`, by time, ending with
+  `M73 P100 R0`. Klipper printers (which work out their own) and X3G files are
+  unchanged; the X3G translator now skips `M73` lines instead of refusing them.
 - Preview colouring and times (gap plan task M2.5). "Colour by" in the preview's Show
   box replaces "Colour by nozzle": line type, nozzle, speed, line width, layer height,
   fan or temperature, the value modes on a blue-to-red scale with a scale bar. Each line

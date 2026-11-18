@@ -135,6 +135,33 @@ pub fn check_custom_gcode(printer: &Printer) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether progress lines (`M73`) are written: Marlin and Prusa firmware show them on
+/// the screen. Klipper works out its own progress, and X3G files carry their own.
+fn writes_progress(printer: &Printer) -> bool {
+    !printer.klipper && !printer.x3g
+}
+
+/// `text` with `M73 P<percent> R<minutes left>` at each mark (a byte offset and the
+/// seconds elapsed there), for a print of `total` seconds. Percent is rounded down, so
+/// only the end line says 100; minutes are rounded up, so only the end says 0.
+fn with_progress(text: &str, marks: &[(usize, f32)], total: f32) -> String {
+    if marks.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + 20 * marks.len());
+    let mut from = 0;
+    for &(at, elapsed) in marks {
+        out.push_str(&text[from..at]);
+        let total = total.max(1.0);
+        let percent = ((elapsed / total) * 100.0).floor().clamp(0.0, 99.0) as u32;
+        let minutes = ((total - elapsed).max(0.0) / 60.0).ceil().max(1.0) as u32;
+        let _ = writeln!(out, "M73 P{percent} R{minutes}");
+        from = at;
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
 /// Adds custom G-code `text` to `g` as written, ending with a line break. Blank text
 /// adds nothing.
 fn push_block(g: &mut String, text: &str) {
@@ -716,6 +743,9 @@ struct Writer<'a> {
     kind_seconds: Vec<(PathKind, f32)>,
     /// Seconds travelling.
     travel_seconds: f32,
+    /// Where each layer's progress line goes (just after its `;LAYER:` line) and the
+    /// time so far there; the lines are written at the end, once the total is known.
+    progress_marks: Vec<(usize, f32)>,
 }
 
 /// The nozzles a print uses, and which one it starts with.
@@ -1127,6 +1157,7 @@ impl<'a> Writer<'a> {
                 .collect(),
             kind_seconds: Vec::new(),
             travel_seconds: 0.0,
+            progress_marks: Vec::new(),
         }
     }
 
@@ -1459,6 +1490,10 @@ impl<'a> Writer<'a> {
             &mut self.g,
             &render_block(&self.printer.layer_change_gcode, &here),
         );
+        // Progress follows the custom block, which comes right after the marker.
+        if writes_progress(self.printer) {
+            self.progress_marks.push((self.g.len(), self.seconds));
+        }
         // Vase mode: above the solid bottom, the wall climbs continuously instead.
         let spiral = self.s.vase_mode && li >= self.s.bottom_layers as usize && li > 0;
         if !spiral {
@@ -1707,6 +1742,9 @@ impl<'a> Writer<'a> {
         let (printer, filament, g) = (self.printer, self.filament, &mut self.g);
         let top = result.layers.last().map(|l| l.z).unwrap_or(0.0);
         let _ = writeln!(g, ";END");
+        if writes_progress(printer) {
+            let _ = writeln!(g, "M73 P100 R0 ; done");
+        }
         if printer.end_gcode.trim().is_empty() {
             let _ = writeln!(g, "G1 E{:.5} F2400 ; retract", self.ext.e - 2.0);
             let _ = writeln!(g, "G0 Z{:.2} F600", (top + 10.0).min(printer.max_z));
@@ -1793,6 +1831,7 @@ impl<'a> Writer<'a> {
             }
         }
         g.push_str(&config_block(filament, self.s, printer));
+        let text = with_progress(&self.g, &self.progress_marks, seconds);
         let printing: f32 = self.kind_seconds.iter().map(|(_, s)| s).sum();
         let times = FeatureTimes {
             by_kind: self.kind_seconds,
@@ -1800,7 +1839,7 @@ impl<'a> Writer<'a> {
             other: (seconds - printing - self.travel_seconds).max(0.0),
         };
         GcodeOutput {
-            text: self.g,
+            text,
             estimate,
             path_stats: self.stats,
             times,
@@ -3092,6 +3131,60 @@ mod tests {
         let by_path: f32 = out.path_stats.iter().flatten().map(|p| p.seconds).sum();
         let printed: f32 = t.by_kind.iter().map(|(_, s)| s).sum();
         assert!((by_path - printed).abs() < 0.01, "{by_path} vs {printed}");
+    }
+
+    /// The M73 lines of a G-code text, as (percent, minutes left).
+    fn progress_lines(text: &str) -> Vec<(u32, u32)> {
+        text.lines()
+            .filter(|l| l.starts_with("M73 "))
+            .map(|l| {
+                let word = |c: char| {
+                    l.split_whitespace()
+                        .find_map(|w| w.strip_prefix(c))
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap()
+                };
+                (word('P'), word('R'))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_progress_rises_to_100_on_marlin() {
+        let printer = Printer::presets()[0].clone();
+        assert!(!printer.klipper && !printer.x3g);
+        let (r, out) = square_on(&printer);
+        let p = progress_lines(&out.text);
+        // One per layer, and one at the end.
+        assert_eq!(p.len(), r.layers.len() + 1);
+        assert!(
+            p.windows(2).all(|w| w[0].0 <= w[1].0),
+            "percent never falls: {p:?}"
+        );
+        assert!(
+            p.windows(2).all(|w| w[0].1 >= w[1].1),
+            "minutes left never rise: {p:?}"
+        );
+        assert_eq!(*p.last().unwrap(), (100, 0));
+        assert!(p[0].0 < 100 && p[0].1 >= 1);
+        // Each layer's line comes right after its marker.
+        assert!(out
+            .text
+            .contains(&format!(";LAYER:0\nM73 P{} R{}\n", p[0].0, p[0].1)));
+        // The first line's minutes left are about the estimate.
+        let total_min = out.estimate.seconds / 60.0;
+        assert!((p[0].1 as f32) <= total_min.ceil() && (p[0].1 as f32) > total_min * 0.5);
+    }
+
+    #[test]
+    fn test_no_progress_lines_on_klipper_or_x3g() {
+        for printer in Printer::presets()
+            .into_iter()
+            .filter(|p| p.klipper || p.x3g)
+        {
+            let (_, out) = square_on(&printer);
+            assert!(progress_lines(&out.text).is_empty(), "{}", printer.name);
+        }
     }
 
     #[test]

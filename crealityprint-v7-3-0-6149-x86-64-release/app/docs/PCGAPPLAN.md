@@ -66,7 +66,7 @@ afterwards.
 | M2.3 | **Done.** **Placeholders.** `{bed_temp}`, `{nozzle_temp}`, `{layer_num}`, `{layer_z}`, `{first_layer_temp}`, `{print_min_x}` etc., plus `{if}`/`{else}` on numeric comparisons. Unknown names give a slice error naming the placeholder. | Tests: each placeholder substitutes. A bad name gives the error, not silent text. | 2 |
 | M2.4 | **Done.** **Colour change and pause at layer.** In the preview layer slider, add "Add colour change" (M600) and "Add pause" (M601/`PAUSE`) markers. They are stored in the project and shown on the slider. | Test: the command is emitted before the chosen layer. Screenshot of the markers. | 1.5 |
 | M2.5 | **Done.** **Preview colouring.** Colour by speed, line width, layer height, fan and temperature, with a legend. Show time per feature in the legend. | Screenshots of each mode on the bridge test. The per-feature times add up to the total. | 2 |
-| M2.6 | **M73 progress.** Emit M73 P/R (remaining minutes) at each layer for Marlin/Prusa flavours. | Test: P rises monotonically to 100. | 0.5 |
+| M2.6 | **Done.** **M73 progress.** Emit M73 P/R (remaining minutes) at each layer for Marlin/Prusa flavours. | Test: P rises monotonically to 100. | 0.5 |
 
 ## M3: Editing basics (0.3.0)
 

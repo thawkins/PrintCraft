@@ -357,6 +357,8 @@ fn line(st: &mut State, cmd: &str, words: &[(char, &str)], code: &str) -> Result
             });
             Ok(())
         }
+        // Progress for a screen: an X3G build reports its own, from the layer markers.
+        "M73" => Ok(()),
         "M117" => {
             let text = code.get(4..).unwrap_or("").trim();
             st.out.actions.extend(Action::message(text));
@@ -790,6 +792,20 @@ mod tests {
         assert!(e.why.contains("homed"), "{e}");
         let e = translate("T2\n", &Machine::creator_pro(), &opts()).unwrap_err();
         assert!(e.why.contains("2 nozzle"), "{e}");
+    }
+
+    #[test]
+    fn test_progress_lines_are_skipped() {
+        // X3G builds carry their own progress (from the layer markers), so M73 adds nothing.
+        let t = translate(
+            "M73 P10 R5\nM73 P100 R0\n",
+            &Machine::creator_pro(),
+            &opts(),
+        )
+        .unwrap();
+        let empty = translate("", &Machine::creator_pro(), &opts()).unwrap();
+        assert_eq!(t.actions, empty.actions, "M73 adds no packets");
+        assert!(t.warnings.is_empty(), "{:?}", t.warnings);
     }
 
     #[test]
