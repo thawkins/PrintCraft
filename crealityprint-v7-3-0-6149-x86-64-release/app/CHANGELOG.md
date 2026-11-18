@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Undo and redo (gap plan task M3.1): an Edit menu beside File, Ctrl+Z, and Ctrl+Y or
+  Ctrl+Shift+Z. Every change to the plate (adding, deleting, moving, turning, scaling,
+  arranging parts) and to the settings, printer, filament, two-nozzle choices and
+  colour changes or pauses can be undone, up to 100 steps. A whole drag, or a value
+  typed into a field, is one step. New and Open start a new history. Parts' shapes are
+  shared between steps, so the history stays small.
+
 ## [0.0.7] - 2026-11-18
 
 ### Added

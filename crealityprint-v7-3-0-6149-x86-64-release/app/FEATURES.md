@@ -21,6 +21,7 @@ Status:
 | STEP, AMF import | Not yet |
 | Selection marks and handles in the 3D view | **Yes (new)**. A selected model gets white corner brackets and its size above it. A tool strip on the left (Move M, Scale S, Rotate R) chooses the handles: red and green arrows move along X or Y; orange corner squares scale evenly (there is no separate X/Y/Z stretch); red, green and blue rings turn the model about X, Y or Z. There is no up/down arrow because models always rest on the plate. |
 | Move, rotate, scale, arrange, duplicate | Yes |
+| Undo / redo | **Yes (new)**: Edit menu, Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z; 100 steps of plate and settings changes; a drag or a typed value is one step |
 | Lay on face | **Simpler (new)**: "Lay flat" puts the biggest flat face down; you can't pick a face |
 | Cut tool, modifiers, height range modifiers, per-object settings | Not yet |
 | Variable layer height | Not yet |

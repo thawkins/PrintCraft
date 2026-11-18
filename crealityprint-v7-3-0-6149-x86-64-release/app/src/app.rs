@@ -162,6 +162,12 @@ pub struct PrintCraftApp {
     saved_fingerprint: String,
     /// Colour changes and pauses, by height, added to the print file (set in the preview).
     layer_events: Vec<crate::layer_events::LayerEvent>,
+    /// Undo and redo of plate and settings changes.
+    history: crate::history::History<PlateState>,
+    /// The plate and settings as of the last recorded step, and their fingerprint: a
+    /// change since then is recorded as one step once the edit is finished.
+    settled: PlateState,
+    settled_fp: String,
     /// New / Open waiting for an answer about unsaved changes.
     pending_project: Option<project_ui::ProjectAction>,
     egui_ctx: egui::Context,
@@ -177,65 +183,22 @@ pub struct PrintCraftApp {
 impl PrintCraftApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start: StartOptions) -> Self {
         theme::apply(&cc.egui_ctx);
-        let printers = Printer::presets();
-        let filaments = Filament::presets();
-        // The person's own printer (shown selected in reference/picture-2.png) comes first.
-        let printer = printers
-            .iter()
-            .find(|p| p.name.contains("Ender-3 V3 KE"))
-            .unwrap_or(&printers[0])
-            .clone();
         let capturing = start.screenshot.is_some();
-        let mut app = Self {
-            camera: Camera::for_plate(printer.bed_x, printer.bed_y),
-            printer,
-            printers,
-            filament: filaments[0].clone(),
-            dual: Default::default(),
-            filaments,
-            quality: Some(Quality::Standard),
-            settings: Quality::Standard.settings(),
-            objects: Vec::new(),
-            plate: Vec::new(),
-            selected: None,
-            mode: Mode::Prepare,
-            drag: Drag::None,
-            job: None,
-            sliced: None,
-            layer: 0,
-            hidden_kinds: Vec::new(),
-            preview_colour: PreviewColour::Type,
-            status: "Open a model (STL, OBJ or 3MF) or add a shape to start.".into(),
-            screenshot: start.screenshot.map(|path| ScreenshotTask {
-                path,
-                frames: 0,
-                requested: false,
-            }),
-            // Taking a check picture never changes the person's saved printers.
-            device: DevicePage::with_saved_printers(capturing),
-            process_tab: ProcessTab::Global,
-            advanced: false,
-            send_after_slice: false,
-            project_path: None,
-            saved_fingerprint: String::new(),
-            layer_events: Vec::new(),
-            pending_project: None,
-            egui_ctx: cc.egui_ctx.clone(),
-            tool: gizmo::Tool::Move,
-            gizmo_hover: None,
-            // Taking a check picture never changes the person's recent projects either.
-            recent: {
-                let path = crate::recent::RecentProjects::default_path();
-                if capturing {
-                    crate::recent::RecentProjects::load_read_only(path)
-                } else {
-                    crate::recent::RecentProjects::load(path)
-                }
-            },
-            open_file_menu: start.file_menu,
+        // Taking a check picture never changes the person's saved printers or recent
+        // projects.
+        let device = DevicePage::with_saved_printers(capturing);
+        let recent = {
+            let path = crate::recent::RecentProjects::default_path();
+            if capturing {
+                crate::recent::RecentProjects::load_read_only(path)
+            } else {
+                crate::recent::RecentProjects::load(path)
+            }
         };
-        app.saved_fingerprint = app.project_fingerprint();
+        let mut app = Self::build(&cc.egui_ctx, &start, device, recent);
         app.load_paths(&start.models);
+        // The models opened at start are where the undo history begins.
+        app.reset_history();
         if start.slice_on_start && !app.objects.is_empty() {
             app.start_slice();
         }
@@ -257,6 +220,80 @@ impl PrintCraftApp {
         if let Some(maximised) = start.camera {
             app.device.show_camera_when_ready(maximised);
         }
+        app
+    }
+
+    /// An app on an empty plate with no saved printers or recent projects, for tests:
+    /// it reads and writes nothing in the person's settings folder.
+    #[cfg(test)]
+    fn for_tests() -> Self {
+        Self::build(
+            &egui::Context::default(),
+            &StartOptions::default(),
+            DevicePage::default(),
+            crate::recent::RecentProjects::default(),
+        )
+    }
+
+    /// The app's starting state, with the printer page and recent projects given.
+    fn build(
+        ctx: &egui::Context,
+        start: &StartOptions,
+        device: DevicePage,
+        recent: crate::recent::RecentProjects,
+    ) -> Self {
+        let printers = Printer::presets();
+        let filaments = Filament::presets();
+        // The person's own printer (shown selected in reference/picture-2.png) comes first.
+        let printer = printers
+            .iter()
+            .find(|p| p.name.contains("Ender-3 V3 KE"))
+            .unwrap_or(&printers[0])
+            .clone();
+        let mut app = Self {
+            camera: Camera::for_plate(printer.bed_x, printer.bed_y),
+            printer,
+            printers,
+            filament: filaments[0].clone(),
+            dual: Default::default(),
+            filaments,
+            quality: Some(Quality::Standard),
+            settings: Quality::Standard.settings(),
+            objects: Vec::new(),
+            plate: Vec::new(),
+            selected: None,
+            mode: Mode::Prepare,
+            drag: Drag::None,
+            job: None,
+            sliced: None,
+            layer: 0,
+            hidden_kinds: Vec::new(),
+            preview_colour: PreviewColour::Type,
+            status: "Open a model (STL, OBJ or 3MF) or add a shape to start.".into(),
+            screenshot: start.screenshot.clone().map(|path| ScreenshotTask {
+                path,
+                frames: 0,
+                requested: false,
+            }),
+            device,
+            process_tab: ProcessTab::Global,
+            advanced: false,
+            send_after_slice: false,
+            project_path: None,
+            saved_fingerprint: String::new(),
+            layer_events: Vec::new(),
+            history: crate::history::History::new(UNDO_STEPS),
+            settled: PlateState::default(),
+            settled_fp: String::new(),
+            pending_project: None,
+            egui_ctx: ctx.clone(),
+            tool: gizmo::Tool::Move,
+            gizmo_hover: None,
+            recent,
+            open_file_menu: start.file_menu,
+        };
+        app.saved_fingerprint = app.project_fingerprint();
+        app.reset_history();
         app
     }
 
@@ -486,6 +523,93 @@ impl PrintCraftApp {
             second: self.dual.second_filament.clone(),
             ditto: self.dual.ditto,
         })
+    }
+
+    /// The plate and settings as they are now, for the undo history.
+    fn capture(&self) -> PlateState {
+        PlateState {
+            objects: self.objects.clone(),
+            settings: self.settings.clone(),
+            quality: self.quality,
+            printer: Some(self.printer.clone()),
+            filament: Some(self.filament.clone()),
+            dual: self.dual.clone(),
+            layer_events: self.layer_events.clone(),
+        }
+    }
+
+    /// Puts back a state from the undo history. The selection and any drag are dropped
+    /// (they may point at a part that is gone); the slice stays, marked out of date if the
+    /// plate differs from it.
+    fn restore(&mut self, s: PlateState) {
+        self.objects = s.objects;
+        self.settings = s.settings;
+        self.quality = s.quality;
+        if let Some(p) = s.printer {
+            self.printer = p;
+        }
+        if let Some(f) = s.filament {
+            self.filament = f;
+        }
+        self.dual = s.dual;
+        self.layer_events = s.layer_events;
+        self.selected = None;
+        self.drag = Drag::None;
+        self.refresh_plate();
+        self.refresh_print_file();
+    }
+
+    /// Records a finished change as one undo step. `idle` is false while an edit is
+    /// still going on (a mouse button held, a field being typed in): the step is
+    /// recorded once it ends, so a drag or a typed value is one step.
+    fn note_changes(&mut self, idle: bool) {
+        if !idle {
+            return;
+        }
+        let fp = self.project_fingerprint();
+        if fp != self.settled_fp {
+            let now = self.capture();
+            let before = std::mem::replace(&mut self.settled, now);
+            self.history.record(before);
+            self.settled_fp = fp;
+        }
+    }
+
+    /// Starts a new undo history from the plate as it is (a new or opened project).
+    fn reset_history(&mut self) {
+        self.history.clear();
+        self.settled = self.capture();
+        self.settled_fp = self.project_fingerprint();
+    }
+
+    fn can_undo(&self) -> bool {
+        self.history.can_undo() || self.project_fingerprint() != self.settled_fp
+    }
+
+    fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Goes back one step.
+    fn undo(&mut self) {
+        // A change not yet recorded (still being typed) becomes its own step first.
+        self.note_changes(true);
+        if let Some(back) = self.history.undo(self.capture()) {
+            self.restore(back);
+            self.settled = self.capture();
+            self.settled_fp = self.project_fingerprint();
+            self.status = "Undone.".into();
+        }
+    }
+
+    /// Goes forward again one undone step.
+    fn redo(&mut self) {
+        if let Some(forward) = self.history.redo(self.capture()) {
+            self.restore(forward);
+            self.settled = self.capture();
+            self.settled_fp = self.project_fingerprint();
+            self.status = "Redone.".into();
+        }
     }
 
     /// What a saved project holds: the plate and settings (`fingerprint`) plus the
@@ -1600,6 +1724,19 @@ impl PrintCraftApp {
             let s = i.modifiers.command && i.key_pressed(egui::Key::S);
             (s && !i.modifiers.shift, s && i.modifiers.shift)
         });
+        // Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes (fields being typed in keep their
+        // own undo: this is skipped above while typing).
+        let (undo, redo) = ctx.input(|i| {
+            let z = i.modifiers.command && i.key_pressed(egui::Key::Z);
+            let y = i.modifiers.command && i.key_pressed(egui::Key::Y);
+            (z && !i.modifiers.shift, y || (z && i.modifiers.shift))
+        });
+        if undo {
+            self.undo();
+        }
+        if redo {
+            self.redo();
+        }
         if del && self.mode == Mode::Prepare {
             self.delete_selected();
         }
@@ -1675,6 +1812,10 @@ impl eframe::App for PrintCraftApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_slice(&ctx);
+        // Last frame's change becomes an undo step once the edit is finished: no mouse
+        // button held and no field being typed in.
+        let idle = !ctx.input(|i| i.pointer.any_down()) && ctx.memory(|m| m.focused().is_none());
+        self.note_changes(idle);
         self.handle_keys_and_drops(&ctx);
         // Printer dialogs ("Print again?", confirmations) show on every page.
         self.device.overlay(&ctx);
@@ -2017,6 +2158,22 @@ fn job_extent(result: &SliceResult) -> Option<[f32; 4]> {
     b
 }
 
+/// How many undo steps are kept.
+const UNDO_STEPS: usize = 100;
+
+/// What undo and redo bring back: the plate and every setting a project saves. Meshes
+/// are shared, so a copy is small.
+#[derive(Clone, Debug, Default)]
+struct PlateState {
+    objects: Vec<PlacedObject>,
+    settings: PrintSettings,
+    quality: Option<Quality>,
+    printer: Option<Printer>,
+    filament: Option<Filament>,
+    dual: crate::profiles::DualNozzle,
+    layer_events: Vec<crate::layer_events::LayerEvent>,
+}
+
 /// What the preview colours paths by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewColour {
@@ -2166,6 +2323,84 @@ fn event_color(kind: crate::layer_events::LayerEventKind) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cube(name: &str) -> PlacedObject {
+        PlacedObject::new(name, Mesh::cube(Vec3::new(10.0, 10.0, 10.0)))
+    }
+
+    #[test]
+    fn test_undo_and_redo_plate_and_settings_edits() {
+        let mut app = PrintCraftApp::for_tests();
+        let empty = app.project_fingerprint();
+        app.add_object(cube("a"));
+        app.note_changes(true);
+        let added = app.project_fingerprint();
+        app.objects[0].x = 25.0;
+        app.note_changes(true);
+        let moved = app.project_fingerprint();
+        app.settings.walls = 4;
+        app.note_changes(true);
+        let walls = app.project_fingerprint();
+        assert!(app.can_undo() && !app.can_redo());
+        for want in [&moved, &added, &empty] {
+            app.undo();
+            assert_eq!(&app.project_fingerprint(), want);
+        }
+        assert!(!app.can_undo());
+        for want in [&added, &moved, &walls] {
+            app.redo();
+            assert_eq!(&app.project_fingerprint(), want);
+        }
+        assert!(!app.can_redo());
+    }
+
+    #[test]
+    fn test_undo_a_drag_is_one_step() {
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(cube("a"));
+        app.note_changes(true);
+        let before = app.project_fingerprint();
+        // While the mouse is held, moves aren't steps of their own.
+        for x in [5.0, 10.0, 15.0] {
+            app.objects[0].x = x;
+            app.note_changes(false);
+        }
+        app.note_changes(true);
+        app.undo();
+        assert_eq!(app.project_fingerprint(), before);
+    }
+
+    #[test]
+    fn test_undo_keeps_meshes_shared_and_a_new_edit_drops_redo() {
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(cube("a"));
+        app.note_changes(true);
+        let mesh = app.objects[0].mesh.clone();
+        app.objects[0].x = 30.0;
+        app.note_changes(true);
+        app.undo();
+        assert!(
+            std::sync::Arc::ptr_eq(&app.objects[0].mesh, &mesh),
+            "no copy of the triangles"
+        );
+        assert!(app.can_redo());
+        app.objects[0].y = 12.0;
+        app.note_changes(true);
+        assert!(
+            !app.can_redo(),
+            "a new edit after undo can't be redone over"
+        );
+    }
+
+    #[test]
+    fn test_undo_history_starts_again_with_a_new_project() {
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(cube("a"));
+        app.note_changes(true);
+        assert!(app.can_undo());
+        app.reset_history();
+        assert!(!app.can_undo() && !app.can_redo());
+    }
 
     #[test]
     fn test_preview_gradient_runs_blue_to_red() {

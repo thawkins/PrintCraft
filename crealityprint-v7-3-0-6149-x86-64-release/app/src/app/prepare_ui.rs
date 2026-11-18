@@ -35,6 +35,7 @@ impl PrintCraftApp {
             ui.add_space(14.0);
             // File menu (New / Open / Save project), as in the original's top-left corner.
             self.file_menu(ui);
+            self.edit_menu(ui);
             if let Some(name) = self.device.locating_name() {
                 ui.add_space(10.0);
                 ui.spinner();

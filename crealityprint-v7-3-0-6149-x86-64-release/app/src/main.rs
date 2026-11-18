@@ -19,6 +19,7 @@ mod gcode_template;
 mod geometry;
 mod gizmo;
 mod heat;
+mod history;
 mod layer_events;
 mod model;
 mod motion;

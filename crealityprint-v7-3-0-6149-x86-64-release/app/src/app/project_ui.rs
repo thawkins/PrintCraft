@@ -61,6 +61,33 @@ impl PrintCraftApp {
         }
     }
 
+    /// The Edit menu beside File: undo and redo of plate and settings changes.
+    pub(super) fn edit_menu(&mut self, ui: &mut Ui) {
+        ui.menu_button(RichText::new("Edit").size(15.0), |ui| {
+            ui.set_min_width(200.0);
+            if ui
+                .add_enabled(
+                    self.can_undo(),
+                    egui::Button::new("Undo              Ctrl+Z"),
+                )
+                .clicked()
+            {
+                self.undo();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    self.can_redo(),
+                    egui::Button::new("Redo              Ctrl+Y"),
+                )
+                .clicked()
+            {
+                self.redo();
+                ui.close();
+            }
+        });
+    }
+
     /// The newest projects, numbered, each opening with one click. A file that has been
     /// moved or deleted is shown greyed out.
     fn recent_projects_menu(&mut self, ui: &mut Ui) {
@@ -142,6 +169,7 @@ impl PrintCraftApp {
         self.clear_plate();
         self.layer_events.clear();
         self.sliced = None;
+        self.reset_history();
         self.project_path = None;
         self.mode = Mode::Prepare;
         self.saved_fingerprint = self.project_fingerprint();
@@ -183,6 +211,7 @@ impl PrintCraftApp {
             .is_from_newer_version()
             .then_some(opened.file_version);
         self.apply_project(opened.project);
+        self.reset_history();
         self.project_path = Some(path.to_path_buf());
         self.saved_fingerprint = self.project_fingerprint();
         self.status = format!("Opened {}.", display_name(path));

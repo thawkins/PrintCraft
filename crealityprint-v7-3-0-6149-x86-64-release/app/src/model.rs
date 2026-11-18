@@ -267,8 +267,9 @@ fn tube(outer: f32, inner: f32, height: f32, sides: usize) -> Mesh {
 #[derive(Clone, Debug)]
 pub struct PlacedObject {
     pub name: String,
-    /// The original mesh, centred on the origin and resting on z = 0.
-    pub mesh: Mesh,
+    /// The original mesh, centred on the origin and resting on z = 0. Shared, so copies
+    /// of the plate (undo steps, duplicates) don't copy the triangles.
+    pub mesh: std::sync::Arc<Mesh>,
     /// Centre of the footprint on the plate, in millimetres.
     pub x: f32,
     pub y: f32,
@@ -285,7 +286,7 @@ impl PlacedObject {
     pub fn new(name: impl Into<String>, mesh: Mesh) -> Self {
         Self {
             name: name.into(),
-            mesh: mesh.recentred(),
+            mesh: std::sync::Arc::new(mesh.recentred()),
             x: 0.0,
             y: 0.0,
             rotation: Vec3::default(),
