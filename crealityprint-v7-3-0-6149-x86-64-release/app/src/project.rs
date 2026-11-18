@@ -124,6 +124,8 @@ pub fn to_json(p: &Project) -> String {
             "print_speed": s.print_speed,
             "first_layer_speed": s.first_layer_speed,
             "travel_speed": s.travel_speed,
+            "bridge_flow": s.bridge_flow,
+            "bridge_fan": s.bridge_fan,
             "feature_accels": AccelFeature::ALL
                 .into_iter()
                 .map(|f| (f.key().to_string(), json!(s.accels.get(f))))
@@ -335,6 +337,8 @@ fn project_from(v: &Value) -> Result<Project, String> {
         travel_speed: num_in(st, "travel_speed", d.travel_speed, limits::TRAVEL_SPEED),
         speeds: feature_speeds,
         accels: feature_accels,
+        bridge_flow: num_in(st, "bridge_flow", d.bridge_flow, limits::BRIDGE_FLOW),
+        bridge_fan: int_in(st, "bridge_fan", d.bridge_fan, limits::FAN_PERCENT),
         supports: flag(st, "supports", d.supports),
         support_angle: num_in(st, "support_angle", d.support_angle, limits::SUPPORT_ANGLE),
         supports_on_plate_only: flag(st, "supports_on_plate_only", d.supports_on_plate_only),
@@ -653,9 +657,15 @@ mod tests {
         let mut p = sample();
         p.printer.acceleration = 3456.0;
         p.settings.accels.set(AccelFeature::Infill, Some(4200.0));
+        p.settings.bridge_flow = 88.0;
+        p.settings.bridge_fan = 70;
         let back = from_json(&to_json(&p)).unwrap();
         assert_eq!(back.printer.acceleration, 3456.0);
         assert_eq!(back.settings.accels, p.settings.accels);
+        assert_eq!(
+            (back.settings.bridge_flow, back.settings.bridge_fan),
+            (88.0, 70)
+        );
         // A project from before accelerations: the preset of the same name's value.
         let old = from_json(
             r#"{"format":"printcraft-project","version":1,"printer":{"name":"Creality Ender-3 V3 KE"},

@@ -152,8 +152,12 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     2 cells onto the supported area so its lines are anchored, and that area is taken out
     of the solid and sparse infill. Bridge lines are solid (one line width apart), printed
     before the layer's other infill, blue in the preview, and marked `;TYPE:SKIN` (the
-    Cura-style names printer screens read have no bridge type). Until M1.4 they print at
-    the print speed with normal flow and fan. Walls over air are not bridged.
+    Cura-style names printer screens read have no bridge type). They print at the
+    **bridge speed** (Auto: 50 % of the print speed), with **bridge flow** (default
+    95 % of a normal line, 50-150 %) and the **bridge fan** (default 100 %). The fan is
+    switched with `M106 ... ; bridge fan` before a bridge and back to the filament's fan
+    (`; part fan`) before the next line that isn't one, only when the two differ. Walls
+    over air are not bridged.
 13. **Spiral vase.** One wall. The first `bottom_layers` layers are solid. After that there
     is only the outer wall: no infill, no top.
 14. **Lay flat** (`PlacedObject::lay_flat`). Faces are grouped by direction (about 1°).
@@ -169,8 +173,8 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
   length, then un-retract before printing.
 * **Speeds.** The first layer prints at the first-layer speed. After that, each kind of
   line has its own speed (Advanced: outer wall, inner wall, sparse infill, solid infill,
-  top surface, support). Each starts on "Auto": outer walls at 50 % of the print speed,
-  the others at the print speed. A speed set by hand (15-500 mm/s) replaces Auto and
+  top surface, support, bridge). Each starts on "Auto": outer walls and bridges at 50 %
+  of the print speed, the others at the print speed. A speed set by hand (15-500 mm/s) replaces Auto and
   stays when a quality preset is chosen. Skirt, brim, raft, prime tower and ooze shield
   print at the print speed; ironing at 15 mm/s.
 * **Fan.** Off on layer 1, then the filament's fan % from layer 2 onwards.

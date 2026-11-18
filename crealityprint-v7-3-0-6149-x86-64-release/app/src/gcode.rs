@@ -58,10 +58,10 @@ pub fn speed_feature(kind: PathKind) -> Option<SpeedFeature> {
         PathKind::SolidInfill => Some(SpeedFeature::SolidInfill),
         PathKind::TopSurface => Some(SpeedFeature::TopSurface),
         PathKind::Support => Some(SpeedFeature::Support),
+        PathKind::Bridge => Some(SpeedFeature::Bridge),
         PathKind::Skirt
         | PathKind::Brim
         | PathKind::Ironing
-        | PathKind::Bridge
         | PathKind::Raft
         | PathKind::PrimeTower
         | PathKind::OozeShield => None,
@@ -564,6 +564,9 @@ struct Writer<'a> {
     /// The acceleration last written for printing moves [0] and travels [1]; Klipper has
     /// one acceleration for both and uses [0] only. `None` until first written.
     accel_now: [Option<f32>; 2],
+    /// The part fan now (%): off on the first layer, the filament's from the second, the
+    /// bridge fan while printing bridges.
+    fan_now: u32,
 }
 
 /// Time for a tool change: retract, switch, prime.
@@ -714,6 +717,7 @@ impl<'a> Writer<'a> {
             last_path: Vec::new(),
             by_tool,
             accel_now: [None; 2],
+            fan_now: 0,
         }
     }
 
@@ -982,6 +986,7 @@ impl<'a> Writer<'a> {
             &mut look.seams_here,
         );
         self.travel_to(pts[0], layer.z);
+        self.set_fan_for(path.kind, look.li);
         let style = PathStyle {
             li: look.li,
             pi,
@@ -1010,6 +1015,7 @@ impl<'a> Writer<'a> {
                 "M106 S{} ; part fan",
                 self.filament.fan_percent * 255 / 100
             );
+            self.fan_now = self.filament.fan_percent;
         }
         self.seconds += LAYER_CHANGE_SECONDS;
         spiral
@@ -1038,6 +1044,29 @@ impl<'a> Writer<'a> {
             | PathKind::PrimeTower
             | PathKind::OozeShield => machine,
         }
+    }
+
+    /// Bridges print with the bridge fan; everything else with the layer's normal fan
+    /// (off on the first layer). Writes `M106` only when the fan changes, so a print
+    /// without bridges gets no extra fan commands.
+    fn set_fan_for(&mut self, kind: PathKind, li: usize) {
+        let want = if kind == PathKind::Bridge {
+            self.s.bridge_fan
+        } else if li == 0 {
+            0
+        } else {
+            self.filament.fan_percent
+        };
+        if want == self.fan_now {
+            return;
+        }
+        let note = if kind == PathKind::Bridge {
+            "bridge fan"
+        } else {
+            "part fan"
+        };
+        let _ = writeln!(self.g, "M106 S{} ; {note}", want * 255 / 100);
+        self.fan_now = want;
     }
 
     /// Writes an acceleration change for printing moves (or travels with `travel`), only
@@ -1107,6 +1136,10 @@ impl<'a> Writer<'a> {
         let s = self.s;
         let (flow, speed) = match style.kind {
             PathKind::Ironing => (IRONING_FLOW, IRONING_SPEED),
+            PathKind::Bridge => (
+                s.bridge_flow / 100.0,
+                (speed_for(PathKind::Bridge, style.li, s) * style.slowdown).max(MIN_PRINT_SPEED),
+            ),
             kind => (
                 1.0,
                 (speed_for(kind, style.li, s) * style.slowdown).max(MIN_PRINT_SPEED),
@@ -1332,7 +1365,7 @@ fn ordered_points(
 mod tests {
     use super::*;
     use crate::geometry::Vec3;
-    use crate::model::{Mesh, PlacedObject};
+    use crate::model::{Mesh, PlacedObject, Triangle};
     use crate::profiles::SeamPosition;
 
     #[test]
@@ -1988,6 +2021,102 @@ mod tests {
         let mut low = s.clone();
         low.accels.set(AccelFeature::Infill, Some(200.0));
         assert!(sliced_cube_on(&low, &printer).estimate.seconds > fast);
+    }
+
+    /// Two pillars 20 mm apart with a 2 mm deck across them, sliced and written with a
+    /// filament whose fan is 50 %.
+    fn bridge_gcode(s: &PrintSettings) -> GcodeOutput {
+        let at = |size: Vec3, x: f32, z: f32| -> Vec<Triangle> {
+            Mesh::cube(size)
+                .triangles
+                .iter()
+                .map(|t| t.map(|v| v + Vec3::new(x, 0.0, z)))
+                .collect()
+        };
+        let pillar = Vec3::new(10.0, 10.0, 10.0);
+        let mut tris = at(pillar, -15.0, 0.0);
+        tris.extend(at(pillar, 15.0, 0.0));
+        tris.extend(at(Vec3::new(40.0, 10.0, 2.0), 0.0, 10.0));
+        let r = crate::slicer::slice(&tris, s, 0.42, &|_| {});
+        let filament = Filament {
+            fan_percent: 50,
+            ..Filament::presets()[0].clone()
+        };
+        generate(&r, &Printer::presets()[0], &filament, s)
+    }
+
+    /// Each extruding move between the bridge fan coming on and going off: (feed rate
+    /// mm/min, filament per mm of line).
+    fn bridge_moves(text: &str) -> Vec<(f32, f32)> {
+        let (mut x, mut y, mut e, mut f) = (0f32, 0f32, 0f32, 0f32);
+        let (mut on, mut out) = (false, Vec::new());
+        for l in text.lines() {
+            if l.ends_with("; bridge fan") {
+                on = true;
+            } else if l.ends_with("; part fan") {
+                on = false;
+            }
+            if !l.starts_with("G1 ") && !l.starts_with("G0 ") {
+                continue;
+            }
+            let (mut nx, mut ny, mut ne) = (x, y, e);
+            for w in l.split(';').next().unwrap_or("").split_whitespace().skip(1) {
+                let v: f32 = w[1..].parse().unwrap_or(0.0);
+                match &w[..1] {
+                    "X" => nx = v,
+                    "Y" => ny = v,
+                    "E" => ne = v,
+                    "F" => f = v,
+                    _ => {}
+                }
+            }
+            let len = ((nx - x).powi(2) + (ny - y).powi(2)).sqrt();
+            if on && ne > e && len > 1.0 {
+                out.push((f, (ne - e) / len));
+            }
+            (x, y, e) = (nx, ny, ne);
+        }
+        out
+    }
+
+    #[test]
+    fn test_bridge_prints_with_its_fan_speed_and_flow() {
+        let s = PrintSettings {
+            min_layer_time: 0.0,
+            ..PrintSettings::default()
+        };
+        let out = bridge_gcode(&s);
+        assert_eq!(out.text.matches("M106 S255 ; bridge fan").count(), 1);
+        // The normal fan (50 % = 127) comes back after the bridge.
+        let after = &out.text[out.text.find("; bridge fan").unwrap()..];
+        assert!(after.contains("M106 S127 ; part fan"));
+        let moves = bridge_moves(&out.text);
+        assert!(moves.len() > 10, "{}", moves.len());
+        // Auto bridge speed: half the print speed.
+        let want_f = s.print_speed * SpeedFeature::BRIDGE_FACTOR * 60.0;
+        assert!(moves.iter().all(|(f, _)| *f == want_f), "{moves:?}");
+        // Bridge flow 95 %, then 60 %: filament per mm scales with it.
+        let thin = PrintSettings {
+            bridge_flow: 60.0,
+            ..s.clone()
+        };
+        let thin_moves = bridge_moves(&bridge_gcode(&thin).text);
+        let per_mm = |m: &[(f32, f32)]| m.iter().map(|x| x.1).sum::<f32>() / m.len() as f32;
+        let ratio = per_mm(&thin_moves) / per_mm(&moves);
+        assert!((ratio - 60.0 / 95.0).abs() < 0.01, "{ratio}");
+    }
+
+    #[test]
+    fn test_bridge_fan_not_written_without_bridges_or_when_equal() {
+        let out = sliced_cube(&PrintSettings::default()).1;
+        assert!(!out.text.contains("bridge fan"));
+        assert_eq!(out.text.matches("M106").count(), 1, "only the layer-2 fan");
+        // A bridge fan equal to the normal fan writes nothing extra.
+        let same = PrintSettings {
+            bridge_fan: 50,
+            ..PrintSettings::default()
+        };
+        assert!(!bridge_gcode(&same).text.contains("bridge fan"));
     }
 
     #[test]

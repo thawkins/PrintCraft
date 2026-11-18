@@ -35,6 +35,7 @@ pub mod limits {
     pub const SHIELD_DISTANCE: RangeInclusive<f32> = 1.0..=20.0;
     pub const Z_HOP: RangeInclusive<f32> = 0.0..=2.0;
     pub const ACCELERATION: RangeInclusive<f32> = 100.0..=30000.0;
+    pub const BRIDGE_FLOW: RangeInclusive<f32> = 50.0..=150.0;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -341,6 +342,10 @@ pub struct PrintSettings {
     pub speeds: FeatureSpeeds,
     /// Accelerations for some kinds of move (Advanced); each is "Auto" until set.
     pub accels: FeatureAccels,
+    /// Plastic laid on bridge lines, as a share of a normal line (%).
+    pub bridge_flow: f32,
+    /// The part fan while printing bridge lines (%).
+    pub bridge_fan: u32,
     pub supports: bool,
     /// Overhangs steeper than this (degrees from vertical) get supports.
     pub support_angle: f32,
@@ -368,6 +373,12 @@ pub struct PrintSettings {
     pub min_layer_time: f32,
 }
 
+/// Bridge flow (%): a little thinner than a normal line, so it is light enough to hang
+/// straight. Estimated from common slicer defaults.
+pub const DEFAULT_BRIDGE_FLOW: f32 = 95.0;
+/// Bridge fan (%): full cooling, so the line sets before it sags.
+pub const DEFAULT_BRIDGE_FAN: u32 = 100;
+
 /// The kinds of line that can be given their own speed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeedFeature {
@@ -377,21 +388,27 @@ pub enum SpeedFeature {
     SolidInfill,
     TopSurface,
     Support,
+    Bridge,
 }
 
 impl SpeedFeature {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::OuterWall,
         Self::InnerWall,
         Self::SparseInfill,
         Self::SolidInfill,
         Self::TopSurface,
         Self::Support,
+        Self::Bridge,
     ];
 
     /// The outer wall's "Auto" speed is this share of the print speed: a slower outer
     /// wall gives a cleaner visible surface.
     pub const OUTER_WALL_FACTOR: f32 = 0.5;
+
+    /// A bridge's "Auto" speed is this share of the print speed: slower lines sag less
+    /// over air. Estimated from common slicer defaults.
+    pub const BRIDGE_FACTOR: f32 = 0.5;
 
     /// The name of this speed in a project file.
     pub fn key(self) -> &'static str {
@@ -402,6 +419,7 @@ impl SpeedFeature {
             Self::SolidInfill => "solid_infill",
             Self::TopSurface => "top_surface",
             Self::Support => "support",
+            Self::Bridge => "bridge",
         }
     }
 
@@ -414,6 +432,7 @@ impl SpeedFeature {
             Self::SolidInfill => "Solid infill",
             Self::TopSurface => "Top surface",
             Self::Support => "Support",
+            Self::Bridge => "Bridge",
         }
     }
 
@@ -421,6 +440,7 @@ impl SpeedFeature {
     pub fn auto_speed(self, print_speed: f32) -> f32 {
         match self {
             Self::OuterWall => print_speed * Self::OUTER_WALL_FACTOR,
+            Self::Bridge => print_speed * Self::BRIDGE_FACTOR,
             Self::InnerWall
             | Self::SparseInfill
             | Self::SolidInfill
@@ -580,6 +600,8 @@ impl Quality {
             travel_speed: 150.0,
             speeds: FeatureSpeeds::default(),
             accels: FeatureAccels::default(),
+            bridge_flow: DEFAULT_BRIDGE_FLOW,
+            bridge_fan: DEFAULT_BRIDGE_FAN,
             supports: false,
             support_angle: 50.0,
             supports_on_plate_only: false,

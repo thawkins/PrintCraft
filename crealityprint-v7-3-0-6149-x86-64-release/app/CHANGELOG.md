@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   areas slice exactly as before; the XYZ calibration cube changes on the layer above its
   engraved letters.
 
+- Bridge speed, flow and fan (gap plan task M1.4). Bridges print at their own speed
+  (a new "Bridge" row in the Advanced speeds; Auto is half the print speed), with
+  "Bridge flow" (95 %) and "Bridge fan" (100 %) in Cooling and travel. The fan switches
+  for bridges and back only when the bridge fan differs from the filament's fan.
+
 ### Changed
 
 - The time estimate now times every line with the printer's acceleration and corner

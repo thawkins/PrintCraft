@@ -914,7 +914,7 @@ fn auto_row(
     changed
 }
 
-/// Minimum layer time and z-hop (Advanced only).
+/// Minimum layer time, z-hop, and bridge flow and fan (Advanced only).
 fn cooling_and_travel_group(ui: &mut Ui, s: &mut PrintSettings) {
     group(ui, "Cooling and travel", |ui| {
         row(
@@ -926,6 +926,24 @@ fn cooling_and_travel_group(ui: &mut Ui, s: &mut PrintSettings) {
                 .suffix(" s"),
         );
         row(ui, "Z-hop", mm(&mut s.z_hop, limits::Z_HOP, 0.05));
+        ui.label("Bridge flow")
+            .on_hover_text("Plastic on bridge lines, as a share of a normal line");
+        ui.add(
+            egui::DragValue::new(&mut s.bridge_flow)
+                .range(limits::BRIDGE_FLOW)
+                .speed(1.0)
+                .suffix(" %"),
+        );
+        ui.end_row();
+        ui.label("Bridge fan")
+            .on_hover_text("Part fan while printing bridge lines");
+        ui.add(
+            egui::DragValue::new(&mut s.bridge_fan)
+                .range(limits::FAN_PERCENT)
+                .speed(1.0)
+                .suffix(" %"),
+        );
+        ui.end_row();
     });
 }
 
