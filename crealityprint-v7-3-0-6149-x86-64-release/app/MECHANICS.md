@@ -234,6 +234,16 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     Top and bottom surfaces are found from the whole part in each slice, so a range
     with more top layers thickens only the surfaces inside it.
 
+19. **Modifier volumes** (`src/modifier.rs`, `slicer::slice_modified`, gap plan M4.4).
+    A modifier's mesh (box, 48-sided cylinder, or a 24 x 16 sphere, stretched to its
+    size) is placed relative to its part's footprint centre. On each layer its outline
+    is cut like the part's (lifted with a full raft). The part's sparse infill lines
+    skip points inside any modifier; each modifier then lays its own infill in the
+    infill region, on the points it owns (the last listed wins an overlap), split along
+    each line in half-cell (0.5 mm) steps as top and bottom surfaces are. At 100 % the
+    lines are laid one line width apart as solid infill. Exposed (top and bottom) and
+    bridged cells stay as they were.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.

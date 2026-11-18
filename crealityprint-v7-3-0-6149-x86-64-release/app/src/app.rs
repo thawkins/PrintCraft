@@ -535,7 +535,7 @@ impl PrintCraftApp {
         );
         for o in &self.objects {
             s += &format!(
-                "|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}:{:?}",
+                "|{}:{}:{}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}",
                 o.name,
                 o.x,
                 o.y,
@@ -544,7 +544,8 @@ impl PrintCraftApp {
                 o.mesh.triangles.len(),
                 o.extruder,
                 o.overrides,
-                o.ranges
+                o.ranges,
+                o.modifiers
             );
         }
         s
@@ -754,7 +755,7 @@ impl PrintCraftApp {
             .plate
             .iter()
             .zip(&self.objects)
-            .map(|(t, o)| (t.as_slice(), &o.overrides, o.ranges.as_slice()))
+            .map(|(t, o)| (t.as_slice(), o))
             .collect();
         let groups = pipeline::settings_groups(&parts, &self.settings);
         let tools = match self.tools() {
@@ -984,9 +985,11 @@ impl PrintCraftApp {
                         self.selected = Some(i);
                     }
                     let o = &self.objects[i];
-                    if let Some(badge) =
-                        settings_ui::override_badge(o.overrides.len(), o.ranges.len())
-                    {
+                    if let Some(badge) = settings_ui::override_badge(
+                        o.overrides.len(),
+                        o.ranges.len(),
+                        o.modifiers.len(),
+                    ) {
                         ui.label(RichText::new(badge).size(12.0).color(theme::ACCENT))
                             .on_hover_text(
                                 "Prints with settings of its own: select it to see them",
@@ -1273,6 +1276,22 @@ impl PrintCraftApp {
                 })
                 .collect();
             view3d::draw_objects(&painter, &self.camera, rect, &draw);
+            // Modifier volumes, see-through over their parts (so one inside shows).
+            let volumes: Vec<Vec<Triangle>> = self
+                .objects
+                .iter()
+                .flat_map(|o| o.modifiers.iter().map(|m| m.triangles(o.x, o.y)))
+                .collect();
+            if !volumes.is_empty() {
+                let draw: Vec<DrawObject> = volumes
+                    .iter()
+                    .map(|t| DrawObject {
+                        triangles: t,
+                        color: theme::MODIFIER,
+                    })
+                    .collect();
+                view3d::draw_objects(&painter, &self.camera, rect, &draw);
+            }
             // The face the Face tool would lay down, drawn over its part.
             if let Some((oi, tris)) = &self.face_hover {
                 if let Some(o) = self.objects.get(*oi) {
@@ -2691,7 +2710,7 @@ mod tests {
             let under = app.settings.clone();
             apply_override_edit(&mut app.objects[0].overrides, e, &under);
         };
-        assert_eq!(settings_ui::override_badge(0, 0), None);
+        assert_eq!(settings_ui::override_badge(0, 0, 0), None);
         // Added: it starts at the plate's value, so nothing prints differently yet.
         edit(&mut app, OverrideEdit::Add("infill_percent"));
         assert_eq!(
@@ -2699,7 +2718,7 @@ mod tests {
             Some(Value::Num(plate.infill_percent))
         );
         assert_eq!(
-            settings_ui::override_badge(1, 0).as_deref(),
+            settings_ui::override_badge(1, 0, 0).as_deref(),
             Some("1 setting")
         );
         // Changed: the part prints with its own value, the plate keeps its own.
@@ -2714,7 +2733,7 @@ mod tests {
         assert_eq!(app.settings.infill_percent, plate.infill_percent);
         edit(&mut app, OverrideEdit::Add("walls"));
         assert_eq!(
-            settings_ui::override_badge(2, 0).as_deref(),
+            settings_ui::override_badge(2, 0, 0).as_deref(),
             Some("2 settings")
         );
         // Adding one it already has keeps its value.
@@ -2752,12 +2771,12 @@ mod tests {
         let r = &app.objects[0].ranges[0];
         assert_eq!((r.from, r.to), (15.0, 20.0));
         assert_eq!(
-            settings_ui::override_badge(0, 1).as_deref(),
+            settings_ui::override_badge(0, 1, 0).as_deref(),
             Some("1 range")
         );
         assert_eq!(
-            settings_ui::override_badge(2, 3).as_deref(),
-            Some("2 settings, 3 ranges")
+            settings_ui::override_badge(2, 3, 1).as_deref(),
+            Some("2 settings, 3 ranges, 1 modifier")
         );
         assert!(r.overrides.is_empty());
         // A setting added to the range starts at the part's value, not the plate's.

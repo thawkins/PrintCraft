@@ -3,8 +3,7 @@
 
 use crate::gcode::{self, GcodeOutput};
 use crate::geometry::Bounds;
-use crate::model::Triangle;
-use crate::overrides::{HeightRange, Overrides};
+use crate::model::{PlacedObject, Triangle};
 use crate::profiles::{Filament, PrintSettings, Printer};
 use crate::slicer::PartSettings;
 use crate::slicer::{self, SliceResult};
@@ -65,23 +64,26 @@ pub fn slice_plate_with_tools(
     slice_plate_grouped(triangles, &[], printer, filament, settings, tools, progress)
 }
 
-/// A part on the plate for [`settings_groups`]: its placed triangles, its overrides
-/// and its height ranges.
-pub type Part<'a> = (&'a [Triangle], &'a Overrides, &'a [HeightRange]);
+/// A part on the plate for [`settings_groups`]: its placed triangles and the object
+/// (for its overrides, height ranges and modifiers).
+pub type Part<'a> = (&'a [Triangle], &'a PlacedObject);
 
 /// The parts on the plate grouped by the settings they print with. Parts with the same
-/// settings (height ranges included) slice together. Empty when no part has overrides
-/// or height ranges (the whole plate prints with `plate`).
+/// settings (height ranges and modifiers included) slice together. Empty when no part
+/// has any (the whole plate prints with `plate`).
 pub fn settings_groups(
     parts: &[Part],
     plate: &PrintSettings,
 ) -> Vec<(Vec<Triangle>, PartSettings)> {
-    if parts.iter().all(|(_, o, r)| o.is_empty() && r.is_empty()) {
+    let plain =
+        |o: &PlacedObject| o.overrides.is_empty() && o.ranges.is_empty() && o.modifiers.is_empty();
+    if parts.iter().all(|(_, o)| plain(o)) {
         return Vec::new();
     }
     let mut groups: Vec<(Vec<Triangle>, PartSettings)> = Vec::new();
-    for (tris, overrides, ranges) in parts {
-        let settings = crate::overrides::part_settings(plate, overrides, ranges);
+    for (tris, o) in parts {
+        let mut settings = crate::overrides::part_settings(plate, &o.overrides, &o.ranges);
+        settings.modifiers = o.modifiers.iter().map(|m| m.infill(o.x, o.y)).collect();
         match groups.iter_mut().find(|(_, s)| *s == settings) {
             Some((all, _)) => all.extend_from_slice(tris),
             None => groups.push((tris.to_vec(), settings)),
@@ -798,7 +800,7 @@ mod tests {
         let parts: Vec<Part> = placed
             .iter()
             .zip(&objects)
-            .map(|(t, o)| (t.as_slice(), &o.overrides, o.ranges.as_slice()))
+            .map(|(t, o)| (t.as_slice(), o))
             .collect();
         let groups = settings_groups(&parts, &plate);
         assert_eq!(groups.len(), 2, "the two plain boxes slice together");
@@ -818,10 +820,47 @@ mod tests {
             .any(|p| p.points.iter().any(|q| q.x < 0.0));
         assert!(!sparse_left, "the left box has no infill");
         // No overrides: no groups, and the plate slices exactly as before.
-        let plain: Vec<Part> = parts
-            .iter()
-            .map(|(t, _, r)| (*t, &objects[1].overrides, *r))
-            .collect();
+        let plain: Vec<Part> = parts.iter().map(|(t, _)| (*t, &objects[1])).collect();
         assert!(settings_groups(&plain, &plate).is_empty());
+    }
+
+    #[test]
+    fn test_part_with_a_box_modifier_slices_solid_inside_it() {
+        use crate::model::{Mesh, PlacedObject};
+        use crate::modifier::{Modifier, ModifierShape};
+        use crate::settings_registry::Value;
+        let mut o = PlacedObject::new("cube", Mesh::cube(Vec3::new(30.0, 30.0, 30.0)));
+        (o.x, o.y) = (20.0, -10.0);
+        let mut m = Modifier::around_middle(ModifierShape::Box, Vec3::new(20.0, 20.0, 30.0));
+        m.overrides.set("infill_percent", Value::Num(100.0));
+        o.modifiers.push(m);
+        let tris = o.world_triangles();
+        let parts: Vec<Part> = vec![(tris.as_slice(), &o)];
+        let plate = PrintSettings::default();
+        let groups = settings_groups(&parts, &plate);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].1.modifiers.len(), 1);
+        let printer = Printer::presets().remove(0);
+        let out = slice_plate_grouped(
+            &tris,
+            &groups,
+            &printer,
+            &Filament::presets()[0],
+            &plate,
+            &gcode::Tools::default(),
+            &|_| {},
+        );
+        // The middle layer: solid lines only within the 10 mm box round (20, -10).
+        let mid = &out.result.layers[out.result.layers.len() / 2];
+        let solid: Vec<_> = mid
+            .paths
+            .iter()
+            .filter(|p| p.kind == slicer::PathKind::SolidInfill)
+            .flat_map(|p| p.points.iter())
+            .collect();
+        assert!(!solid.is_empty());
+        assert!(solid
+            .iter()
+            .all(|p| (p.x - 20.0).abs() <= 5.6 && (p.y + 10.0).abs() <= 5.6));
     }
 }

@@ -21,6 +21,9 @@ pub const OBJECT: Color32 = Color32::from_rgb(200, 206, 214);
 pub const OBJECT_SELECTED: Color32 = Color32::from_rgb(90, 220, 186);
 pub const OBJECT_OUTSIDE: Color32 = Color32::from_rgb(232, 120, 80);
 pub const WARNING: Color32 = Color32::from_rgb(240, 170, 70);
+/// Modifier volumes: a see-through blue drawn over the parts (premultiplied: about
+/// (90, 160, 255) at a third opacity).
+pub const MODIFIER: Color32 = Color32::from_rgba_premultiplied(30, 53, 85, 85);
 
 pub fn path_color(kind: PathKind) -> Color32 {
     match kind {

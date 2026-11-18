@@ -238,10 +238,13 @@ pub fn draw_objects(painter: &egui::Painter, cam: &Camera, rect: Rect, objects: 
                 continue;
             };
             let shade = 0.35 + 0.65 * n.dot(light).max(0.0);
-            let col = Color32::from_rgb(
+            // The colour is premultiplied, so shading the red, green and blue keeps a
+            // see-through colour (a modifier volume) valid; opaque ones are unchanged.
+            let col = Color32::from_rgba_premultiplied(
                 (obj.color.r() as f32 * shade) as u8,
                 (obj.color.g() as f32 * shade) as u8,
                 (obj.color.b() as f32 * shade) as u8,
+                obj.color.a(),
             );
             faces.push(((a.1 + b.1 + c.1) / 3.0, [a.0, b.0, c.0], col));
         }

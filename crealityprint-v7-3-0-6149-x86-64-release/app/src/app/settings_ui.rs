@@ -3,6 +3,7 @@
 //! `Kind` asks for. Adding a print setting to the registry adds its row here.
 
 use super::*;
+use crate::modifier::{Modifier, ModifierShape, PER_MODIFIER};
 use crate::overrides;
 use crate::settings_registry::{self, AutoContext, Group, Kind, Level, Setting, Value};
 
@@ -190,9 +191,9 @@ fn auto_widget(
     changed
 }
 
-/// The object list's badge for a part with `settings` settings of its own and
-/// `ranges` height ranges.
-pub(super) fn override_badge(settings: usize, ranges: usize) -> Option<String> {
+/// The object list's badge for a part with `settings` settings of its own, `ranges`
+/// height ranges and `modifiers` modifiers.
+pub(super) fn override_badge(settings: usize, ranges: usize, modifiers: usize) -> Option<String> {
     let count = |n: usize, one: &str, many: &str| match n {
         0 => None,
         1 => Some(format!("1 {one}")),
@@ -201,6 +202,7 @@ pub(super) fn override_badge(settings: usize, ranges: usize) -> Option<String> {
     let parts: Vec<String> = [
         count(settings, "setting", "settings"),
         count(ranges, "range", "ranges"),
+        count(modifiers, "modifier", "modifiers"),
     ]
     .into_iter()
     .flatten()
@@ -265,18 +267,21 @@ pub(super) fn apply_override_edit(
 }
 
 /// The rows of `overrides`, by section, each with a button back to the value in
-/// `under`, then a list to add another. `id` keeps two editors' widgets apart.
+/// `under`, then a list to add another of the `allowed` settings. `id` keeps two
+/// editors' widgets apart.
 fn overrides_editor(
     ui: &mut Ui,
     id: &str,
     overrides: &overrides::Overrides,
+    allowed: &[&str],
     under: &PrintSettings,
     under_name: &str,
 ) -> Option<OverrideEdit> {
     let mut edit = None;
     let effective = overrides.apply(under);
-    let (own, others): (Vec<&Setting>, Vec<&Setting>) =
-        overrides::per_object_settings().partition(|r| overrides.get(r.key).is_some());
+    let (own, others): (Vec<&Setting>, Vec<&Setting>) = overrides::per_object_settings()
+        .filter(|r| allowed.contains(&r.key))
+        .partition(|r| overrides.get(r.key).is_some());
     if !own.is_empty() {
         egui::Grid::new(("overrides", id))
             .num_columns(3)
@@ -360,6 +365,8 @@ impl PrintCraftApp {
         let o = &self.objects[i];
         let mut own_edit = None;
         let mut range_edit = None;
+        let mut modifier_edit = None;
+        let size = self.object_bounds(i).size();
         card(ui, "Settings for this object", |ui| {
             if o.overrides.is_empty() {
                 ui.label(
@@ -370,7 +377,14 @@ impl PrintCraftApp {
                     .color(theme::TEXT_DIM),
                 );
             }
-            own_edit = overrides_editor(ui, "object", &o.overrides, plate, "the plate's");
+            own_edit = overrides_editor(
+                ui,
+                "object",
+                &o.overrides,
+                &overrides::PER_OBJECT,
+                plate,
+                "the plate's",
+            );
             ui.add_space(8.0);
             ui.label(RichText::new("Height ranges").strong());
             let part = o.overrides.apply(plate);
@@ -404,7 +418,14 @@ impl PrintCraftApp {
                     }
                 });
                 let id = format!("range{j}");
-                if let Some(e) = overrides_editor(ui, &id, &r.overrides, &part, "the part's") {
+                if let Some(e) = overrides_editor(
+                    ui,
+                    &id,
+                    &r.overrides,
+                    &overrides::PER_OBJECT,
+                    &part,
+                    "the part's",
+                ) {
                     range_edit = Some(RangeEdit::Settings(j, e));
                 }
             }
@@ -415,6 +436,25 @@ impl PrintCraftApp {
             {
                 range_edit = Some(RangeEdit::Add);
             }
+            ui.add_space(8.0);
+            ui.label(RichText::new("Modifiers").strong());
+            for (j, m) in o.modifiers.iter().enumerate() {
+                ui.add_space(4.0);
+                if let Some(e) = modifier_rows(ui, j, m, &part) {
+                    modifier_edit = Some(e);
+                }
+            }
+            egui::ComboBox::from_id_salt("add_modifier")
+                .selected_text("Add modifier...")
+                .show_ui(ui, |ui| {
+                    for shape in ModifierShape::ALL {
+                        if ui.selectable_label(false, shape.label()).clicked() {
+                            modifier_edit = Some(ModifierEdit::Add(shape));
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("A volume inside which this part's infill differs");
         });
         let part = self.objects[i].overrides.apply(&self.settings);
         if let Some(e) = own_edit {
@@ -434,5 +474,96 @@ impl PrintCraftApp {
             }
             None => {}
         }
+        let mods = &mut self.objects[i].modifiers;
+        match modifier_edit {
+            Some(ModifierEdit::Add(shape)) => mods.push(Modifier::around_middle(shape, size)),
+            Some(ModifierEdit::Remove(j)) => {
+                mods.remove(j);
+            }
+            Some(ModifierEdit::Shape(j, shape)) => mods[j].shape = shape,
+            Some(ModifierEdit::Place(j, size, at)) => (mods[j].size, mods[j].at) = (size, at),
+            Some(ModifierEdit::Settings(j, e)) => {
+                apply_override_edit(&mut mods[j].overrides, e, &part);
+            }
+            None => {}
+        }
     }
+}
+
+/// A change to a part's modifiers.
+enum ModifierEdit {
+    Add(ModifierShape),
+    Remove(usize),
+    Shape(usize, ModifierShape),
+    Place(usize, Vec3, Vec3),
+    Settings(usize, OverrideEdit),
+}
+
+/// Modifier `j`'s rows: its shape and a Remove button, its size and place, and the
+/// infill settings that differ inside it (on top of `part`, the part's own settings).
+fn modifier_rows(
+    ui: &mut Ui,
+    j: usize,
+    m: &Modifier,
+    part: &PrintSettings,
+) -> Option<ModifierEdit> {
+    let mut edit = None;
+    ui.horizontal(|ui| {
+        let mut shape = m.shape;
+        egui::ComboBox::from_id_salt(("modifier_shape", j))
+            .selected_text(shape.label())
+            .show_ui(ui, |ui| {
+                for s in ModifierShape::ALL {
+                    ui.selectable_value(&mut shape, s, s.label());
+                }
+            });
+        if shape != m.shape {
+            edit = Some(ModifierEdit::Shape(j, shape));
+        }
+        if ui
+            .small_button("Remove")
+            .on_hover_text("Remove this modifier")
+            .clicked()
+        {
+            edit = Some(ModifierEdit::Remove(j));
+        }
+    });
+    let (mut size, mut at) = (m.size, m.at);
+    let mut moved = false;
+    egui::Grid::new(("modifier_place", j))
+        .num_columns(4)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            let mut field = |ui: &mut Ui, label: &str, v: &mut f32, min: f32| {
+                ui.label(label);
+                moved |= ui
+                    .add(
+                        egui::DragValue::new(v)
+                            .range(min..=10_000.0)
+                            .speed(0.1)
+                            .max_decimals(2)
+                            .suffix(" mm"),
+                    )
+                    .changed();
+            };
+            field(ui, "Width", &mut size.x, 0.1);
+            field(ui, "Move X", &mut at.x, -10_000.0);
+            ui.end_row();
+            field(ui, "Depth", &mut size.y, 0.1);
+            field(ui, "Move Y", &mut at.y, -10_000.0);
+            ui.end_row();
+            field(ui, "Height", &mut size.z, 0.1);
+            field(ui, "Bottom at", &mut at.z, 0.0);
+            ui.end_row();
+        })
+        .response
+        .on_hover_text("Move X and Y are from the middle of the part");
+    if moved {
+        edit = Some(ModifierEdit::Place(j, size, at));
+    }
+    let id = format!("modifier{j}");
+    if let Some(e) = overrides_editor(ui, &id, &m.overrides, &PER_MODIFIER, part, "the part's") {
+        edit = Some(ModifierEdit::Settings(j, e));
+    }
+    edit
 }

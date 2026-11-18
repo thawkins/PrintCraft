@@ -285,6 +285,8 @@ pub struct PlacedObject {
     pub overrides: crate::overrides::Overrides,
     /// Settings for parts of its height, on top of `overrides`.
     pub ranges: Vec<crate::overrides::HeightRange>,
+    /// Volumes inside which its infill differs.
+    pub modifiers: Vec<crate::modifier::Modifier>,
 }
 
 impl PlacedObject {
@@ -299,6 +301,7 @@ impl PlacedObject {
             extruder: crate::profiles::PRIMARY_TOOL,
             overrides: Default::default(),
             ranges: Vec::new(),
+            modifiers: Vec::new(),
         }
     }
 
@@ -488,6 +491,7 @@ impl PlacedObject {
                 (o.x, o.y, o.extruder) = (c.x, c.y, self.extruder);
                 o.overrides = self.overrides.clone();
                 o.ranges = self.ranges.clone();
+                o.modifiers = self.modifiers.clone();
                 o
             })
             .collect()
@@ -522,6 +526,7 @@ impl PlacedObject {
                 // The lower part keeps its heights; the upper one is turned over.
                 if side == "lower" {
                     o.ranges = self.ranges.clone();
+                    o.modifiers = self.modifiers.clone();
                 }
                 o
             })

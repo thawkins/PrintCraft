@@ -29,7 +29,7 @@ Status:
 | Split to objects | **Yes (new)**: Split in the Selected object card makes each separate piece its own object, where it stood |
 | Per-object settings | **Yes (new)**: "Settings for this object" on the Objects tab; a part can override walls, top and bottom layers, infill, ironing, fuzzy skin and size compensation; saved in the project; the object list marks parts that have any |
 | Height range settings | **Yes (new)**: "Height ranges" in "Settings for this object": different per-object settings between two heights |
-| Modifier volumes | Not yet |
+| Modifier volumes | **Yes (new)**: box, cylinder or sphere per part ("Modifiers" in "Settings for this object") with its own infill density and pattern; 100 % is solid infill. Not yet: imported meshes, walls or other settings inside a modifier |
 | Variable layer height | Not yet |
 | Multiple plates, sequential (one-at-a-time) printing | Not yet |
 

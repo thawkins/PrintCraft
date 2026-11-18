@@ -157,6 +157,7 @@ pub fn part_settings(
             .map(|r| (r.from, r.to, r.overrides.apply(&base)))
             .collect(),
         base,
+        modifiers: Vec::new(),
     }
 }
 

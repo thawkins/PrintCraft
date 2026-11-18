@@ -86,6 +86,9 @@ pub fn to_json(p: &Project) -> String {
             if !o.ranges.is_empty() {
                 v["ranges"] = o.ranges.iter().map(|r| r.to_json()).collect();
             }
+            if !o.modifiers.is_empty() {
+                v["modifiers"] = o.modifiers.iter().map(|m| m.to_json()).collect();
+            }
             v
         })
         .collect();
@@ -335,6 +338,13 @@ fn project_from(v: &Value) -> Result<Project, String> {
             .into_iter()
             .flatten()
             .filter_map(crate::overrides::HeightRange::from_json)
+            .collect();
+        obj.modifiers = o
+            .get("modifiers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(crate::modifier::Modifier::from_json)
             .collect();
         objects.push(obj);
     }

@@ -23,6 +23,7 @@ mod heat;
 mod history;
 mod layer_events;
 mod model;
+mod modifier;
 mod motion;
 mod overrides;
 mod pipeline;

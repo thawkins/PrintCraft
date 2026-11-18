@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Modifier volumes (gap plan task M4.4). "Add modifier..." under Modifiers in
+  "Settings for this object" adds a box, cylinder or sphere round the middle of the
+  part, half its size; its shape, size and place can be changed (Move X and Y from the
+  middle of the part, Bottom at above the plate). Inside it the part's infill density
+  and pattern can differ; 100 % there is laid as solid infill. Modifiers show as
+  see-through blue volumes over their parts. Projects save them; split parts keep them
+  and so does the lower part of a cut. The object list badge counts them. Walls and
+  other settings don't change inside a modifier yet, a modifier doesn't turn with its
+  part, and imported meshes can't be used as modifiers yet.
 - Height ranges (gap plan task M4.3). Under "Height ranges" in "Settings for this
   object", "Add height range" gives a part different settings between two heights
   (measured from the part's bottom, above a raft if there is one), for example denser

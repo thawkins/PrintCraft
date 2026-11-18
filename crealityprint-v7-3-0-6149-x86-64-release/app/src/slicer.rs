@@ -143,9 +143,30 @@ const IRONING_SPACING_MM: f32 = 0.2;
 const FUZZ_POINT_DIST_MM: f32 = 0.8;
 const FUZZ_THICKNESS_MM: f32 = 0.3;
 
+/// A region of a part that prints its infill differently: inside `triangles` (a closed
+/// mesh, in plate coordinates) the infill density and pattern given replace the part's.
+/// 100 % infill there is laid as solid infill.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InfillModifier {
+    pub triangles: Vec<Triangle>,
+    pub infill_percent: Option<f32>,
+    pub infill_pattern: Option<InfillPattern>,
+}
+
 /// Slices the given plate triangles. `progress` receives values from 0 to 1.
 pub fn slice(
     triangles: &[Triangle],
+    settings: &PrintSettings,
+    line_width: f32,
+    progress: &dyn Fn(f32),
+) -> SliceResult {
+    slice_modified(triangles, &[], settings, line_width, progress)
+}
+
+/// Like [`slice`], with infill modifiers: where they overlap, a later one wins.
+pub fn slice_modified(
+    triangles: &[Triangle],
+    modifiers: &[InfillModifier],
     settings: &PrintSettings,
     line_width: f32,
     progress: &dyn Fn(f32),
@@ -180,9 +201,25 @@ pub fn slice(
         };
     }
 
-    // 1. Outlines of every layer.
+    // 1. Outlines of every layer, and of every modifier (lifted with the model).
     let mut outlines = all_outlines(triangles, &heights, progress);
     compensate(&mut outlines, settings, !full_raft);
+    let lift = if full_raft {
+        raft_height(settings)
+    } else {
+        0.0
+    };
+    let modifier_outlines: Vec<Vec<Vec<Polygon>>> = modifiers
+        .iter()
+        .map(|m| {
+            let up = Vec3::new(0.0, 0.0, lift);
+            let tris: Vec<Triangle> = m.triangles.iter().map(|t| t.map(|v| v + up)).collect();
+            heights
+                .iter()
+                .map(|(z, h)| layer_outline(&tris, z - h / 2.0))
+                .collect()
+        })
+        .collect();
 
     // 2. Coarse grid masks, used to find top/bottom surfaces and support areas.
     let grid = Grid::new(&bounds);
@@ -316,16 +353,49 @@ pub fn slice(
             let solid = solid_infill_paths(&region, &grid, &solid_cells, &top, angle, line_width);
             let from = last_point(&paths);
             paths.extend(order_open_paths(solid, from));
-            if settings.infill_percent > 0.5 {
-                let kept_off: Vec<bool> = exposed
+            let kept_off: Vec<bool> = exposed
+                .iter()
+                .zip(&not_bridged)
+                .map(|(e, n)| *e || !*n)
+                .collect();
+            // Which modifier, if any, owns a point of this layer (a later one wins).
+            let owner = |p: Point2| {
+                modifier_outlines
                     .iter()
-                    .zip(&not_bridged)
-                    .map(|(e, n)| *e || !*n)
-                    .collect();
+                    .rposition(|m| m[i].iter().filter(|poly| contains(poly, p)).count() % 2 == 1)
+            };
+            if settings.infill_percent > 0.5 {
+                let skip = |p: Point2| kept_off[grid.index_of(p)] || owner(p).is_some();
                 let from = last_point(&paths);
                 paths.extend(sparse_infill_paths(
-                    &region, &grid, &kept_off, i, line_width, settings, from,
+                    &region,
+                    &skip,
+                    i,
+                    line_width,
+                    settings.infill_percent,
+                    settings.infill_pattern,
+                    from,
                 ));
+            }
+            for (k, m) in modifiers.iter().enumerate() {
+                let percent = m.infill_percent.unwrap_or(settings.infill_percent);
+                let pattern = m.infill_pattern.unwrap_or(settings.infill_pattern);
+                let skip = |p: Point2| kept_off[grid.index_of(p)] || owner(p) != Some(k);
+                let from = last_point(&paths);
+                if percent >= 99.5 {
+                    // Full infill is laid as solid infill, line against line.
+                    let lines: Vec<ToolPath> = scan_fill(&region, line_width, angle)
+                        .iter()
+                        .flat_map(|seg| split_by(seg, skip))
+                        .filter(|piece| !piece.1)
+                        .map(|piece| open_path(PathKind::SolidInfill, piece.0))
+                        .collect();
+                    paths.extend(order_open_paths(lines, from));
+                } else if percent > 0.5 {
+                    paths.extend(sparse_infill_paths(
+                        &region, &skip, i, line_width, percent, pattern, from,
+                    ));
+                }
             }
             // Only the very top layer of each surface is ironed. Fuzzy top wins: ironing
             // would flatten its texture.
@@ -364,6 +434,8 @@ pub fn slice(
 pub struct PartSettings {
     pub base: PrintSettings,
     pub ranges: Vec<(f32, f32, PrintSettings)>,
+    /// Volumes inside which the infill differs, at every height.
+    pub modifiers: Vec<InfillModifier>,
 }
 
 impl PartSettings {
@@ -373,6 +445,7 @@ impl PartSettings {
         Self {
             base,
             ranges: Vec::new(),
+            modifiers: Vec::new(),
         }
     }
 
@@ -407,7 +480,7 @@ pub fn slice_groups(
 ) -> SliceResult {
     let plain = match groups {
         [] => true,
-        [(_, only)] => only.ranges.is_empty() && only.base == *plate,
+        [(_, only)] => only.ranges.is_empty() && only.modifiers.is_empty() && only.base == *plate,
         _ => false,
     };
     if plain {
@@ -432,7 +505,7 @@ pub fn slice_groups(
     let slices: Vec<Vec<SliceResult>> = groups
         .iter()
         .zip(&variants)
-        .map(|((tris, _), vs)| {
+        .map(|((tris, ps), vs)| {
             vs.iter()
                 .map(|s| {
                     // Supports come from the plate's slice; leaving them out saves time.
@@ -442,7 +515,9 @@ pub fn slice_groups(
                     };
                     let at = done;
                     done += 1.0;
-                    slice(tris, &own, line_width, &|v| progress((at + v) / n))
+                    slice_modified(tris, &ps.modifiers, &own, line_width, &|v| {
+                        progress((at + v) / n)
+                    })
                 })
                 .collect()
         })
@@ -799,22 +874,22 @@ fn solid_infill_paths(
 /// Sparse infill lines in the chosen pattern, kept off the exposed cells.
 fn sparse_infill_paths(
     region: &[Polygon],
-    grid: &Grid,
-    exposed: &[bool],
+    skip: &dyn Fn(Point2) -> bool,
     layer: usize,
     line_width: f32,
-    settings: &PrintSettings,
+    percent: f32,
+    pattern: InfillPattern,
     from: Option<Point2>,
 ) -> Vec<ToolPath> {
     let mut paths: Vec<ToolPath> = Vec::new();
-    let base = line_width * 100.0 / settings.infill_percent.min(100.0);
-    let (angles, spacing) = infill_angles(settings.infill_pattern, layer, base);
+    let base = line_width * 100.0 / percent.min(100.0);
+    let (angles, spacing) = infill_angles(pattern, layer, base);
     // Each direction is ordered on its own, so one set of lines is laid before the next
     // crosses it, starting where the previous set ended.
     for angle in angles {
         let mut set = Vec::new();
         for seg in scan_fill(region, spacing, angle.to_radians()) {
-            for piece in split_by(&seg, |p| exposed[grid.index_of(p)]) {
+            for piece in split_by(&seg, skip) {
                 if !piece.1 {
                     set.push(open_path(PathKind::SparseInfill, piece.0));
                 }
@@ -2042,6 +2117,65 @@ mod tests {
     }
 
     #[test]
+    fn test_box_modifier_with_full_infill_is_solid_only_inside_the_box() {
+        // A 30 mm cube, and a 10 x 10 mm box modifier through its middle (x and y from
+        // -5 to 5) with 100 % infill.
+        let tris = block_at(30.0, 30.0, 0.0);
+        let modifier = InfillModifier {
+            triangles: block_at(10.0, 30.0, 0.0),
+            infill_percent: Some(100.0),
+            infill_pattern: None,
+        };
+        let settings = PrintSettings::default();
+        let r = slice_modified(&tris, &[modifier], &settings, 0.42, &|_| {});
+        let plain = slice(&tris, &settings, 0.42, &|_| {});
+        assert_eq!(r.layers.len(), plain.layers.len());
+        // A middle layer (well away from the top and bottom surfaces).
+        let mid = &r.layers[r.layers.len() / 2];
+        let points = |kind: PathKind| -> Vec<Point2> {
+            mid.paths
+                .iter()
+                .filter(|p| p.kind == kind)
+                .flat_map(|p| p.points.iter().copied())
+                .collect()
+        };
+        let solid = points(PathKind::SolidInfill);
+        assert!(!solid.is_empty(), "solid infill inside the box");
+        let inside = |p: &Point2| p.x.abs() <= 5.6 && p.y.abs() <= 5.6;
+        assert!(solid.iter().all(inside), "solid infill only inside the box");
+        // The solid lines fill it: the box is 10 mm across, lines are 0.42 mm apart.
+        let solid_lines = mid
+            .paths
+            .iter()
+            .filter(|p| p.kind == PathKind::SolidInfill)
+            .count();
+        assert!(solid_lines >= 20, "{solid_lines} lines");
+        // Sparse infill only outside the box (allowing for the half-cell steps).
+        let sparse = points(PathKind::SparseInfill);
+        assert!(!sparse.is_empty());
+        let deep_inside = |p: &Point2| p.x.abs() < 4.4 && p.y.abs() < 4.4;
+        assert!(
+            !sparse.iter().any(deep_inside),
+            "no sparse infill inside the box"
+        );
+        // The walls are the cube's own.
+        let walls = |r: &SliceResult| {
+            let l = &r.layers[r.layers.len() / 2];
+            format!(
+                "{:?}",
+                l.paths
+                    .iter()
+                    .filter(|p| matches!(p.kind, PathKind::OuterWall | PathKind::InnerWall))
+                    .collect::<Vec<_>>()
+            )
+        };
+        assert_eq!(walls(&r), walls(&plain));
+        // With no modifiers, nothing changes.
+        let none = slice_modified(&tris, &[], &settings, 0.42, &|_| {});
+        assert_eq!(format!("{none:?}"), format!("{plain:?}"));
+    }
+
+    #[test]
     fn test_slice_groups_height_range_changes_infill_exactly_at_its_layers() {
         // A 10 mm box; from 2 mm up to 4 mm it has no infill and four walls.
         for adhesion in [Adhesion::Skirt, Adhesion::Raft] {
@@ -2058,6 +2192,7 @@ mod tests {
             let ps = PartSettings {
                 base: plate.clone(),
                 ranges: vec![(2.0, 4.0, range)],
+                modifiers: Vec::new(),
             };
             let r = slice_groups(&tris, &[(tris.clone(), ps)], &plate, 0.42, &|_| {});
             let plain = slice(&tris, &plate, 0.42, &|_| {});
