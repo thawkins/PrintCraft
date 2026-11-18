@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PrintCraft, described in the .txt beside it): bridges of 10-40 mm over pillars, and
   overhang wedges at 30-70 degrees with a flat shelf on top. For checking M1 on a printer.
   `bridge-overhang-test.printcraft` beside it is a ready-to-run project with the test's
-  settings (supports off, avoid crossing walls on, Creator Pro preset).
+  settings (supports off, avoid crossing walls on, Ender-3 V3 KE preset).
 
 ### Changed
 
