@@ -331,6 +331,7 @@ impl PrintCraftApp {
 
     fn load_paths(&mut self, paths: &[PathBuf]) {
         let mut errors = Vec::new();
+        let mut repaired = Vec::new();
         let mut loaded = 0;
         // A project file opens as a project (it replaces the plate).
         if let Some(p) = paths.iter().find(|p| crate::project::is_project(p)) {
@@ -343,6 +344,10 @@ impl PrintCraftApp {
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_default();
+                    let (mesh, fixed) = crate::repair::repair(mesh);
+                    if !fixed.is_empty() {
+                        repaired.push(format!("{name}: {fixed}"));
+                    }
                     self.add_object(PlacedObject::new(name, mesh));
                     loaded += 1;
                 }
@@ -356,6 +361,9 @@ impl PrintCraftApp {
                 "Added {loaded} model{}.",
                 if loaded == 1 { "" } else { "s" }
             );
+            if !repaired.is_empty() {
+                self.status += &format!(" Repaired {}.", repaired.join("; "));
+            }
         }
     }
 
@@ -2434,6 +2442,38 @@ mod tests {
 
     fn cube(name: &str) -> PlacedObject {
         PlacedObject::new(name, Mesh::cube(Vec3::new(10.0, 10.0, 10.0)))
+    }
+
+    #[test]
+    fn test_import_repairs_a_broken_model_and_says_what_was_fixed() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/temp/repair-import");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A cube with one side missing and another side turned inside out.
+        let mut broken = Mesh::cube(Vec3::new(20.0, 20.0, 20.0));
+        broken.triangles.drain(6..8);
+        for t in &mut broken.triangles[4..6] {
+            t.swap(1, 2);
+        }
+        let path = dir.join("broken.stl");
+        std::fs::write(&path, broken.to_binary_stl()).unwrap();
+        let clean = dir.join("clean.stl");
+        std::fs::write(
+            &clean,
+            Mesh::cube(Vec3::new(20.0, 20.0, 20.0)).to_binary_stl(),
+        )
+        .unwrap();
+
+        let mut app = PrintCraftApp::for_tests();
+        app.load_paths(&[path]);
+        assert_eq!(
+            app.status,
+            "Added 1 model. Repaired broken: flipped 2 faces, closed 1 hole."
+        );
+        assert_eq!(app.objects[0].mesh.triangles.len(), 12);
+        // A clean model says nothing about repairs.
+        app.load_paths(&[clean]);
+        assert_eq!(app.status, "Added 1 model.");
     }
 
     #[test]

@@ -28,6 +28,7 @@ mod printer;
 mod profiles;
 mod project;
 mod recent;
+mod repair;
 mod settings_registry;
 mod slicer;
 mod theme;
@@ -342,6 +343,10 @@ fn slice_without_window(args: &Args) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        let (mesh, fixed) = repair::repair(mesh);
+        if !fixed.is_empty() {
+            eprintln!("printcraft: {}: repaired: {fixed}", path.display());
+        }
         let mut obj = model::PlacedObject::new(path.display().to_string(), mesh);
         // Several models: line them up left to right with a gap.
         obj.x = (i as f32 - (count as f32 - 1.0) / 2.0) * 40.0;

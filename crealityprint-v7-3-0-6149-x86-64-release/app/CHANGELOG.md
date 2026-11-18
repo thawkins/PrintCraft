@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mesh repair on import (gap plan task M3.4). Models opened in the app or sliced from
+  the command line are checked: points less than 0.0001 mm apart are merged, faces
+  collapsed to a line or point are removed, faces turned the wrong way round are
+  turned back (so neighbours agree, and closed parts face outwards), and simple holes
+  are closed with a fan of faces. The status bar says what was fixed, for example
+  "Repaired part: flipped 2 faces, closed 1 hole". A clean model is left exactly as it
+  was, so its G-code doesn't change.
 - Lay flat on a picked face (gap plan task M3.3): a Face tool (F) in the tool strip.
   Hovering a part highlights the flat face under the mouse in orange; a click turns the
   part so that face sits on the plate. "Lay flat" (the biggest face) now also allows

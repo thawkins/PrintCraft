@@ -24,6 +24,7 @@ Status:
 | Scale X, Y and Z separately | **Yes (new)**: untick Lock beside Scale on the Objects tab; along the model's own axes. The corner handle still scales evenly |
 | Undo / redo | **Yes (new)**: Edit menu, Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z; 100 steps of plate and settings changes; a drag or a typed value is one step |
 | Lay on face | **Yes (new)**: the Face tool (F) highlights the flat face under the mouse in orange and lays the part on it with a click; "Lay flat" still puts the biggest flat face down |
+| Mesh repair | **Yes (new)**: on import, merges points less than 0.0001 mm apart, removes collapsed faces, turns faces the right way out and closes simple holes; the status bar says what was fixed |
 | Cut tool, modifiers, height range modifiers, per-object settings | Not yet |
 | Variable layer height | Not yet |
 | Multiple plates, sequential (one-at-a-time) printing | Not yet |

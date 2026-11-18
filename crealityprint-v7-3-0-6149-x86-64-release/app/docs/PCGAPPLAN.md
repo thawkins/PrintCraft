@@ -77,7 +77,7 @@ Goal: a model can be fixed, cut and placed without another tool.
 | M3.1 | **Done.** **Undo/redo.** A command stack over plate edits: add, delete, move, rotate, scale, arrange, settings change. Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z, with up to 100 steps, plus Edit menu entries. | Tests: each edit undoes to an equal fingerprint and redoes. | 3 |
 | M3.2 | **Done.** **Non-uniform scale.** Separate X/Y/Z scale fields, with a lock toggle (locked by default) and a per-axis handle option. | Test: a 2:1:1 scale gives the expected bounds. Projects save it. | 1 |
 | M3.3 | **Done.** **Lay flat on a picked face.** In "Lay flat" mode, hovering highlights the coplanar face group under the cursor and a click puts it down. | Test: picking each face of a rotated cube lands it flat. Screenshot. | 2 |
-| M3.4 | **Mesh repair.** On import: merge duplicate vertices, fix inconsistent winding, close simple holes (fan fill), drop degenerate triangles. Report what was fixed in the status line. | Tests: a cube with a missing face and flipped normals slices to the same layers as a clean cube. | 2.5 |
+| M3.4 | **Done.** **Mesh repair.** On import: merge duplicate vertices, fix inconsistent winding, close simple holes (fan fill), drop degenerate triangles. Report what was fixed in the status line. | Tests: a cube with a missing face and flipped normals slices to the same layers as a clean cube. | 2.5 |
 | M3.5 | **Planar cut.** Cut at a Z height (horizontal plane first), keep upper, lower or both parts, cap the cut faces, and lay the parts flat. | Test: cutting a cube at half height gives two closed meshes of half the volume. | 3 |
 | M3.6 | **Split to objects.** Split a mesh with disconnected shells into separate objects. | Test: a two-shell mesh becomes 2 objects. | 1 |
 

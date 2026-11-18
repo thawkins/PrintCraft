@@ -192,6 +192,16 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     The group with the most area is turned to face down: turn about X by atan2(nᵧ, n_z),
     then about Y by atan2(−nₓ, √(nᵧ²+n_z²)) + 180°. Spin about the vertical is kept.
 
+15. **Mesh repair on import** (`src/repair.rs`, gap plan M3.4). Points within 0.0001 mm
+    are merged (exact copies first, then a grid of 0.0001 mm cells; the first point seen
+    is kept). A triangle with two corners on one point is removed. Triangles sharing an
+    edge used by exactly two are turned so they run along it in opposite directions;
+    in each part the facing most triangles had is kept. A loop of edges used by one
+    triangle each is a hole and is closed with a fan from its first point, unless it
+    passes a point twice or has as many edges as its part has triangles (the rim of an
+    open sheet). A closed part with negative volume is turned inside out. With nothing
+    to fix, the mesh is returned untouched.
+
 ## Print file and estimates (src/gcode.rs)
 
 * **Extrusion per move.** `length × line_width × layer_height ÷ (π × (filament ⌀ / 2)²)`.
