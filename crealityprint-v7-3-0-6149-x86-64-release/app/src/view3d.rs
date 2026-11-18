@@ -50,12 +50,18 @@ impl Camera {
         View::new(self, rect).project(p)
     }
 
-    /// Where the mouse ray meets the plate (z = 0).
-    pub fn plate_point(&self, screen: Pos2, rect: Rect) -> Option<Vec3> {
+    /// The ray from the eye through `screen`: its start and direction (not unit length).
+    pub fn ray(&self, screen: Pos2, rect: Rect) -> (Vec3, Vec3) {
         let (eye, forward, right, up) = self.basis();
         let f = Self::focal(rect);
         let c = rect.center();
         let dir = forward + right * ((screen.x - c.x) / f) + up * (-(screen.y - c.y) / f);
+        (eye, dir)
+    }
+
+    /// Where the mouse ray meets the plate (z = 0).
+    pub fn plate_point(&self, screen: Pos2, rect: Rect) -> Option<Vec3> {
+        let (eye, dir) = self.ray(screen, rect);
         if dir.z.abs() < 1e-6 {
             return None;
         }

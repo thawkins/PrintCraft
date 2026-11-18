@@ -1,6 +1,7 @@
-//! Line icons for the selection tool strip (Move, Scale, Rotate), drawn with the painter so
-//! they stay sharp at any size and need no image files. Original drawings using common
-//! symbols: a four-way arrow, a small box growing into a large one, and a curved arrow.
+//! Line icons for the selection tool strip (Move, Scale, Rotate, Face), drawn with the
+//! painter so they stay sharp at any size and need no image files. Original drawings using
+//! common symbols: a four-way arrow, a small box growing into a large one, a curved arrow,
+//! and a tilted face with an arrow down to a plate line.
 
 use crate::gizmo::Tool;
 use eframe::egui::{self, Color32, Pos2, Rect, Shape, Stroke, Vec2};
@@ -53,6 +54,31 @@ pub fn draw(painter: &egui::Painter, rect: Rect, tool: Tool, color: Color32) {
             let d = Vec2::new(-end.sin(), -end.cos());
             arrow_head(painter, at(end) + d * head * 0.6, d, head, color);
             painter.circle_filled(c, s * 0.06, color);
+        }
+        Tool::Face => {
+            // A tilted face with an arrow down to the plate line.
+            let face = [
+                c + Vec2::new(-s * 0.32, -s * 0.12),
+                c + Vec2::new(s * 0.08, -s * 0.36),
+                c + Vec2::new(s * 0.34, -s * 0.16),
+                c + Vec2::new(-s * 0.06, s * 0.08),
+            ];
+            painter.add(Shape::closed_line(face.to_vec(), stroke));
+            let plate = c.y + s * 0.36;
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - s * 0.36, plate),
+                    Pos2::new(c.x + s * 0.36, plate),
+                ],
+                stroke,
+            );
+            let d = Vec2::new(0.0, 1.0);
+            let tip = Pos2::new(c.x + s * 0.02, plate - s * 0.06);
+            painter.line_segment(
+                [Pos2::new(tip.x, c.y + s * 0.02), tip - d * head * 0.8],
+                stroke,
+            );
+            arrow_head(painter, tip, d, head, color);
         }
     }
 }

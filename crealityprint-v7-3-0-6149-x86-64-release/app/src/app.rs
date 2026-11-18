@@ -176,6 +176,8 @@ pub struct PrintCraftApp {
     /// The selection tool: move arrows, scale corners or rotate rings.
     tool: gizmo::Tool,
     gizmo_hover: Option<gizmo::Handle>,
+    /// With the Face tool: the part and the triangles of the flat face under the mouse.
+    face_hover: Option<(usize, Vec<usize>)>,
     /// The last few projects opened or saved, listed in the File menu.
     recent: crate::recent::RecentProjects,
     /// Open the File menu on the first frame (`--file-menu`, for checking pictures).
@@ -292,6 +294,7 @@ impl PrintCraftApp {
             egui_ctx: ctx.clone(),
             tool: gizmo::Tool::Move,
             gizmo_hover: None,
+            face_hover: None,
             recent,
             open_file_menu: start.file_menu,
         };
@@ -1163,6 +1166,24 @@ impl PrintCraftApp {
                 })
                 .collect();
             view3d::draw_objects(&painter, &self.camera, rect, &draw);
+            // The face the Face tool would lay down, drawn over its part.
+            if let Some((oi, tris)) = &self.face_hover {
+                if let Some(o) = self.objects.get(*oi) {
+                    let world = o.world_triangles();
+                    let face: Vec<Triangle> =
+                        tris.iter().filter_map(|&i| world.get(i).copied()).collect();
+                    view3d::draw_objects(
+                        &painter,
+                        &self.camera,
+                        rect,
+                        &[DrawObject {
+                            triangles: &face,
+                            // Orange, so it stands out on a selected (teal) part.
+                            color: theme::WARNING,
+                        }],
+                    );
+                }
+            }
         }
 
         self.handle_view_input(ui, rect, &response, preview);
@@ -1301,6 +1322,9 @@ impl PrintCraftApp {
                                 gizmo::Tool::Rotate => {
                                     "Drag a red, green or blue ring to turn the selected model"
                                 }
+                                gizmo::Tool::Face => {
+                                    "Click a flat face of a model to lay it on the plate"
+                                }
                             };
                             let response = ui.add(b);
                             let painter = ui.painter();
@@ -1359,6 +1383,14 @@ impl PrintCraftApp {
         if self.gizmo_hover.is_some() || matches!(self.drag, Drag::Gizmo(_)) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
+        // The Face tool: the flat face under the mouse, to lay down on a click.
+        self.face_hover = match (self.tool, response.hover_pos(), &self.drag) {
+            (gizmo::Tool::Face, Some(at), Drag::None) if !preview => self.face_under(rect, at),
+            _ => None,
+        };
+        if self.face_hover.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         if response.drag_started() {
             self.begin_view_drag(ui, rect, pointer, selection, preview);
         }
@@ -1369,7 +1401,10 @@ impl PrintCraftApp {
             self.drag = Drag::None;
         }
         if response.clicked() && !preview {
-            self.select_clicked_object(rect, pointer);
+            match self.face_hover.take() {
+                Some((oi, tris)) => self.lay_flat_on_face(oi, &tris),
+                None => self.select_clicked_object(rect, pointer),
+            }
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -1377,6 +1412,32 @@ impl PrintCraftApp {
                 self.camera.zoom(scroll);
             }
         }
+    }
+
+    /// The nearest part under `at` and the triangles of the flat face hit there.
+    fn face_under(&self, rect: egui::Rect, at: egui::Pos2) -> Option<(usize, Vec<usize>)> {
+        let (eye, dir) = self.camera.ray(at, rect);
+        let (oi, tri, _) = self
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(oi, o)| o.face_hit(eye, dir).map(|(tri, along)| (oi, tri, along)))
+            .min_by(|a, b| a.2.total_cmp(&b.2))?;
+        Some((oi, self.objects[oi].coplanar_with(tri)))
+    }
+
+    /// Lays part `oi` flat on the face made of triangles `tris`, and selects it.
+    fn lay_flat_on_face(&mut self, oi: usize, tris: &[usize]) {
+        let Some(o) = self.objects.get_mut(oi) else {
+            return;
+        };
+        let Some(n) = tris.first().and_then(|&i| o.face_normal(i)) else {
+            return;
+        };
+        o.lay_flat_on(n);
+        self.selected = Some(oi);
+        self.refresh_plate();
+        self.status = format!("{} laid flat on the face picked.", self.objects[oi].name);
     }
 
     /// The object drawn under `at` on the view, if any.
@@ -1759,6 +1820,7 @@ impl PrintCraftApp {
                 (egui::Key::M, gizmo::Tool::Move),
                 (egui::Key::S, gizmo::Tool::Scale),
                 (egui::Key::R, gizmo::Tool::Rotate),
+                (egui::Key::F, gizmo::Tool::Face),
             ]
             .into_iter()
             .find(|(k, _)| i.key_pressed(*k))
@@ -2372,6 +2434,40 @@ mod tests {
 
     fn cube(name: &str) -> PlacedObject {
         PlacedObject::new(name, Mesh::cube(Vec3::new(10.0, 10.0, 10.0)))
+    }
+
+    #[test]
+    fn test_face_tool_finds_the_face_under_the_mouse_and_lays_it_down() {
+        let mut app = PrintCraftApp::for_tests();
+        app.add_object(PlacedObject::new(
+            "box",
+            Mesh::cube(Vec3::new(30.0, 20.0, 10.0)),
+        ));
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let o = &app.objects[0];
+        let b = o.world_bounds();
+        // A point on the top face, as the camera shows it.
+        let top = Vec3::new(b.center().x + 3.0, b.center().y - 2.0, b.max.z);
+        let (at, _) = app.camera.project(top, rect).expect("on screen");
+        let (oi, tris) = app
+            .face_under(rect, at)
+            .expect("the top is under the mouse");
+        assert_eq!(oi, 0);
+        assert_eq!(tris.len(), 2, "the top's two triangles");
+        let world = app.objects[0].world_triangles();
+        for &i in &tris {
+            let t = world[i];
+            assert!((t[0].z - b.max.z).abs() < 1e-3, "a top triangle");
+        }
+        // Laid on a side (the 30 x 10 one): it then stands 20 mm tall.
+        let side = Vec3::new(b.center().x, b.min.y, b.center().z);
+        let side_tris: Vec<usize> = (0..world.len())
+            .filter(|&i| world[i].iter().all(|v| (v.y - side.y).abs() < 1e-3))
+            .collect();
+        app.lay_flat_on_face(0, &side_tris);
+        let h = app.objects[0].world_bounds().size().z;
+        assert!((h - 20.0).abs() < 1e-3, "height {h}");
+        assert_eq!(app.selected, Some(0));
     }
 
     #[test]

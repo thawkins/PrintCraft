@@ -182,7 +182,13 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     strip-like spaces are filled well: a gap gets one line.
 13. **Spiral vase.** One wall. The first `bottom_layers` layers are solid. After that there
     is only the outer wall: no infill, no top.
-14. **Lay flat** (`PlacedObject::lay_flat`). Faces are grouped by direction (about 1°).
+14. **Lay flat on a picked face** (`PlacedObject::lay_flat_on`, gap plan M3.3). With the
+    Face tool (F) the mouse's ray is tested against every part's triangles
+    (Moller-Trumbore); the nearest hit's triangle and the others in the same flat face
+    (facing within about 1 degree, in the same plane within 0.05 mm) are drawn orange. A
+    click turns the part so that face points down, by the same turn as below, and
+    selects it. Faces are measured with the part's X/Y/Z scale applied.
+    **Lay flat** (`PlacedObject::lay_flat`). Faces are grouped by direction (about 1°).
     The group with the most area is turned to face down: turn about X by atan2(nᵧ, n_z),
     then about Y by atan2(−nₓ, √(nᵧ²+n_z²)) + 180°. Spin about the vertical is kept.
 

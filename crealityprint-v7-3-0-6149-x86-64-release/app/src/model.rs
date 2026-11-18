@@ -335,7 +335,7 @@ impl PlacedObject {
     pub fn lay_flat(&mut self) {
         let mut areas: std::collections::HashMap<(i32, i32, i32, i64), (f32, Vec3)> =
             Default::default();
-        for t in &self.mesh.triangles {
+        for t in self.mesh.triangles.iter().map(|t| self.scaled(t)) {
             let c = (t[1] - t[0]).cross(t[2] - t[0]);
             let area = c.length() * 0.5;
             if area < 1e-9 {
@@ -369,6 +369,13 @@ impl PlacedObject {
             }
         }
         let Some((_, n)) = best else { return };
+        self.lay_flat_on(n);
+    }
+
+    /// Turns the object so the face with normal `n` (in the model's own axes, with its
+    /// scale applied: `face_normal`) faces down onto the plate. The turn about the
+    /// vertical is kept.
+    pub fn lay_flat_on(&mut self, n: Vec3) {
         // Turn about X until the normal has no Y part, then about Y until it points down.
         let a = n.y.atan2(n.z);
         let r = (n.y * n.y + n.z * n.z).sqrt();
@@ -385,6 +392,76 @@ impl PlacedObject {
         };
         self.rotation.x = wrap(a.to_degrees());
         self.rotation.y = wrap(b.to_degrees());
+    }
+
+    /// Triangle `t` with the object's scale applied (in the model's own axes).
+    fn scaled(&self, t: &Triangle) -> Triangle {
+        let s = self.scale * 0.01;
+        t.map(|v| Vec3::new(v.x * s.x, v.y * s.y, v.z * s.z))
+    }
+
+    /// The outward normal of triangle `i` in the model's own axes with its scale applied,
+    /// for `lay_flat_on`; `None` for a triangle with no area or no such triangle.
+    pub fn face_normal(&self, i: usize) -> Option<Vec3> {
+        let t = self.scaled(self.mesh.triangles.get(i)?);
+        let c = (t[1] - t[0]).cross(t[2] - t[0]);
+        (c.length() > 1e-9).then(|| c.normalized())
+    }
+
+    /// The index of the nearest triangle hit by the ray from `origin` along `dir` (plate
+    /// coordinates), or `None` when it misses the object.
+    #[cfg(test)]
+    pub fn face_at(&self, origin: Vec3, dir: Vec3) -> Option<usize> {
+        self.face_hit(origin, dir).map(|(i, _)| i)
+    }
+
+    /// The nearest triangle hit by the ray from `origin` along `dir` (plate coordinates)
+    /// and how far along the ray it is (in units of `dir`); `None` when it misses.
+    pub fn face_hit(&self, origin: Vec3, dir: Vec3) -> Option<(usize, f32)> {
+        let mut nearest: Option<(f32, usize)> = None;
+        for (i, t) in self.world_triangles().iter().enumerate() {
+            // Moller-Trumbore ray/triangle test.
+            let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+            let p = dir.cross(e2);
+            let det = e1.dot(p);
+            if det.abs() < 1e-9 {
+                continue;
+            }
+            let inv = 1.0 / det;
+            let s = origin - t[0];
+            let u = s.dot(p) * inv;
+            if !(0.0..=1.0).contains(&u) {
+                continue;
+            }
+            let q = s.cross(e1);
+            let v = dir.dot(q) * inv;
+            if v < 0.0 || u + v > 1.0 {
+                continue;
+            }
+            let along = e2.dot(q) * inv;
+            if along > 1e-6 && nearest.is_none_or(|(best, _)| along < best) {
+                nearest = Some((along, i));
+            }
+        }
+        nearest.map(|(along, i)| (i, along))
+    }
+
+    /// The triangles in the same flat face as triangle `i`: facing the same way (within
+    /// about 1 degree) and in the same plane (within 0.05 mm), `i` included.
+    pub fn coplanar_with(&self, i: usize) -> Vec<usize> {
+        let Some(n) = self.face_normal(i) else {
+            return Vec::new();
+        };
+        let plane = n.dot(self.scaled(&self.mesh.triangles[i])[0]);
+        let cos_1_degree = 1.0f32.to_radians().cos();
+        (0..self.mesh.triangles.len())
+            .filter(|&j| {
+                self.face_normal(j).is_some_and(|m| {
+                    m.dot(n) >= cos_1_degree
+                        && (n.dot(self.scaled(&self.mesh.triangles[j])[0]) - plane).abs() < 0.05
+                })
+            })
+            .collect()
     }
 
     pub fn world_bounds(&self) -> Bounds {
@@ -555,6 +632,68 @@ mod tests {
         );
         // Still resting on the plate.
         assert!(o.world_bounds().min.z.abs() < 1e-4);
+    }
+
+    /// The world-space normal of triangle `i` of the object as placed.
+    fn world_normal(o: &PlacedObject, i: usize) -> Vec3 {
+        let t = o.world_triangles()[i];
+        (t[1] - t[0]).cross(t[2] - t[0]).normalized()
+    }
+
+    #[test]
+    fn test_lay_flat_on_each_face_of_a_turned_box() {
+        // A 20 x 10 x 5 box turned every which way: each face, picked, ends up on the plate.
+        let mut o = PlacedObject::new("box", Mesh::cube(Vec3::new(20.0, 10.0, 5.0)));
+        for i in 0..o.mesh.triangles.len() {
+            o.rotation = Vec3::new(30.0, 40.0, 10.0);
+            let n = o.face_normal(i).expect("a real face");
+            o.lay_flat_on(n);
+            let down = world_normal(&o, i);
+            assert!(down.z < -0.999, "face {i} points {down:?}");
+            // The face is on the plate, and the part stands as tall as it is across that face.
+            let tri = o.world_triangles()[i];
+            assert!(
+                tri.iter().all(|v| v.z.abs() < 1e-3),
+                "face {i} lifted: {tri:?}"
+            );
+            let h = o.world_bounds().size().z;
+            assert!(
+                [20.0, 10.0, 5.0].iter().any(|d| (h - d).abs() < 1e-3),
+                "height {h}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lay_flat_on_a_face_of_a_stretched_part() {
+        // A wedge-like scale makes faces lean differently than in the mesh as loaded.
+        let mut o = PlacedObject::new("box", Mesh::cube(Vec3::new(10.0, 10.0, 10.0)));
+        o.scale = Vec3::new(300.0, 100.0, 50.0);
+        o.rotation = Vec3::new(20.0, 70.0, 0.0);
+        let n = o.face_normal(0).unwrap();
+        o.lay_flat_on(n);
+        assert!(world_normal(&o, 0).z < -0.999);
+    }
+
+    #[test]
+    fn test_face_under_a_ray_and_its_flat_neighbours() {
+        let o = PlacedObject::new("box", Mesh::cube(Vec3::new(20.0, 10.0, 5.0)));
+        // Straight down onto the middle of the top.
+        let hit = o
+            .face_at(Vec3::new(1.0, 1.0, 50.0), Vec3::new(0.0, 0.0, -1.0))
+            .expect("hits the top");
+        assert!(
+            world_normal(&o, hit).z > 0.999,
+            "the nearest face is the top"
+        );
+        let group = o.coplanar_with(hit);
+        assert_eq!(group.len(), 2, "the top is two triangles: {group:?}");
+        assert!(group.contains(&hit));
+        assert!(group.iter().all(|&i| world_normal(&o, i).z > 0.999));
+        // Beside the box: nothing.
+        assert!(o
+            .face_at(Vec3::new(40.0, 0.0, 50.0), Vec3::new(0.0, 0.0, -1.0))
+            .is_none());
     }
 
     #[test]

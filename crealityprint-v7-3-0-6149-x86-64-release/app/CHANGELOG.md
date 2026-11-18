@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Lay flat on a picked face (gap plan task M3.3): a Face tool (F) in the tool strip.
+  Hovering a part highlights the flat face under the mouse in orange; a click turns the
+  part so that face sits on the plate. "Lay flat" (the biggest face) now also allows
+  for a part's X/Y/Z scale.
 - Separate X, Y and Z scale (gap plan task M3.2). On the Objects tab, unticking Lock
   beside Scale shows a field per axis; with Lock ticked (the default) the slider scales
   all three together, keeping their proportions. The axes are the model's own, before

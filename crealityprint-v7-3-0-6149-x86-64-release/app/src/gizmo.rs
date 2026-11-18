@@ -14,16 +14,19 @@ pub enum Tool {
     Move,
     Scale,
     Rotate,
+    /// Lay the part flat on the face clicked (no handles).
+    Face,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 3] = [Self::Move, Self::Scale, Self::Rotate];
+    pub const ALL: [Tool; 4] = [Self::Move, Self::Scale, Self::Rotate, Self::Face];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Move => "Move",
             Self::Scale => "Scale",
             Self::Rotate => "Rotate",
+            Self::Face => "Face",
         }
     }
 
@@ -32,6 +35,7 @@ impl Tool {
             Self::Move => "M",
             Self::Scale => "S",
             Self::Rotate => "R",
+            Self::Face => "F",
         }
     }
 }
@@ -129,6 +133,7 @@ pub fn handles(tool: Tool) -> Vec<Handle> {
         Tool::Move => vec![Handle::MoveX, Handle::MoveY],
         Tool::Scale => (0..8).map(Handle::ScaleCorner).collect(),
         Tool::Rotate => vec![Handle::RotateX, Handle::RotateY, Handle::RotateZ],
+        Tool::Face => Vec::new(),
     }
 }
 
