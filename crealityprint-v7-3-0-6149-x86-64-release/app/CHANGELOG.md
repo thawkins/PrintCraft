@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Duet / RepRapFirmware (gap plan task M6.5). The printer page connects to a Duet board,
+  standalone (its `rr_` requests) or run by a Raspberry Pi (the `/machine` API), with the
+  board's password in "Password or API key" ("reprap" when empty; never saved): upload
+  and print, live status (temperatures, progress, times, layers, fan, speed), controls,
+  pause, resume and stop, the file list and printing from it, and cancelling one object
+  of a labelled print (M486). "Find printers on Wi-Fi" and typed addresses recognise
+  Duet boards. Tested against a pretend Duet in both set-ups, not yet a real board.
+
 - OctoPrint (gap plan task M6.4). The printer page connects to an OctoPrint server with
   its API key, typed in the box now called "Password or API key" (never saved): upload
   and print, live status (temperatures, progress, times, file), temperatures, fan,

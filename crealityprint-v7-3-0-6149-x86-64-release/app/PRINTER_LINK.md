@@ -74,7 +74,10 @@ while the printer's own port does.
   reads `GET /api/version`. Only answers that say "PrusaLink", or that refuse with
   PrusaLink's `Printer API` sign-in, count as PrusaLink. Otherwise an answer whose text
   says "OctoPrint", or (refused without a key) a front page that says "OctoPrint",
-  counts as an OctoPrint server. Routers and other web devices are skipped.
+  counts as an OctoPrint server. A Duet board is recognised by `rr_connect` answering
+  with an `err` number (the session is closed again with `rr_disconnect`), or, when run
+  by a Raspberry Pi, by `/machine/connect` handing out a session key or refusing the
+  password. Routers and other web devices are skipped.
 * You can also type the address by hand, or start the app with `--connect ADDRESS`.
 * Not used: mDNS/Bonjour discovery. Whether stock KE firmware announces itself that way is
   unverified, and the address scan works without it.
@@ -160,6 +163,32 @@ States from the flags: error or closedOrError = Failed, cancelling = Stopped, pa
 pausing = Paused, printing = Printing, operational = Ready. OctoPrint has no print
 history and no layer numbers in its API. A wrong key shows "OctoPrint refused the API
 key"; binary G-code and cancel object aren't offered.
+
+## 3a3. Duet / RepRapFirmware (src/printer/duet.rs) — documented, unverified on a real board
+
+Two HTTP APIs, depending on the set-up; the app tries the standalone one first. The
+password is the board's (M551), "reprap" when none is set, typed into the "Password or
+API key" box. It is never saved. Both APIs report the same object model.
+
+| What | Standalone (`rr_`) | Run by a Raspberry Pi (`/machine`) |
+|---|---|---|
+| Sign in | `GET /rr_connect?password=`: `err` 0 = in, 1 = wrong password, 2 = no free session; a `sessionKey` (RRF 3.5) goes back as `X-Session-Key` | `GET /machine/connect?password=` gives a `sessionKey`; 404 on versions without sign-in |
+| Live status (every 2 s) | `GET /rr_model?key=&flags=d99vn` (`result`) | `GET /machine/status` |
+| Upload | `POST /rr_upload?name=0:/gcodes/<name>`, the file as the body | `PUT /machine/file/0:/gcodes/<name>` |
+| G-code | `GET /rr_gcode?gcode=` | `POST /machine/code`, the code as the body |
+| Files | `GET /rr_filelist?dir=0:/gcodes` | `GET /machine/directory/0:/gcodes` |
+
+Prints start with `M32 "<file>"`. Pause is M25 and resume M24. Stop is `M25` then `M0`
+in one request: RRF cancels a print once it is paused. Temperatures, fan, speed, jog and
+home are the usual G-code. Cancel object is `M486 P<n>`, the object's number in
+`job.build.objects`, which RRF fills from the M486 labels ("Label objects").
+
+Read from the model: `state.status` (processing, printing, simulating and resuming =
+Printing; paused and pausing = Paused; cancelling = Stopped; halted = Failed; others =
+Ready); the bed heater `heat.bedHeaters[0]` and the nozzle heater `tools[0].heaters[0]`
+(`current`, `active`); `fans[0].requestedValue`; `move.speedFactor`; and from `job`: the
+file, progress (`filePosition` / `file.size`), `duration`, time left (`timesLeft.slicer`,
+else `file`, else `filament`), `layer` and `file.numLayers`. A 401 signs in again.
 
 ## 3b. USB cable (src/printer/usb.rs) — standard RepRap host protocol, unverified on a real printer
 

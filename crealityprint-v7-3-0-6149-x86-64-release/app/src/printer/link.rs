@@ -2,7 +2,7 @@
 //! snapshot each frame and sends commands through a channel.
 
 use super::{
-    creality, moonraker, octoprint, prusalink, sailfish, usb, Api, Command, FoundPrinter,
+    creality, duet, moonraker, octoprint, prusalink, sailfish, usb, Api, Command, FoundPrinter,
     PrinterStatus, Wake,
 };
 use std::collections::VecDeque;
@@ -190,6 +190,7 @@ impl PrinterLink {
                 Api::Moonraker => moonraker::run(&worker),
                 Api::PrusaLink => prusalink::run(&worker),
                 Api::OctoPrint => octoprint::run(&worker),
+                Api::Duet => duet::run(&worker),
                 Api::Usb => usb::run(&worker),
                 Api::Sailfish => sailfish::run(&worker),
             }
@@ -264,6 +265,8 @@ pub fn detect_api(host: &str) -> Option<Api> {
         Some(Api::PrusaLink)
     } else if port_open(host, octoprint::PORT, t) && octoprint::identify(host).is_some() {
         Some(Api::OctoPrint)
+    } else if port_open(host, duet::PORT, t) && duet::identify(host).is_some() {
+        Some(Api::Duet)
     } else {
         None
     }

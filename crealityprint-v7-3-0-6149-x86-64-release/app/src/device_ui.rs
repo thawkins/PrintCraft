@@ -911,11 +911,11 @@ impl DevicePage {
             ui.add(
                 egui::TextEdit::singleline(&mut self.prusa_password)
                     .password(true)
-                    .hint_text("PrusaLink or OctoPrint")
+                    .hint_text("PrusaLink, OctoPrint, Duet")
                     .desired_width(150.0),
             )
             .on_hover_text(
-                "PrusaLink: the password on the printer's screen under Settings → Network → PrusaLink.\nOctoPrint: an API key from OctoPrint's settings (Application Keys). Never saved.",
+                "PrusaLink: the password on the printer's screen under Settings → Network → PrusaLink.\nOctoPrint: an API key from OctoPrint's settings (Application Keys).\nDuet: the board's password (M551), if one is set. Never saved.",
             );
         });
         typed
@@ -1973,6 +1973,7 @@ pub fn device_is_present(p: &FoundPrinter) -> bool {
         Some(Api::Moonraker) => link::port_open(&p.host, moonraker::PORT, t),
         Some(Api::PrusaLink) => link::port_open(&p.host, prusalink::PORT, t),
         Some(Api::OctoPrint) => link::port_open(&p.host, crate::printer::octoprint::PORT, t),
+        Some(Api::Duet) => link::port_open(&p.host, crate::printer::duet::PORT, t),
         None => link::detect_api(&p.host).is_some(),
     }
 }

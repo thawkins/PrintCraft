@@ -663,3 +663,230 @@ fn a_wrong_octoprint_api_key_is_reported() {
         link.state().log
     );
 }
+
+/// Undoes URL percent-encoding.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// The object model a pretend Duet reports: printing, a quarter done, two objects.
+fn duet_model() -> serde_json::Value {
+    json!({
+        "state": {"status": "processing"},
+        "heat": {"bedHeaters": [0], "heaters": [
+            {"current": 60.2, "active": 60.0}, {"current": 209.5, "active": 210.0}]},
+        "tools": [{"heaters": [1]}],
+        "fans": [{"requestedValue": 0.5}],
+        "move": {"speedFactor": 1.0},
+        "job": {
+            "file": {"fileName": "0:/gcodes/cube.gcode", "size": 1000, "numLayers": 50},
+            "filePosition": 250, "duration": 300, "layer": 12,
+            "timesLeft": {"slicer": 900, "file": 1000},
+            "build": {"objects": [{"name": "left", "cancelled": false},
+                                  {"name": "right", "cancelled": true}]}
+        }
+    })
+}
+
+/// A pretend Duet on a free port, standalone (`rr_` requests, password "secret",
+/// session key 1234) or run by a Pi (`/machine`, session key "abc"). Every request that
+/// isn't a status or sign-in is sent down the channel as (method and decoded path,
+/// body).
+fn pretend_duet(sbc: bool) -> (u16, mpsc::Receiver<(String, Vec<u8>)>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel::<(String, Vec<u8>)>();
+    std::thread::spawn(move || {
+        for conn in listener.incoming().take(300) {
+            let Ok(mut s) = conn else { continue };
+            s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let Some((line, head, body)) = read_full_request(&mut s) else {
+                continue;
+            };
+            let mut parts = line.split_whitespace();
+            let (method, uri) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+            let uri = percent_decode(uri);
+            let key = if sbc { "abc" } else { "1234" };
+            let keyed = head
+                .lines()
+                .any(|l| l.eq_ignore_ascii_case(&format!("x-session-key: {key}")));
+            let (status, text) =
+                if uri.starts_with("/rr_connect") {
+                    if sbc {
+                        ("404 Not Found", String::new())
+                    } else if uri.ends_with("password=secret") {
+                        (
+                            "200 OK",
+                            json!({"err": 0, "sessionKey": 1234, "sessionTimeout": 8000,
+                                      "boardType": "duet3mb6hc"})
+                            .to_string(),
+                        )
+                    } else {
+                        ("200 OK", json!({"err": 1}).to_string())
+                    }
+                } else if uri.starts_with("/machine/connect") && sbc {
+                    ("200 OK", json!({"sessionKey": "abc"}).to_string())
+                } else if !keyed {
+                    ("401 Unauthorized", String::new())
+                } else if uri.starts_with("/rr_model") && !sbc {
+                    (
+                        "200 OK",
+                        json!({"key": "", "flags": "d99vn", "result": duet_model()}).to_string(),
+                    )
+                } else if uri == "/machine/status" && sbc {
+                    ("200 OK", duet_model().to_string())
+                } else if uri.starts_with("/rr_filelist") {
+                    ("200 OK", json!({"dir": "0:/gcodes", "first": 0, "next": 0, "files": [
+                    {"type": "f", "name": "a.gcode", "size": 5, "date": "2024-01-01T00:00:00"},
+                    {"type": "f", "name": "b.gcode", "size": 6, "date": "2024-02-01T00:00:00"}
+                ]}).to_string())
+                } else {
+                    let _ = tx.send((format!("{method} {uri}"), body));
+                    let reply = if uri.starts_with("/rr_upload") {
+                        json!({"err": 0}).to_string()
+                    } else if uri.starts_with("/rr_gcode") {
+                        json!({"buff": 200}).to_string()
+                    } else {
+                        String::new()
+                    };
+                    ("200 OK", reply)
+                };
+            let _ = write!(
+                s,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                text.len()
+            );
+        }
+    });
+    (port, rx)
+}
+
+fn duet_link(port: u16, password: &str) -> PrinterLink {
+    let printer = FoundPrinter {
+        host: format!("127.0.0.1:{port}"),
+        api: Some(Api::Duet),
+        login: Some(("maker".into(), password.into())),
+        ..Default::default()
+    };
+    PrinterLink::connect(printer, Arc::new(|| {}))
+}
+
+#[test]
+fn talks_to_a_pretend_standalone_duet() {
+    let (port, rx) = pretend_duet(false);
+    let link = duet_link(port, "secret");
+    assert!(
+        wait_for(&link, |s| s.connected && s.status.progress == Some(25.0)),
+        "no status: {:?}",
+        link.state().log
+    );
+    let st = link.state().status;
+    assert_eq!(st.state, JobState::Printing);
+    assert_eq!((st.nozzle, st.nozzle_target), (Some(209.5), Some(210.0)));
+    assert_eq!((st.bed, st.bed_target), (Some(60.2), Some(60.0)));
+    assert_eq!((st.layer, st.total_layers), (Some(12), Some(50)));
+    assert_eq!((st.elapsed_s, st.remaining_s), (Some(300), Some(900)));
+    assert_eq!(st.file.as_deref(), Some("cube.gcode"));
+    assert_eq!(st.fan_percent, Some(50.0));
+    assert_eq!(st.objects.len(), 2);
+    assert!(st.objects[1].cancelled);
+    let next = || {
+        rx.recv_timeout(Duration::from_secs(8))
+            .expect("nothing arrived")
+    };
+    link.send(Command::UploadAndPrint {
+        name: "cube.gcode".into(),
+        gcode: Arc::new("G28\n".into()),
+    });
+    let (req, body) = next();
+    assert_eq!(req, "POST /rr_upload?name=0:/gcodes/cube.gcode");
+    assert_eq!(body, b"G28\n");
+    assert_eq!(next().0, "GET /rr_gcode?gcode=M32 \"0:/gcodes/cube.gcode\"");
+    for (cmd, want) in [
+        (Command::Pause, "GET /rr_gcode?gcode=M25"),
+        (Command::Resume, "GET /rr_gcode?gcode=M24"),
+        (Command::Stop, "GET /rr_gcode?gcode=M25\nM0"),
+        (Command::SetNozzle(215.0), "GET /rr_gcode?gcode=M104 S215"),
+        (
+            Command::CancelObject("left".into()),
+            "GET /rr_gcode?gcode=M486 P0",
+        ),
+        (
+            Command::PrintFile("0:/gcodes/b.gcode".into()),
+            "GET /rr_gcode?gcode=M32 \"0:/gcodes/b.gcode\"",
+        ),
+    ] {
+        link.send(cmd);
+        assert_eq!(next().0, want);
+    }
+    link.send(Command::RefreshFiles);
+    assert!(
+        wait_for(&link, |s| s.files.as_ref().is_some_and(|f| f.len() == 2)),
+        "no files"
+    );
+    assert_eq!(link.state().files.unwrap()[0].path, "0:/gcodes/b.gcode");
+}
+
+#[test]
+fn talks_to_a_pretend_duet_run_by_a_pi() {
+    let (port, rx) = pretend_duet(true);
+    let link = duet_link(port, "secret");
+    assert!(
+        wait_for(&link, |s| s.connected && s.status.progress == Some(25.0)),
+        "no status: {:?}",
+        link.state().log
+    );
+    let next = || {
+        rx.recv_timeout(Duration::from_secs(8))
+            .expect("nothing arrived")
+    };
+    link.send(Command::UploadAndPrint {
+        name: "cube.gcode".into(),
+        gcode: Arc::new("G28\n".into()),
+    });
+    let (req, body) = next();
+    assert_eq!(req, "PUT /machine/file/0:/gcodes/cube.gcode");
+    assert_eq!(body, b"G28\n");
+    let (req, body) = next();
+    assert_eq!(req, "POST /machine/code");
+    assert_eq!(body, b"M32 \"0:/gcodes/cube.gcode\"");
+    link.send(Command::Pause);
+    assert_eq!(next(), ("POST /machine/code".to_string(), b"M25".to_vec()));
+}
+
+#[test]
+fn a_wrong_duet_password_is_reported() {
+    let (port, _rx) = pretend_duet(false);
+    let link = duet_link(port, "wrong");
+    assert!(
+        wait_for(&link, |s| s
+            .log
+            .iter()
+            .any(|l| l.contains("Wrong Duet password"))),
+        "{:?}",
+        link.state().log
+    );
+}
+
+#[test]
+fn duet_boards_are_recognised_in_both_set_ups() {
+    for sbc in [false, true] {
+        let (port, _rx) = pretend_duet(sbc);
+        let found = super::duet::identify(&format!("127.0.0.1:{port}"));
+        assert_eq!(found.and_then(|f| f.api), Some(Api::Duet), "sbc {sbc}");
+    }
+}

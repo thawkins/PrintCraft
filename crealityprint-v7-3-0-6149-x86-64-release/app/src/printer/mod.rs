@@ -17,6 +17,7 @@ pub mod camera;
 pub mod creality;
 pub mod digest;
 pub mod discovery;
+pub mod duet;
 #[cfg(test)]
 #[path = "tests.rs"]
 pub(crate) mod end_to_end;
@@ -39,6 +40,8 @@ pub enum Api {
     PrusaLink,
     /// OctoPrint, the web host on a Raspberry Pi next to a USB printer.
     OctoPrint,
+    /// A Duet board running RepRapFirmware (standalone, or run by a Raspberry Pi).
+    Duet,
     Usb,
     /// The MakerBot S3G protocol over USB (Sailfish firmware).
     Sailfish,
@@ -51,6 +54,7 @@ impl Api {
             Self::Moonraker => "Klipper (Moonraker)",
             Self::PrusaLink => "PrusaLink",
             Self::OctoPrint => "OctoPrint",
+            Self::Duet => "Duet (RepRapFirmware)",
             Self::Usb => "USB cable",
             Self::Sailfish => "USB cable, MakerBot protocol",
         }
@@ -75,6 +79,7 @@ impl Api {
             Self::Moonraker => "moonraker",
             Self::PrusaLink => "prusalink",
             Self::OctoPrint => "octoprint",
+            Self::Duet => "duet",
             Self::Usb => "usb",
             Self::Sailfish => "sailfish",
         }
@@ -86,6 +91,7 @@ impl Api {
             Self::Moonraker,
             Self::PrusaLink,
             Self::OctoPrint,
+            Self::Duet,
             Self::Usb,
             Self::Sailfish,
         ]
@@ -380,7 +386,7 @@ impl Api {
                 files: true,
                 history: false,
             },
-            Self::OctoPrint => Abilities {
+            Self::OctoPrint | Self::Duet => Abilities {
                 controls: true,
                 files: true,
                 history: false,
@@ -520,12 +526,13 @@ mod tests {
             Api::Moonraker,
             Api::PrusaLink,
             Api::OctoPrint,
+            Api::Duet,
             Api::Usb,
             Api::Sailfish,
         ] {
             assert_eq!(Api::from_key(api.key()), Some(api));
         }
-        assert_eq!(Api::from_key("duet"), None);
+        assert_eq!(Api::from_key("bambu"), None);
     }
 
     #[test]
