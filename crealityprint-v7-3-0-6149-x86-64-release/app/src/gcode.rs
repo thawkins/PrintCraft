@@ -588,6 +588,217 @@ struct Writer<'a> {
     walls: Vec<Vec<Point2>>,
 }
 
+/// The nozzles a print uses, and which one it starts with.
+#[derive(Clone, Copy, Debug)]
+struct Nozzles {
+    /// A two-nozzle printer: nozzles are named in every heat command.
+    dual: bool,
+    /// Which nozzles print something.
+    used: [bool; 2],
+    /// Both nozzles print, so layers change tools.
+    two: bool,
+    /// The nozzle selected first.
+    start_tool: u8,
+}
+
+impl Nozzles {
+    fn of(printer: &Printer, tools: &Tools, supports: bool) -> Self {
+        let dual = printer.extruders >= 2;
+        let used = if !dual {
+            [true, false]
+        } else if tools.ditto {
+            [true, true]
+        } else {
+            tools.used(supports)
+        };
+        Self {
+            dual,
+            used,
+            two: dual && used[0] && used[1] && !tools.ditto,
+            start_tool: if dual { tools.first_tool() } else { 0 },
+        }
+    }
+}
+
+/// What PrintCraft's own start leaves for the rest of the file: the filament and time
+/// its purge used, how far each nozzle is pulled back, and where the nozzle ends up
+/// (plate coordinates).
+struct StartState {
+    prime_e: f32,
+    purge_seconds: f32,
+    parked: [f32; 2],
+    by_tool: [f64; 2],
+    pos: Point2,
+}
+
+/// PrintCraft's own start, added to `g`: heat the plate and nozzles, home, wait for the
+/// heat, purge (on two nozzles, purge both and set the second aside). Used when a
+/// printer has no custom start, and offered as the custom start's default text.
+fn builtin_start(
+    g: &mut String,
+    printer: &Printer,
+    filament: &Filament,
+    nozzles: &Nozzles,
+    temp_of: &dyn Fn(u8) -> u32,
+) -> StartState {
+    let Nozzles {
+        dual,
+        used,
+        two,
+        start_tool,
+    } = *nozzles;
+    let ox = printer.bed_x / 2.0;
+    let oy = printer.bed_y / 2.0;
+    let purge = purge_lines(printer);
+    let _ = writeln!(g, "M140 S{} ; bed temperature", filament.bed_temp);
+    if dual {
+        for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
+            let _ = writeln!(g, "M104 T{t} S{} ; nozzle {t} temperature", temp_of(t));
+        }
+    } else {
+        let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
+    }
+    let _ = writeln!(g, "G90 ; absolute positions");
+    let _ = writeln!(g, "M82 ; absolute extrusion");
+    let _ = writeln!(g, "G28 ; home all axes");
+    // Wait only while heating up: a nozzle or plate that is already hotter carries on.
+    g.push_str(&crate::heat::wait_bed(filament.bed_temp, printer.klipper));
+    if dual {
+        for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
+            let _ = writeln!(g, "M109 T{t} S{} ; wait for nozzle {t}", temp_of(t));
+        }
+    } else {
+        g.push_str(&crate::heat::wait_nozzle(
+            filament.nozzle_temp,
+            printer.klipper,
+        ));
+    }
+    let _ = writeln!(g, "M107 ; fan off");
+    let _ = writeln!(g, "G92 E0");
+    if dual {
+        let _ = writeln!(g, "T{start_tool} ; start with nozzle {start_tool}");
+        let _ = writeln!(g, "G92 E0");
+    }
+    // Purge: clear the nozzle with two side-by-side lines along the left edge.
+    g.push_str(&purge.gcode);
+    let _ = writeln!(g, "G92 E0");
+    let mut prime_e = purge.filament_mm;
+    let mut purge_seconds = purge.seconds;
+    let mut parked = [0.0f32; 2];
+    let mut by_tool = [0.0f64; 2];
+    by_tool[start_tool as usize] = purge.filament_mm as f64;
+    if two {
+        // The other nozzle clears itself the same way, is set aside (pulled back and
+        // left to cool to its standby temperature), and the first is selected again.
+        let other = 1 - start_tool;
+        let _ = writeln!(g, "T{other} ; purge nozzle {other} too");
+        let _ = writeln!(g, "G92 E0");
+        g.push_str(&purge.gcode);
+        let park = printer.tool_change_retract.max(0.0);
+        if park > 0.0 {
+            let f = printer.retract_speed * 60.0;
+            let _ = writeln!(
+                g,
+                "G1 E{:.5} F{f:.0} ; set nozzle {other} aside",
+                purge_end_e(&purge.gcode) - park as f64
+            );
+        }
+        parked[other as usize] = park;
+        if printer.standby_drop > 0 {
+            let standby = temp_of(other).saturating_sub(printer.standby_drop);
+            let _ = writeln!(g, "M104 T{other} S{standby} ; standby");
+        }
+        let _ = writeln!(g, "G92 E0");
+        let _ = writeln!(g, "T{start_tool} ; back to nozzle {start_tool}");
+        let _ = writeln!(g, "G92 E0");
+        prime_e += purge.filament_mm;
+        by_tool[other as usize] += purge.filament_mm as f64;
+        purge_seconds += purge.seconds + 2.0 * TOOL_CHANGE_SECONDS;
+    }
+    StartState {
+        prime_e,
+        purge_seconds,
+        parked,
+        by_tool,
+        pos: Point2::new(purge.end.x - ox, purge.end.y - oy),
+    }
+}
+
+/// The text the custom start box offers as its default: PrintCraft's own start for this
+/// printer and filament on its primary nozzle, as plain G-code. Temperatures are this
+/// filament's, written in (placeholders come with M2.3).
+pub fn default_start_gcode(printer: &Printer, filament: &Filament) -> String {
+    let tools = Tools {
+        primary: printer.primary_tool(),
+        support_tool: printer.primary_tool(),
+        ..Tools::default()
+    };
+    let mut g = String::new();
+    builtin_start(
+        &mut g,
+        printer,
+        filament,
+        &Nozzles::of(printer, &tools, false),
+        &|_| filament.nozzle_temp,
+    );
+    g
+}
+
+/// The text the custom end box offers as its default: PrintCraft's own end, written so it
+/// works without knowing the print (the built-in end uses the print's height and
+/// extrusion position). Heaters go off first, so they are off even if the 10 mm lift is
+/// refused on a print that reaches the top.
+pub fn default_end_gcode(printer: &Printer) -> String {
+    let mut g = String::new();
+    if printer.extruders >= 2 {
+        let _ = writeln!(g, "M104 T0 S0\nM104 T1 S0");
+    } else {
+        let _ = writeln!(g, "M104 S0");
+    }
+    let _ = writeln!(g, "M140 S0");
+    let _ = writeln!(g, "M107");
+    let _ = writeln!(g, "G91 ; relative moves");
+    let _ = writeln!(g, "G1 E-2 F2400 ; retract");
+    let _ = writeln!(g, "G0 Z10 F600 ; lift");
+    let _ = writeln!(g, "G90 ; absolute positions");
+    let _ = writeln!(
+        g,
+        "G0 X5 Y{:.0} F{:.0} ; present the print",
+        printer.bed_y - 10.0,
+        PrintSettings::default().travel_speed * 60.0
+    );
+    let _ = writeln!(g, "M84 ; motors off");
+    g
+}
+
+/// The text the "before each layer" box offers: what PrintCraft itself writes at a layer
+/// change, as comments (it changes nothing).
+pub fn default_layer_change_gcode() -> String {
+    "; At each layer change PrintCraft writes, after this block:\n\
+     ;   G1 E... - a retraction, if \"Retract on layer change\" is on\n\
+     ;   G1 Z<layer height> F600 - the move up to the new layer\n\
+     ;   M106 S... - the part fan, at the start of the second layer\n"
+        .to_string()
+}
+
+/// The text the tool-change box offers: what PrintCraft itself writes at a tool change,
+/// with this printer's values, as comments (it changes nothing).
+pub fn default_tool_change_gcode(printer: &Printer) -> String {
+    format!(
+        "; At each tool change PrintCraft writes, before this block:\n\
+         ;   G1 E-{:.1} - pull the old nozzle's filament back (tool-change retraction)\n\
+         ;   M104 T<old> S<temp - {}> - the old nozzle waits {} C cooler\n\
+         ; and after it:\n\
+         ;   T<new>, G92 E0 - select the new nozzle\n\
+         ;   M109 T<new> S<temp> - heat it back to printing temperature\n\
+         ;   G1 E{:.1}, G92 E0 - prime it\n",
+        printer.tool_change_retract,
+        printer.standby_drop,
+        printer.standby_drop,
+        printer.tool_change_retract
+    )
+}
+
 /// Time for a tool change: retract, switch, prime.
 const TOOL_CHANGE_SECONDS: f32 = 5.0;
 
@@ -600,16 +811,13 @@ impl<'a> Writer<'a> {
         s: &'a PrintSettings,
         tools: &'a Tools,
     ) -> Self {
-        let dual = printer.extruders >= 2;
-        let used = if !dual {
-            [true, false]
-        } else if tools.ditto {
-            [true, true]
-        } else {
-            tools.used(s.supports)
-        };
-        let two = dual && used[0] && used[1] && !tools.ditto;
-        let start_tool = if dual { tools.first_tool() } else { 0 };
+        let nozzles = Nozzles::of(printer, tools, s.supports);
+        let Nozzles {
+            dual,
+            used,
+            two,
+            start_tool,
+        } = nozzles;
         // The primary nozzle has the main filament, the other one the second (in Ditto both
         // print the main one).
         let temp_of = |t: u8| -> u32 {
@@ -648,8 +856,13 @@ impl<'a> Writer<'a> {
         g.push_str(&header_block(filament, s, printer));
         // The start: a custom one in place of heating, homing and purging, or the built-in.
         let custom_start = !printer.start_gcode.trim().is_empty();
-        let purge = purge_lines(printer);
-        let (prime_e, purge_seconds, parked, by_tool, pos) = if custom_start {
+        let StartState {
+            prime_e,
+            purge_seconds,
+            parked,
+            by_tool,
+            pos,
+        } = if custom_start {
             push_block(&mut g, &printer.start_gcode);
             // PrintCraft's own moves need these, whatever the custom start did.
             let _ = writeln!(g, "G90 ; absolute positions");
@@ -660,80 +873,15 @@ impl<'a> Writer<'a> {
                 let _ = writeln!(g, "G92 E0");
             }
             // Where the custom start leaves the nozzle isn't known: the printer's origin.
-            (0.0, 0.0, [0.0f32; 2], [0.0f64; 2], Point2::new(-ox, -oy))
+            StartState {
+                prime_e: 0.0,
+                purge_seconds: 0.0,
+                parked: [0.0; 2],
+                by_tool: [0.0; 2],
+                pos: Point2::new(-ox, -oy),
+            }
         } else {
-            let _ = writeln!(g, "M140 S{} ; bed temperature", filament.bed_temp);
-            if dual {
-                for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
-                    let _ = writeln!(g, "M104 T{t} S{} ; nozzle {t} temperature", temp_of(t));
-                }
-            } else {
-                let _ = writeln!(g, "M104 S{} ; nozzle temperature", filament.nozzle_temp);
-            }
-            let _ = writeln!(g, "G90 ; absolute positions");
-            let _ = writeln!(g, "M82 ; absolute extrusion");
-            let _ = writeln!(g, "G28 ; home all axes");
-            // Wait only while heating up: a nozzle or plate that is already hotter carries on.
-            g.push_str(&crate::heat::wait_bed(filament.bed_temp, printer.klipper));
-            if dual {
-                for t in [0u8, 1].into_iter().filter(|t| used[*t as usize]) {
-                    let _ = writeln!(g, "M109 T{t} S{} ; wait for nozzle {t}", temp_of(t));
-                }
-            } else {
-                g.push_str(&crate::heat::wait_nozzle(
-                    filament.nozzle_temp,
-                    printer.klipper,
-                ));
-            }
-            let _ = writeln!(g, "M107 ; fan off");
-            let _ = writeln!(g, "G92 E0");
-            if dual {
-                let _ = writeln!(g, "T{start_tool} ; start with nozzle {start_tool}");
-                let _ = writeln!(g, "G92 E0");
-            }
-            // Purge: clear the nozzle with two side-by-side lines along the left edge.
-            g.push_str(&purge.gcode);
-            let _ = writeln!(g, "G92 E0");
-            let mut prime_e = purge.filament_mm;
-            let mut purge_seconds = purge.seconds;
-            let mut parked = [0.0f32; 2];
-            let mut by_tool = [0.0f64; 2];
-            by_tool[start_tool as usize] = purge.filament_mm as f64;
-            if two {
-                // The other nozzle clears itself the same way, is set aside (pulled back and
-                // left to cool to its standby temperature), and the first is selected again.
-                let other = 1 - start_tool;
-                let _ = writeln!(g, "T{other} ; purge nozzle {other} too");
-                let _ = writeln!(g, "G92 E0");
-                g.push_str(&purge.gcode);
-                let park = printer.tool_change_retract.max(0.0);
-                if park > 0.0 {
-                    let f = printer.retract_speed * 60.0;
-                    let _ = writeln!(
-                        g,
-                        "G1 E{:.5} F{f:.0} ; set nozzle {other} aside",
-                        purge_end_e(&purge.gcode) - park as f64
-                    );
-                }
-                parked[other as usize] = park;
-                if printer.standby_drop > 0 {
-                    let standby = temp_of(other).saturating_sub(printer.standby_drop);
-                    let _ = writeln!(g, "M104 T{other} S{standby} ; standby");
-                }
-                let _ = writeln!(g, "G92 E0");
-                let _ = writeln!(g, "T{start_tool} ; back to nozzle {start_tool}");
-                let _ = writeln!(g, "G92 E0");
-                prime_e += purge.filament_mm;
-                by_tool[other as usize] += purge.filament_mm as f64;
-                purge_seconds += purge.seconds + 2.0 * TOOL_CHANGE_SECONDS;
-            }
-            (
-                prime_e,
-                purge_seconds,
-                parked,
-                by_tool,
-                Point2::new(purge.end.x - ox, purge.end.y - oy),
-            )
+            builtin_start(&mut g, printer, filament, &nozzles, &temp_of)
         };
 
         Self {
@@ -2471,6 +2619,72 @@ mod tests {
             .filter(|w| w[0].starts_with(";LAYER:") && w[1] == "M117 next layer")
             .count();
         assert_eq!(after_marker, r.layers.len());
+    }
+
+    #[test]
+    fn test_default_start_inserted_prints_like_the_built_in() {
+        for printer in [
+            Printer::presets()[0].clone(),
+            Printer::presets().into_iter().find(|p| p.klipper).unwrap(),
+            Printer::presets()
+                .into_iter()
+                .find(|p| p.extruders == 2)
+                .unwrap(),
+        ] {
+            let filament = &Filament::presets()[0];
+            let (_, built_in) = square_on(&printer);
+            let mut custom = printer.clone();
+            custom.start_gcode = default_start_gcode(&printer, filament);
+            let (_, with_default) = square_on(&custom);
+            let head = |t: &str| t[..t.find(";LAYER:0").unwrap()].to_string();
+            // The same, plus the modes PrintCraft writes after any custom start.
+            let mut expected = head(&built_in.text);
+            expected.push_str("G90 ; absolute positions\nM82 ; absolute extrusion\nG92 E0\n");
+            if printer.extruders == 2 {
+                expected.push_str("T0 ; start with nozzle 0\nG92 E0\n");
+            }
+            assert_eq!(head(&with_default.text), expected, "{}", printer.name);
+        }
+    }
+
+    #[test]
+    fn test_default_end_turns_heaters_off_before_moving() {
+        let printer = Printer::presets()[0].clone();
+        let end = default_end_gcode(&printer);
+        let at = |needle: &str| {
+            end.find(needle)
+                .unwrap_or_else(|| panic!("{needle} missing"))
+        };
+        assert!(at("M104 S0") < at("G91"), "heaters off before the lift");
+        assert!(at("M140 S0") < at("G91"));
+        assert!(
+            at("G91") < at("G90"),
+            "the lift is relative, then back to absolute"
+        );
+        assert!(at("M84") > at("G90"));
+        let mut custom = printer.clone();
+        custom.end_gcode = end.clone();
+        let (_, out) = square_on(&custom);
+        assert!(out.text.contains(&end));
+    }
+
+    #[test]
+    fn test_default_layer_and_tool_change_text_is_only_comments() {
+        let printer = Printer::presets()
+            .into_iter()
+            .find(|p| p.extruders == 2)
+            .unwrap();
+        for text in [
+            default_layer_change_gcode(),
+            default_tool_change_gcode(&printer),
+        ] {
+            assert!(!text.trim().is_empty());
+            assert!(
+                text.lines()
+                    .all(|l| l.trim().is_empty() || l.starts_with(';')),
+                "{text}"
+            );
+        }
     }
 
     #[test]

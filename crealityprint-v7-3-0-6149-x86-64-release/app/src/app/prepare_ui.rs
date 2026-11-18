@@ -279,7 +279,7 @@ impl PrintCraftApp {
                             );
                             ui.end_row();
                         });
-                        custom_gcode_editor(ui, &mut self.printer);
+                        custom_gcode_editor(ui, &mut self.printer, &self.filament);
                             });
                     });
             });
@@ -666,11 +666,23 @@ impl PrintCraftApp {
 }
 
 /// The printer's custom G-code: four boxes, each empty unless set. Start and end replace
-/// PrintCraft's own; layer change and tool change are added to it.
-fn custom_gcode_editor(ui: &mut Ui, printer: &mut crate::profiles::Printer) {
+/// PrintCraft's own; layer change and tool change are added to it. Each box has an
+/// "Insert default" button that adds PrintCraft's own text for that place (for layer
+/// and tool change, comments describing what it writes there) to edit from.
+fn custom_gcode_editor(
+    ui: &mut Ui,
+    printer: &mut crate::profiles::Printer,
+    filament: &crate::profiles::Filament,
+) {
     egui::CollapsingHeader::new("Custom G-code")
         .id_salt("printer_gcode")
         .show(ui, |ui| {
+            let defaults = [
+                crate::gcode::default_start_gcode(printer, filament),
+                crate::gcode::default_end_gcode(printer),
+                crate::gcode::default_layer_change_gcode(),
+                crate::gcode::default_tool_change_gcode(printer),
+            ];
             let boxes: [(&str, &str, &mut String); 4] = [
                 (
                     "Start",
@@ -693,8 +705,19 @@ fn custom_gcode_editor(ui: &mut Ui, printer: &mut crate::profiles::Printer) {
                     &mut printer.tool_change_gcode,
                 ),
             ];
-            for (label, hint, text) in boxes {
-                ui.label(label).on_hover_text(hint);
+            for ((label, hint, text), default) in boxes.into_iter().zip(defaults) {
+                ui.horizontal(|ui| {
+                    ui.label(label).on_hover_text(hint);
+                    let insert = ui.small_button("Insert default").on_hover_text(
+                        "Add PrintCraft's own G-code for this place to the box, to edit. Nothing in the box is replaced",
+                    );
+                    if insert.clicked() {
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        text.push_str(&default);
+                    }
+                });
                 ui.add(
                     egui::TextEdit::multiline(text)
                         .code_editor()

@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an end block that replaces its end sequence; and blocks added before every layer
   change and at every tool change. All are empty by default, which leaves the G-code
   unchanged, and are saved with the printer in projects. The text is used as written
-  for now; placeholders such as `{bed_temp}` come with M2.3.
+  for now; placeholders such as `{bed_temp}` come with M2.3. An "Insert default"
+  button beside each box adds PrintCraft's own G-code for that place to edit: the
+  built-in start, an end that turns the heaters off before lifting, and comments
+  describing what PrintCraft writes at layer and tool changes.
 
 ### Changed
 

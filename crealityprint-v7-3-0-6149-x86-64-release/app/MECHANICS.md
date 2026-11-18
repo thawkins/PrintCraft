@@ -250,6 +250,19 @@ All are estimated. Choosing a quality preset changes only the values in the tabl
     selected (after the old one is set aside).
   * X3G printers: custom code is translated like the rest; G-codes the translator
     doesn't know stop the export with an error naming the line.
+  * **Insert default** (a button beside each box) adds PrintCraft's own text for that
+    place to the box, to edit; nothing in the box is replaced.
+    * Start: the built-in start for this printer and filament on its primary nozzle
+      (`gcode::default_start_gcode`, the same code the built-in start runs).
+      Temperatures are written in, so they don't follow later filament changes until
+      placeholders (M2.3).
+    * End: the built-in end's steps written without knowing the print: heaters and fan
+      off first, then a relative 2 mm retract and 10 mm lift (`G91` ... `G90`), park at
+      the back-left, motors off. Heaters go off before the lift, so they are off even if
+      the lift is refused on a print that reaches the printer's top.
+    * Before each layer and Tool change: comment lines describing what PrintCraft
+      writes there itself (with this printer's tool-change retraction and standby
+      drop); comments change nothing.
 * **Coordinates.** The app centres everything on the plate. The print file adds half the
   plate size, so (0, 0) is the printer's front-left corner.
 * **Time estimate.** Each printed line and each travel is timed with the printer's
