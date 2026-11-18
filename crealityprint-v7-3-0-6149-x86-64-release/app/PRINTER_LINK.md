@@ -72,7 +72,9 @@ while the printer's own port does.
 * Each hit is identified. On port 9999, the app listens for up to 2 s for the printer's
   `hostname` and `model`. On port 7125, it reads `GET /printer/info`. On port 80, it
   reads `GET /api/version`. Only answers that say "PrusaLink", or that refuse with
-  PrusaLink's `Printer API` sign-in, count, so routers and other web devices are skipped.
+  PrusaLink's `Printer API` sign-in, count as PrusaLink. Otherwise an answer whose text
+  says "OctoPrint", or (refused without a key) a front page that says "OctoPrint",
+  counts as an OctoPrint server. Routers and other web devices are skipped.
 * You can also type the address by hand, or start the app with `--connect ADDRESS`.
 * Not used: mDNS/Bonjour discovery. Whether stock KE firmware announces itself that way is
   unverified, and the address scan works without it.
@@ -131,8 +133,33 @@ a local camera stream, so those stay empty for Prusa printers. Prusa cameras sen
 pictures to the Prusa Connect cloud service, which isn't supported here.
 
 Prusa printers prefer Prusa's own start code and binary G-code (`.bgcode`). PrintCraft
-sends plain `.gcode`, which PrusaLink also accepts. Plain G-code from another slicer may
+sends plain `.gcode`, which PrusaLink also accepts, or `.bgcode` when the printer
+profile has "Binary G-code" on. Plain G-code from another slicer may
 show a "printer model mismatch" warning on the screen; it can be confirmed.
+
+## 3a2. OctoPrint (src/printer/octoprint.rs) — documented, unverified on a real server
+
+OctoPrint runs on a Raspberry Pi (OctoPi) next to a printer on a USB cable. Its REST API
+is documented by the OctoPrint project. Sign-in is an API key (OctoPrint's settings,
+"Application Keys"), typed into the "Password or API key" box and sent as `X-Api-Key`. It
+is never saved.
+
+| What | How |
+|---|---|
+| Identify | `GET /api/version` (text "OctoPrint ..."), or the front page when that is refused |
+| Live status (polled every 2 s) | `GET /api/printer` (temperatures, state flags; 409 = not connected to the printer) and `GET /api/job` (file, completion, print time, time left) |
+| Upload and start | `POST /api/files/local`, multipart `file` plus `select=true` and `print=true` |
+| Print a stored file | `POST /api/files/local/<path>` with `{"command": "select", "print": true}` |
+| Pause / resume / stop | `POST /api/job`: `{"command": "pause", "action": "pause"}` or `"resume"`; `{"command": "cancel"}` |
+| Temperatures | `POST /api/printer/tool` `{"command": "target", "targets": {"tool0": T}}`; `POST /api/printer/bed` `{"command": "target", "target": T}` |
+| Fan, speed, jog, home | G-code through `POST /api/printer/command` `{"commands": [...]}` |
+| Files | `GET /api/files?recursive=true` (G-code in every folder, newest first) |
+| Camera | OctoPi's MJPEG stream, `:80/webcam/?action=stream` (one of the addresses the camera view tries) |
+
+States from the flags: error or closedOrError = Failed, cancelling = Stopped, paused or
+pausing = Paused, printing = Printing, operational = Ready. OctoPrint has no print
+history and no layer numbers in its API. A wrong key shows "OctoPrint refused the API
+key"; binary G-code and cancel object aren't offered.
 
 ## 3b. USB cable (src/printer/usb.rs) — standard RepRap host protocol, unverified on a real printer
 

@@ -487,3 +487,179 @@ fn prints_on_a_pretend_repetier_printer_over_usb() {
         "not reported finished"
     );
 }
+
+#[test]
+fn talks_to_a_pretend_octoprint_server_with_an_api_key() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel::<(String, Vec<u8>)>();
+    std::thread::spawn(move || {
+        for conn in listener.incoming().take(300) {
+            let Ok(mut s) = conn else { continue };
+            s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let Some((line, head, body)) = read_full_request(&mut s) else {
+                continue;
+            };
+            let mut parts = line.split_whitespace();
+            let (method, uri) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+            let keyed = head
+                .lines()
+                .any(|l| l.eq_ignore_ascii_case("x-api-key: KEY123"));
+            let (status, text) = if !keyed {
+                ("403 Forbidden", String::new())
+            } else if method == "GET" && uri == "/api/printer" {
+                let v = json!({
+                    "temperature": {"tool0": {"actual": 205.5, "target": 210.0},
+                                    "bed": {"actual": 59.0, "target": 60.0}},
+                    "state": {"text": "Printing", "flags": {"operational": true, "printing": true,
+                              "paused": false, "pausing": false, "cancelling": false,
+                              "error": false, "closedOrError": false, "ready": false}}
+                });
+                ("200 OK", v.to_string())
+            } else if method == "GET" && uri == "/api/job" {
+                let v = json!({
+                    "job": {"file": {"name": "cube.gcode", "path": "parts/cube.gcode",
+                                     "display": "cube.gcode", "origin": "local"}},
+                    "progress": {"completion": 33.3, "printTime": 400, "printTimeLeft": 800},
+                    "state": "Printing"
+                });
+                ("200 OK", v.to_string())
+            } else if method == "GET" && uri.starts_with("/api/files") {
+                let v = json!({"files": [
+                    {"name": "a.gcode", "path": "a.gcode", "type": "machinecode",
+                     "origin": "local", "size": 1200, "date": 1700000000},
+                    {"name": "parts", "path": "parts", "type": "folder", "children": [
+                        {"name": "b.gcode", "path": "parts/b.gcode", "type": "machinecode",
+                         "origin": "local", "size": 900, "date": 1700000500}
+                    ]},
+                    {"name": "c.stl", "path": "c.stl", "type": "model", "origin": "local"}
+                ]});
+                ("200 OK", v.to_string())
+            } else {
+                let _ = tx.send((format!("{method} {uri}"), body));
+                ("204 No Content", String::new())
+            };
+            let _ = write!(
+                s,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                text.len()
+            );
+        }
+    });
+    let printer = FoundPrinter {
+        host: format!("127.0.0.1:{port}"),
+        api: Some(Api::OctoPrint),
+        login: Some(("maker".into(), "KEY123".into())),
+        ..Default::default()
+    };
+    let link = PrinterLink::connect(printer, Arc::new(|| {}));
+    assert!(
+        wait_for(&link, |s| s.connected && s.status.progress == Some(33.3)),
+        "no status: {:?}",
+        link.state().log
+    );
+    let st = link.state().status;
+    assert_eq!(st.state, JobState::Printing);
+    assert_eq!((st.nozzle, st.nozzle_target), (Some(205.5), Some(210.0)));
+    assert_eq!((st.bed, st.bed_target), (Some(59.0), Some(60.0)));
+    assert_eq!((st.elapsed_s, st.remaining_s), (Some(400), Some(800)));
+    assert_eq!(st.file.as_deref(), Some("cube.gcode"));
+    assert_eq!(st.file_path.as_deref(), Some("parts/cube.gcode"));
+    let next = || {
+        rx.recv_timeout(Duration::from_secs(8))
+            .expect("nothing arrived")
+    };
+    link.send(Command::UploadAndPrint {
+        name: "cube.gcode".into(),
+        gcode: Arc::new("G28\n".into()),
+    });
+    let (req, body) = next();
+    assert_eq!(req, "POST /api/files/local");
+    let body = String::from_utf8_lossy(&body).to_string();
+    assert!(
+        body.contains("filename=\"cube.gcode\"") && body.contains("G28"),
+        "{body}"
+    );
+    assert!(body.contains("name=\"select\"\r\n\r\ntrue"), "{body}");
+    assert!(body.contains("name=\"print\"\r\n\r\ntrue"), "{body}");
+    let json_of = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).unwrap();
+    for (cmd, path, want) in [
+        (
+            Command::Pause,
+            "POST /api/job",
+            json!({"command": "pause", "action": "pause"}),
+        ),
+        (
+            Command::Resume,
+            "POST /api/job",
+            json!({"command": "pause", "action": "resume"}),
+        ),
+        (Command::Stop, "POST /api/job", json!({"command": "cancel"})),
+        (
+            Command::SetNozzle(215.0),
+            "POST /api/printer/tool",
+            json!({"command": "target", "targets": {"tool0": 215}}),
+        ),
+        (
+            Command::SetBed(65.0),
+            "POST /api/printer/bed",
+            json!({"command": "target", "target": 65}),
+        ),
+        (
+            Command::Home,
+            "POST /api/printer/command",
+            json!({"commands": ["G28"]}),
+        ),
+        (
+            Command::PrintFile("parts/b.gcode".into()),
+            "POST /api/files/local/parts/b.gcode",
+            json!({"command": "select", "print": true}),
+        ),
+    ] {
+        link.send(cmd);
+        let (req, body) = next();
+        assert_eq!(req, path);
+        assert_eq!(json_of(&body), want, "{path}");
+    }
+    link.send(Command::RefreshFiles);
+    assert!(
+        wait_for(&link, |s| s.files.as_ref().is_some_and(|f| f.len() == 2)),
+        "files: {:?}",
+        link.state().files
+    );
+    let files = link.state().files.unwrap();
+    // Newest first; folders opened; models left out.
+    assert_eq!(files[0].path, "parts/b.gcode");
+    assert_eq!(files[1].path, "a.gcode");
+}
+
+#[test]
+fn a_wrong_octoprint_api_key_is_reported() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for conn in listener.incoming().take(50) {
+            let Ok(mut s) = conn else { continue };
+            s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            if read_full_request(&mut s).is_none() {
+                continue;
+            }
+            let _ = write!(
+                s,
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        }
+    });
+    let printer = FoundPrinter {
+        host: format!("127.0.0.1:{port}"),
+        api: Some(Api::OctoPrint),
+        login: Some(("maker".into(), "WRONG".into())),
+        ..Default::default()
+    };
+    let link = PrinterLink::connect(printer, Arc::new(|| {}));
+    assert!(
+        wait_for(&link, |s| s.log.iter().any(|l| l.contains("API key"))),
+        "{:?}",
+        link.state().log
+    );
+}

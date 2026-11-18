@@ -886,7 +886,8 @@ impl DevicePage {
         chosen
     }
 
-    /// The typed-address box with its Connect button, and the PrusaLink password box;
+    /// The typed-address box with its Connect button, and the box for a PrusaLink
+    /// password or an OctoPrint API key;
     /// returns the address when Connect was clicked.
     fn manual_address_entry(&mut self, ui: &mut Ui) -> Option<String> {
         let mut typed = None;
@@ -906,15 +907,15 @@ impl DevicePage {
             }
         });
         ui.horizontal(|ui| {
-            ui.label("PrusaLink password");
+            ui.label("Password or API key");
             ui.add(
                 egui::TextEdit::singleline(&mut self.prusa_password)
                     .password(true)
-                    .hint_text("Prusa printers only")
+                    .hint_text("PrusaLink or OctoPrint")
                     .desired_width(150.0),
             )
             .on_hover_text(
-                "Shown on a Prusa printer's screen under Settings → Network → PrusaLink",
+                "PrusaLink: the password on the printer's screen under Settings → Network → PrusaLink.\nOctoPrint: an API key from OctoPrint's settings (Application Keys). Never saved.",
             );
         });
         typed
@@ -1971,6 +1972,7 @@ pub fn device_is_present(p: &FoundPrinter) -> bool {
         Some(Api::CrealityLan) => link::port_open(&p.host, creality::WS_PORT, t),
         Some(Api::Moonraker) => link::port_open(&p.host, moonraker::PORT, t),
         Some(Api::PrusaLink) => link::port_open(&p.host, prusalink::PORT, t),
+        Some(Api::OctoPrint) => link::port_open(&p.host, crate::printer::octoprint::PORT, t),
         None => link::detect_api(&p.host).is_some(),
     }
 }

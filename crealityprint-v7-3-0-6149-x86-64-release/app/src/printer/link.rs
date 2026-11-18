@@ -2,7 +2,8 @@
 //! snapshot each frame and sends commands through a channel.
 
 use super::{
-    creality, moonraker, prusalink, sailfish, usb, Api, Command, FoundPrinter, PrinterStatus, Wake,
+    creality, moonraker, octoprint, prusalink, sailfish, usb, Api, Command, FoundPrinter,
+    PrinterStatus, Wake,
 };
 use std::collections::VecDeque;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -188,6 +189,7 @@ impl PrinterLink {
                 Api::CrealityLan => creality::run(&worker),
                 Api::Moonraker => moonraker::run(&worker),
                 Api::PrusaLink => prusalink::run(&worker),
+                Api::OctoPrint => octoprint::run(&worker),
                 Api::Usb => usb::run(&worker),
                 Api::Sailfish => sailfish::run(&worker),
             }
@@ -260,6 +262,8 @@ pub fn detect_api(host: &str) -> Option<Api> {
         Some(Api::Moonraker)
     } else if port_open(host, prusalink::PORT, t) && prusalink::identify(host).is_some() {
         Some(Api::PrusaLink)
+    } else if port_open(host, octoprint::PORT, t) && octoprint::identify(host).is_some() {
+        Some(Api::OctoPrint)
     } else {
         None
     }

@@ -7,7 +7,7 @@
 //! the printer isn't there, asks the network for the printer of the same kind and name.
 
 use super::link::port_open;
-use super::{creality, moonraker, prusalink, Api, FoundPrinter};
+use super::{creality, moonraker, octoprint, prusalink, Api, FoundPrinter};
 use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -93,6 +93,7 @@ fn api_port(api: Api) -> Option<u16> {
         Api::CrealityLan => Some(creality::WS_PORT),
         Api::Moonraker => Some(moonraker::PORT),
         Api::PrusaLink => Some(prusalink::PORT),
+        Api::OctoPrint => Some(octoprint::PORT),
         Api::Usb | Api::Sailfish => None,
     }
 }
@@ -102,6 +103,7 @@ fn identify_as(api: Api, host: &str) -> Option<FoundPrinter> {
         Api::CrealityLan => creality::identify(host),
         Api::Moonraker => moonraker::identify(host),
         Api::PrusaLink => prusalink::identify(host),
+        Api::OctoPrint => octoprint::identify(host),
         Api::Usb | Api::Sailfish => None,
     }
 }
@@ -160,9 +162,10 @@ pub fn identify(host: &str) -> Option<FoundPrinter> {
             return Some(p);
         }
     }
-    // Many devices answer on port 80; only PrusaLink printers are kept.
+    // Many devices answer on port 80; only PrusaLink printers and OctoPrint servers are
+    // kept.
     if port_open(host, prusalink::PORT, PROBE_TIMEOUT) {
-        return prusalink::identify(host);
+        return prusalink::identify(host).or_else(|| octoprint::identify(host));
     }
     None
 }

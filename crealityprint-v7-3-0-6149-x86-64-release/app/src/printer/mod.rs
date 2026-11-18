@@ -24,6 +24,7 @@ pub mod known;
 pub mod layer_info;
 pub mod link;
 pub mod moonraker;
+pub mod octoprint;
 pub mod prusalink;
 pub mod sailfish;
 pub mod serial_log;
@@ -36,6 +37,8 @@ pub enum Api {
     CrealityLan,
     Moonraker,
     PrusaLink,
+    /// OctoPrint, the web host on a Raspberry Pi next to a USB printer.
+    OctoPrint,
     Usb,
     /// The MakerBot S3G protocol over USB (Sailfish firmware).
     Sailfish,
@@ -47,6 +50,7 @@ impl Api {
             Self::CrealityLan => "Creality network service",
             Self::Moonraker => "Klipper (Moonraker)",
             Self::PrusaLink => "PrusaLink",
+            Self::OctoPrint => "OctoPrint",
             Self::Usb => "USB cable",
             Self::Sailfish => "USB cable, MakerBot protocol",
         }
@@ -70,6 +74,7 @@ impl Api {
             Self::CrealityLan => "creality",
             Self::Moonraker => "moonraker",
             Self::PrusaLink => "prusalink",
+            Self::OctoPrint => "octoprint",
             Self::Usb => "usb",
             Self::Sailfish => "sailfish",
         }
@@ -80,6 +85,7 @@ impl Api {
             Self::CrealityLan,
             Self::Moonraker,
             Self::PrusaLink,
+            Self::OctoPrint,
             Self::Usb,
             Self::Sailfish,
         ]
@@ -374,6 +380,11 @@ impl Api {
                 files: true,
                 history: false,
             },
+            Self::OctoPrint => Abilities {
+                controls: true,
+                files: true,
+                history: false,
+            },
             Self::Usb => Abilities {
                 controls: true,
                 files: false,
@@ -508,12 +519,13 @@ mod tests {
             Api::CrealityLan,
             Api::Moonraker,
             Api::PrusaLink,
+            Api::OctoPrint,
             Api::Usb,
             Api::Sailfish,
         ] {
             assert_eq!(Api::from_key(api.key()), Some(api));
         }
-        assert_eq!(Api::from_key("octoprint"), None);
+        assert_eq!(Api::from_key("duet"), None);
     }
 
     #[test]

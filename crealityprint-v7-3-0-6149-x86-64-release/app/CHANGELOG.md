@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- OctoPrint (gap plan task M6.4). The printer page connects to an OctoPrint server with
+  its API key, typed in the box now called "Password or API key" (never saved): upload
+  and print, live status (temperatures, progress, times, file), temperatures, fan,
+  speed, jog and home, pause, resume and stop, the file list (every folder) and printing
+  from it, and the OctoPi camera stream. "Find printers on Wi-Fi" and typed addresses
+  recognise OctoPrint servers on port 80. A wrong key is reported. Tested against a
+  pretend OctoPrint server, not yet a real one.
+
 - Binary G-code (gap plan task M6.3). "Binary G-code (.bgcode)" in the printer editor
   (off by default, so files are unchanged) makes Export save Prusa's binary format,
   and printing through PrusaLink upload it as `.bgcode`; other connections still get
