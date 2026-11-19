@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On narrow windows (below about 1140 points of 3D view) nothing overlaps any more: the
+  model toolbar spans the top of the view and wraps onto a second row, the plate tabs
+  sit under it and wrap, the printer box goes below them, the Move / Scale / Rotate
+  strip moves under the view buttons, and the mouse hint wraps to stop short of the
+  Slice plate / Send print buttons. Wide windows look as before.
+- The command line's help and its unknown-filament message list ASA too.
+
+### Changed
+
+- CI uses `actions/checkout@v7` and `actions/upload-artifact@v7` (Node 24), clearing
+  GitHub's Node 20 warnings.
+
 ## [0.0.12] - 2026-11-19
 
 ### Added

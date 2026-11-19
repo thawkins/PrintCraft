@@ -130,6 +130,18 @@ struct ScreenshotTask {
 const SCREENSHOT_FRAMES: u32 = 120;
 /// Gap left between models by "Arrange".
 const ARRANGE_GAP_MM: f32 = 6.0;
+/// The Prepare view's overlays: the printer box's right edge (from the view's left),
+/// the width the model toolbar needs on one row, and the room kept for the view buttons
+/// at the right (all in points).
+const PRINTER_BOX_RIGHT: f32 = 360.0;
+const TOOLBAR_WIDTH: f32 = 680.0;
+const VIEW_BUTTONS_ROOM: f32 = 90.0;
+
+/// Whether the Prepare view is wide enough for the model toolbar on one row beside the
+/// printer box; otherwise the toolbar spans the top and the tool strip moves right.
+fn wide_prepare_view(rect: egui::Rect) -> bool {
+    rect.width() >= PRINTER_BOX_RIGHT + 12.0 + TOOLBAR_WIDTH + VIEW_BUTTONS_ROOM
+}
 
 pub struct PrintCraftApp {
     printers: Vec<Printer>,
@@ -1501,16 +1513,19 @@ impl PrintCraftApp {
         self.refresh_object(g.index);
     }
 
-    /// The Move / Scale / Rotate buttons at the left of the 3D view.
+    /// The Move / Scale / Rotate buttons at the left of the 3D view (on a narrow view,
+    /// under the view buttons at the right, clear of the printer box).
     fn tool_bar(&mut self, ui: &mut Ui, rect: egui::Rect) {
         const BUTTON: f32 = 44.0;
-        let area = egui::Rect::from_min_size(
+        let at = if wide_prepare_view(rect) {
             egui::pos2(
                 rect.left() + 10.0,
                 rect.center().y - TOOL_STRIP_ABOVE_CENTRE,
-            ),
-            egui::vec2(BUTTON + 12.0, 3.0 * BUTTON + 24.0),
-        );
+            )
+        } else {
+            egui::pos2(rect.right() - 73.0, rect.top() + 140.0)
+        };
+        let area = egui::Rect::from_min_size(at, egui::vec2(BUTTON + 12.0, 3.0 * BUTTON + 24.0));
         ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
             egui::Frame::new()
                 .fill(theme::PANEL)
@@ -1781,7 +1796,7 @@ impl PrintCraftApp {
         }
 
         if !preview {
-            prepare_view_hint(ui, rect);
+            prepare_view_hint(ui, rect, buttons.left() - 16.0);
             return;
         }
         self.layer_slider_overlay(ui, rect);
@@ -1792,29 +1807,56 @@ impl PrintCraftApp {
         // The box ends above the Move / Scale / Rotate strip (see `tool_bar`), so a long
         // printer editor scrolls instead of running under it.
         let strip_top = rect.center().y - TOOL_STRIP_ABOVE_CENTRE;
+        // Wide enough for the toolbar beside the printer box (and the view buttons)?
+        // Otherwise the toolbar spans the top, wrapping as needed, with the plate tabs
+        // under it and the printer box below them.
+        let wide = wide_prepare_view(rect);
+        let tools_left = if wide {
+            rect.left() + PRINTER_BOX_RIGHT + 12.0
+        } else {
+            rect.left() + 10.0
+        };
+        let tools = egui::Rect::from_min_max(
+            egui::pos2(tools_left, rect.top() + 10.0),
+            egui::pos2(rect.right() - VIEW_BUTTONS_ROOM, rect.top() + 60.0),
+        );
+        let toolbar = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(tools), |ui| {
+                self.model_toolbar(ui)
+            })
+            .response
+            .rect;
+        // Under the toolbar, however many rows it took.
+        let tabs = egui::Rect::from_min_max(
+            egui::pos2(tools_left, toolbar.bottom() + 6.0),
+            egui::pos2(rect.right() - VIEW_BUTTONS_ROOM, toolbar.bottom() + 34.0),
+        );
+        let tabs = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(tabs), |ui| {
+                self.plate_tabs(ui)
+            })
+            .response
+            .rect;
+        let box_top = if wide {
+            rect.top() + 10.0
+        } else {
+            tabs.bottom() + 8.0
+        };
+        // Narrow, the tool strip is at the right, so the box may reach down to the hint.
+        let box_bottom = if wide {
+            strip_top - 10.0
+        } else {
+            rect.bottom() - 90.0
+        };
         let boxr = egui::Rect::from_min_max(
-            rect.min + egui::vec2(10.0, 10.0),
+            egui::pos2(rect.left() + 10.0, box_top),
             egui::pos2(
-                rect.left() + 360.0,
-                (strip_top - 10.0).max(rect.top() + 200.0),
+                rect.left() + PRINTER_BOX_RIGHT,
+                box_bottom.max(box_top + 120.0),
             ),
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(boxr), |ui| {
             self.printer_box(ui)
-        });
-        let tools = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 372.0, rect.top() + 10.0),
-            egui::pos2(rect.right() - 90.0, rect.top() + 60.0),
-        );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(tools), |ui| {
-            self.model_toolbar(ui)
-        });
-        let tabs = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 372.0, rect.top() + 58.0),
-            egui::pos2(rect.right() - 90.0, rect.top() + 86.0),
-        );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(tabs), |ui| {
-            self.plate_tabs(ui)
         });
     }
 
@@ -2191,16 +2233,19 @@ fn empty_plate_hint(ui: &Ui, rect: egui::Rect) {
     );
 }
 
-/// The mouse hint along the bottom left of the Prepare view.
-fn prepare_view_hint(ui: &Ui, rect: egui::Rect) {
+/// The mouse hint along the bottom left of the Prepare view, wrapped to end before
+/// `right` (the Slice plate / Send print buttons).
+fn prepare_view_hint(ui: &Ui, rect: egui::Rect, right: f32) {
     let hint = "Click a model to select it · drag its handles to move (M), scale (S) or rotate (R) · drag empty space to turn the view · right-drag to pan · scroll to zoom";
-    ui.painter().text(
-        rect.left_bottom() + egui::vec2(12.0, -12.0),
-        egui::Align2::LEFT_BOTTOM,
-        hint,
+    let width = (right - rect.left() - 12.0).max(120.0);
+    let galley = ui.painter().layout(
+        hint.to_string(),
         egui::FontId::proportional(12.0),
         theme::TEXT_DIM,
+        width,
     );
+    let at = rect.left_bottom() + egui::vec2(12.0, -12.0 - galley.size().y);
+    ui.painter().galley(at, galley, theme::TEXT_DIM);
 }
 
 /// Position (shown from the plate's corner; `ox`/`oy` is the plate's centre), rotation

@@ -303,14 +303,15 @@ impl PrintCraftApp {
             });
     }
 
-    /// The row of model tools along the top of the 3D view.
+    /// The row of model tools along the top of the 3D view (two rows when the window is
+    /// too narrow for one).
     pub(super) fn model_toolbar(&mut self, ui: &mut Ui) {
         egui::Frame::new()
             .fill(theme::PANEL)
             .corner_radius(8)
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let has = !self.objects.is_empty();
                     let sel = self.selected.is_some();
                     if ui

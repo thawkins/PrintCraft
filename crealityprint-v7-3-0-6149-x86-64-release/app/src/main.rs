@@ -4,7 +4,7 @@
 //!   printcraft [MODEL.stl ...]                      open the app (optionally with models)
 //!   printcraft --screenshot OUT.png [MODEL.stl ...] open, draw ~120 frames, save a picture, quit
 //!   printcraft --slice MODEL.stl [...] --output OUT.gcode [--quality fine|standard|draft]
-//!              [--filament pla|petg|abs|tpu] [--printer 1-11] [--supports] [--brim]
+//!              [--filament pla|petg|abs|tpu|asa] [--printer 1-11] [--supports] [--brim]
 //!                                                   slice without a window
 //!
 //! `printcraft --help` lists every option (preview, printer connection and more).
@@ -77,7 +77,7 @@ Usage:
 
 Slicing options:
   --quality fine|standard|draft   (default standard)
-  --filament pla|petg|abs|tpu     (default pla)
+  --filament pla|petg|abs|tpu|asa (default pla)
   --printer 1-11                  printer preset (default 1, 220 x 220 mm):
                                   1-4 generic, 5 Prusa MK4S, 6 Prusa Core One,
                                   7 Prusa MK3S+, 8 Prusa MINI+, 9 Prusa XL,
@@ -304,7 +304,7 @@ fn slice_without_window(args: &Args) -> ExitCode {
         {
             Some(x) => x.clone(),
             None => {
-                eprintln!("printcraft: unknown filament \"{f}\" (use pla, petg, abs or tpu)");
+                eprintln!("printcraft: unknown filament \"{f}\" (use pla, petg, abs, tpu or asa)");
                 return ExitCode::from(2);
             }
         },

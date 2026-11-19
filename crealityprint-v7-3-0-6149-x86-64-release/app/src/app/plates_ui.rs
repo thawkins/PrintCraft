@@ -121,7 +121,7 @@ impl PrintCraftApp {
         let mut pick = None;
         let mut remove = None;
         let mut add = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for i in 0..self.plates.len() {
                 let count = if i == self.active_plate {
                     self.objects.len()
