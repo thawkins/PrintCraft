@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-11-19
+
 ### Added
 
 - Multiple plates (gap plan task M7.2). Tabs under the model toolbar switch between
