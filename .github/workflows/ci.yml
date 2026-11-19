@@ -33,7 +33,7 @@ jobs:
         working-directory: .
         run: git config --global core.autocrlf false
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # rust-toolchain.toml pins stable with rustfmt and clippy; rustup installs it here.
       - name: Rust toolchain
@@ -101,7 +101,7 @@ jobs:
 
       - name: Keep the screenshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenshot-${{ runner.os }}
           path: ${{ runner.temp }}/printcraft-*.png
