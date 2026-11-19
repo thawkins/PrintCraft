@@ -24,16 +24,18 @@ numbers in brackets, such as [#1], are the rows of its gap ranking (section 4).
 
 ## Milestone overview
 
-| Milestone | Theme | Gaps closed | Estimate | Version |
-|---|---|---|---|---|
-| M1 | Print-quality core | #1, #2, #5, #7 | 10-12 days | 0.1.0 |
-| M2 | Control and customisation | #3, #6, #8, #17 (part) | 8-10 days | 0.2.0 |
-| M3 | Editing basics | #4, #12, #13 | 10-12 days | 0.3.0 |
-| M4 | Per-object and per-region settings | #10, #11, #14 | 15-20 days | 0.4.0 |
-| M5 | Infill, supports, walls | #9, #15, #16 | 20-30 days | 0.5.0 |
-| M6 | Output, hosts, profiles, platforms | #17, #18, #19, #21 | 10-14 days | 0.6.0 |
-| M7 | Plates and sequential printing | #20 | 6-8 days | 0.7.0 |
-| -- | Not planned | #22, #23 | -- | -- |
+| Milestone | Theme | Gaps closed | Estimate | Version | Status |
+|---|---|---|---|---|---|
+| M1 | Print-quality core | #1, #2, #5, #7 | 10-12 days | 0.1.0 | Done, released in 0.0.6 |
+| M2 | Control and customisation | #3, #6, #8, #17 (part) | 8-10 days | 0.2.0 | Done, released in 0.0.7 |
+| M3 | Editing basics | #4, #12, #13 | 10-12 days | 0.3.0 | Done, released in 0.0.8 |
+| M4 | Per-object and per-region settings | #10, #11, #14 | 15-20 days | 0.4.0 | Done, released in 0.0.9 |
+| M5 | Infill, supports, walls | #9, #15, #16 | 20-30 days | 0.5.0 | Done, released in 0.0.10 |
+| M6 | Output, hosts, profiles, platforms | #17, #18, #19, #21 | 10-14 days | 0.6.0 | Done, released in 0.0.11 |
+| M7 | Plates and sequential printing | #20 | 6-8 days | 0.7.0 | Done, released in 0.0.12 |
+| -- | Not planned | #22, #23 | -- | -- | -- |
+
+The "Version" column is the numbering first planned; the releases kept counting 0.0.x.
 
 M1 and M2 give the largest quality gain for the cost. M3 can run alongside M1 or M2: it
 touches the editor (`app.rs`, `gizmo.rs`, `geometry.rs`), not the slicer. M4 needs M2's

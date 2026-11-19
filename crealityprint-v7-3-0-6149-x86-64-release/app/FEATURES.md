@@ -83,7 +83,6 @@ a project file fall back to defaults, so older and newer files still open.
 | Supports "on build plate only" | **Yes (new)** |
 | Tree supports | **Yes (new)**: Support > Style: Tree; branches lean together and join, keep clear of the model; tip and branch diameter (Advanced) |
 | Support gaps, spacing and interface | **Yes (new)**: top and bottom Z gap, XY gap and line spacing (1 mm steps), interface layers (Advanced, Support) |
-| Organic (tree) supports, support enforcers/blockers | Not yet |
 | Skirt and brim | Yes |
 | Raft | **Yes (new)**. Adhesion "Raft" puts 3 raft layers under the whole print, reaching 3 mm past it, with a 0.15 mm gap to the model. With supports on, support columns that reach the bed stand on their own small raft, even without the Raft option. A "Raft under support" switch in the Support section (on by default) turns this off. |
 | Retraction | Yes: before travels over a set length (2 mm by default). Optional: on every layer change, and a wipe back along the last line while retracting. These are set in the printer editor. |

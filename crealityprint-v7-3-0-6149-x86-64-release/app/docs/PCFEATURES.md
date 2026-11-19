@@ -1,6 +1,6 @@
 # PrintCraft feature set
 
-This is the complete list of what PrintCraft does as of version 0.0.10. It is a
+This is the complete list of what PrintCraft does as of version 0.0.12. It is a
 catalogue of features, not a comparison with other slicers: for that, see
 [FEATURES.md](../FEATURES.md) and [PCGAP.md](PCGAP.md). The numbers behind slicing are
 in [MECHANICS.md](../MECHANICS.md), and how each printer connection works is in
@@ -20,6 +20,10 @@ but have not yet been tried on a real printer.
   field.
 - Models and projects can be dropped onto the window or named on the command line.
 - File dialogs don't stop the window from responding.
+- Runs on Linux, Windows and macOS; every change is built and tested on all three, and
+  each slices the same calibration cube to the same G-code byte for byte.
+- On narrow windows the model toolbar wraps onto a second row and the Move / Scale /
+  Rotate strip moves under the view buttons, so nothing overlaps.
 
 ## 2. Models and the plate
 
@@ -84,9 +88,14 @@ but have not yet been tried on a real printer.
 
 ## 3. Projects
 
+- **Several plates** per project: tabs under the model toolbar switch plates, "+" adds
+  one and "×" removes an empty one. Each plate is sliced, previewed, exported and sent
+  on its own and keeps its slice while another is shown. Undo and redo cover the plate
+  being worked on.
 - `.printcraft` project files (JSON) hold:
-  - every object, with its mesh stored in the file and its position, rotation, scale,
-    overrides, height ranges and modifiers;
+  - every plate's objects, with each mesh stored in the file and its position, rotation,
+    scale, overrides, height ranges and modifiers (a one-plate file is the same as
+    before plates; older versions open plate 1 of a larger one, with a warning);
   - all print settings, the quality preset, and the filament(s);
   - the printer profile with every edited value, including custom G-code;
   - the printer device in use (address or port, name and kind). Passwords are never
@@ -112,8 +121,11 @@ but have not yet been tried on a real printer.
 - Layer height, first layer height and **variable layer height** (Advanced): thinner layers on
   gentle slopes and thicker layers on steep walls, from half to 1.5 times the layer
   height. Quality and smoothing are settable. One profile is used for the whole plate.
-- Filament presets: PLA, PETG, ABS and TPU. Each has nozzle and plate temperatures,
-  diameter, density, fan, price per kg and a flow ratio.
+- Filament presets: PLA, PETG, ABS, TPU and ASA. Each has nozzle and plate
+  temperatures, diameter, density, fan, price per kg and a flow ratio.
+- **Your own presets**: "Save as preset…" keeps the current filament or process settings
+  under a name; they appear in the filament and process lists, can be deleted, and are
+  exported and imported as a JSON file. Kept in `presets.json` in the settings folder.
 
 ### Walls and surfaces
 
@@ -198,8 +210,9 @@ and similar).
 - Presets: Prusa MK4S, Core One, MK3S+, MINI+, XL (one tool), Creality Ender-3 V3 KE,
   FlashForge Creator Pro (Sailfish, two nozzles), and four generic plate sizes.
 - The printer editor covers plate size, nozzle diameter, number of nozzles, nozzle
-  spacing, retraction and wipe, purge amount, acceleration, Klipper firmware, PrusaLink
-  password, and MakerBot / Sailfish (X3G) output.
+  spacing, retraction and wipe, purge amount, acceleration, Klipper firmware, MakerBot /
+  Sailfish (X3G) output, binary G-code (`.bgcode`), and the print head's clearance
+  radius and gantry height for sequential printing.
 - **Custom G-code** per printer: start, end, before each layer change, and at each tool
   change. Each has an **Insert default** button.
   - 26 placeholders such as `{bed_temp}`, `{nozzle_temp}`, `{layer_num}`, `{layer_z}`,
@@ -209,8 +222,17 @@ and similar).
 
 ## 7. Slicing output
 
-- Plain G-code export, and **X3G** export for MakerBot / Sailfish printers (the export
-  button says "Export X3G").
+- Plain G-code export, **binary G-code** (`.bgcode`: MeatPack and heatshrink, CRC32
+  blocks, thumbnails and job details) when the printer profile asks for it, and **X3G**
+  export for MakerBot / Sailfish printers (the export button says "Export X3G").
+- **Sequential printing** (optional): one object at a time, shortest first, lifting clear
+  and moving across between objects. Slicing is refused, with a message naming the
+  objects, when they are too close for the print head or more than one is taller than
+  the gantry.
+- **Object labels** (optional): Klipper `EXCLUDE_OBJECT` or M486, so one object can be
+  cancelled while the others go on.
+- **Arc fitting** (optional): round walls written as G2/G3 arcs, within 0.01 mm of the
+  sliced points.
 - PNG thumbnails embedded in the G-code for printer screens and Klipper web pages.
 - `M73` progress (percent and minutes left) every layer for Marlin and Prusa firmware.
 - Klipper printers are told the layer count (`SET_PRINT_STATS_INFO`), so their screens
@@ -239,7 +261,13 @@ and similar).
 
 ### Network printers
 
-- Creality network service, Klipper (Moonraker) and PrusaLink (HTTP Digest sign-in).
+- Creality network service, Klipper (Moonraker), PrusaLink (HTTP Digest sign-in),
+  OctoPrint (API key) and Duet / RepRapFirmware (standalone `rr_` requests, or the
+  `/machine` API when run by a Raspberry Pi). The PrusaLink password, OctoPrint key or
+  Duet password goes in one "Password or API key" box and is never saved. PrusaLink,
+  OctoPrint and Duet are *unconfirmed*: built from their published APIs and tested
+  against pretend servers, not yet on real printers.
+- PrusaLink printers can be sent binary G-code (`.bgcode`).
 - **Find printers**: scans the local /24 network and identifies each printer found.
 - Known printers are remembered, and can be forgotten. A known printer that has moved to
   a new address is found again by its kind and name.
@@ -272,6 +300,8 @@ and similar).
 - Live status: job state, progress, layers, time left, end time and temperatures.
 - Print settings while printing: temperatures, model fan and printing speed.
 - Pause, Resume and Stop (Stop asks first), and **Print again** when a print finishes.
+- **Cancel object** on Klipper and Duet: the objects of a labelled print are listed,
+  each with a button that asks first.
 - Tabs:
   - **XYZ Control**: jog and home;
   - **Local Files**: files on the printer, which can be printed;
@@ -287,9 +317,10 @@ and similar).
 
 - `printcraft [MODEL ...]`: open the app with models.
 - `--preview`: open the models and slice them straight away.
-- `--slice MODEL ... --output OUT.gcode|OUT.x3g`: slice without a window. Options:
+- `--slice MODEL ... --output OUT.gcode|OUT.bgcode|OUT.x3g`: slice without a window.
+  Options:
   - `--quality fine|standard|draft`
-  - `--filament pla|petg|abs|tpu`
+  - `--filament pla|petg|abs|tpu|asa`
   - `--printer 1-11`
   - `--supports`, `--tree-supports` and `--no-support-raft`
   - `--brim` and `--raft`
@@ -297,6 +328,7 @@ and similar).
   - `--seam aligned|nearest|rear|random`
   - `--top-pattern` and `--solid-pattern`, each `lines|monotonic|concentric`
   - `--ironing`, `--vase`, `--fuzzy`, `--fuzzy-top` and `--variable-walls`
+  - `--label-objects`, `--arc-fitting` and `--sequential`
 - `--connect ADDRESS|PORT`: open the Printer page and connect over the network or USB
   (115200 baud). Add `--camera big|max` for an enlarged camera.
 - `--device`, `--tool move|scale|rotate` and `--file-menu`: open on a given page, tool
@@ -311,11 +343,9 @@ and similar).
 - Walls and other settings inside modifiers, imported meshes as modifiers, and
   modifiers that turn with their part.
 - Variable layer height per object.
-- Multiple plates and sequential (one-at-a-time) printing.
 - Multi-material units, tool changers other than two nozzles on one carriage, and wipe
   towers for them.
-- Binary G-code (`.bgcode`).
 - SLA (resin) printing.
-- Prusa Connect (cloud), OctoPrint, Duet, Repetier-Server and other print hosts.
+- Prusa Connect (cloud), Repetier-Server and other print hosts.
 - Prusa cameras, which use the Prusa Connect cloud.
 - Listing or downloading timelapse videos.
